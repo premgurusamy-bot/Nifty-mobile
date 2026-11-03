@@ -1,16 +1,16 @@
-/// <reference types="node" />
 /**
  * Keeps the Dhan access token alive.
  *
  * - On start: GET /v2/profile to confirm the token works and read its validity.
  * - Renews (GET /v2/RenewToken) ~2 h before expiry, or every 20 h when the
- *   expiry can't be read, then writes the new token back to server/.env so a
- *   restart keeps working.
+ *   expiry can't be read, then hands the new token to `persist` (the server
+ *   writes it to server/.env; the app saves it in the phone's secure storage).
+ *
+ * No Node-only imports: this file runs on the server and inside the app.
  *
  * Renewal only extends a token that is still valid. If the token has already
  * expired, generate a new one at web.dhan.co and run `npm run set-token`.
  */
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import type { DhanClient } from './dhan.ts';
 
 export interface TokenStatus {
@@ -41,35 +41,21 @@ export function extractToken(json: any): string | null {
   return typeof t === 'string' && t.length > 20 ? t : null;
 }
 
-/** Replace (or append) KEY=value in an env file, atomically, keeping permissions tight. */
-export function writeEnvValue(path: string, key: string, value: string) {
-  const lines = existsSync(path) ? readFileSync(path, 'utf8').split(/\r?\n/) : [];
-  let found = false;
-  const next = lines.map((l) => {
-    if (new RegExp(`^\\s*${key}\\s*=`).test(l)) {
-      found = true;
-      return `${key}=${value}`;
-    }
-    return l;
-  });
-  if (!found) next.push(`${key}=${value}`);
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, next.join('\n'), { mode: 0o600 });
-  renameSync(tmp, path);
-}
-
 export class TokenKeeper {
   status: TokenStatus = { ok: false, validUntil: null, lastCheck: null, lastRenewal: null, message: 'Not checked yet' };
   private dhan: DhanClient;
-  private envPath: string | null;
+  private persist: ((token: string) => void | Promise<void>) | null;
   private autoRenew: boolean;
   private timer: ReturnType<typeof setInterval> | null = null;
   private startedAt = Date.now();
   private now: () => number;
 
-  constructor(dhan: DhanClient, opts: { envPath: string | null; autoRenew: boolean; now?: () => number }) {
+  constructor(
+    dhan: DhanClient,
+    opts: { persist?: (token: string) => void | Promise<void>; autoRenew: boolean; now?: () => number },
+  ) {
     this.dhan = dhan;
-    this.envPath = opts.envPath;
+    this.persist = opts.persist ?? null;
     this.autoRenew = opts.autoRenew;
     this.now = opts.now ?? Date.now;
   }
@@ -103,7 +89,7 @@ export class TokenKeeper {
       const token = extractToken(await this.dhan.renewToken());
       if (!token) throw new Error('RenewToken response had no token');
       this.dhan.setAccessToken(token);
-      if (this.envPath) writeEnvValue(this.envPath, 'DHAN_ACCESS_TOKEN', token);
+      if (this.persist) await this.persist(token);
       this.status = { ...this.status, lastRenewal: this.now() };
       await this.check();
       console.log(`[token] renewed. ${this.status.message}`);

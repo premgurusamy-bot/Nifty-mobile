@@ -54,6 +54,17 @@ The workbook's decision engine was ported rule for rule to TypeScript. A golden 
 
 The engine runs on the **server**, as Excel's `OnTime` loop did, so stop losses and targets are tracked even while your phone is locked. Without a server, the app runs the same engine in **demo mode** on an accelerated NIFTY simulation (each refresh = one 5-minute candle).
 
+## Connect without a server (Dhan account on the phone)
+
+⚙ Settings → **Dhan account (this phone)**: enter your Dhan client id and access token and tap **Save & test**. The app checks them with Dhan (token + NIFTY quote) and saves them on the phone only, encrypted by the Android Keystore (`expo-secure-store`). The same server code then runs inside the app, so the Dashboard engine, live option chain, markets, journal and paper trading all work straight from Dhan.
+
+Limits of phone-only mode:
+- **No real orders:** Dhan only accepts order APIs from your whitelisted static IP. Portfolio/Orders paper-trade on live prices.
+- **Engine runs only while the app is open:** Android pauses background apps, so SL/target monitoring stops while the phone is locked.
+- **Token renewal:** the token is renewed automatically while the app is open. If it expires, paste a new one and tap **Update & test**.
+
+For live orders and round-the-clock monitoring, use the server below. When a server is connected it takes priority; the phone credentials stay saved but unused.
+
 ## Server setup
 
 Run this on your **static-IP machine** (Ubuntu/Debian with systemd, for example a cloud VPS):

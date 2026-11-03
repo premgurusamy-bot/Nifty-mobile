@@ -72,6 +72,26 @@ export default function SettingsScreen() {
   const [connMsg, setConnMsg] = useState<string | null>(null);
   const [connBusy, setConnBusy] = useState(false);
 
+  const [clientId, setClientId] = useState('');
+  const [token, setToken] = useState('');
+  const [directMsg, setDirectMsg] = useState<string | null>(null);
+  const [directBusy, setDirectBusy] = useState(false);
+
+  const saveDirect = async () => {
+    setDirectBusy(true);
+    setDirectMsg(null);
+    try {
+      const nifty = await settings.saveDirect(clientId, token);
+      setDirectMsg(`Saved on this phone · Dhan connected · NIFTY ${nifty}`);
+      setToken('');
+      setClientId('');
+    } catch (e) {
+      setDirectMsg(`Failed: ${(e as Error).message}`);
+    } finally {
+      setDirectBusy(false);
+    }
+  };
+
   const cfg = snap?.config;
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [expiry, setExpiry] = useState('');
@@ -126,15 +146,58 @@ export default function SettingsScreen() {
     >
       <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }} keyboardShouldPersistTaps="handled">
         <Card style={{ gap: 12 }}>
-          <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Dhan server</Text>
+          <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Dhan account (this phone)</Text>
           <Text style={ui.muted}>
-            {mode === 'DHAN'
-              ? `Connected to ${settings.serverUrl}${settings.server ? ` · client ${settings.server.clientId}` : ''}`
-              : 'Not connected — the app is running the engine in DEMO mode on simulated data.'}
+            {settings.directClientId
+              ? `Saved · client ${settings.directClientId.replace(/.(?=.{3})/g, '•')}${
+                  settings.connection === 'DIRECT'
+                    ? ' · in use (live data on this phone)'
+                    : settings.connection === 'SERVER'
+                      ? ' · not in use while a server is connected'
+                      : ' · connecting…'
+                }`
+              : 'Enter your Dhan client id and access token to get live data straight from Dhan — no server needed.'}
           </Text>
           <Text style={ui.muted}>
-            Your Dhan client id and access token live only on your server (see README → Server setup). The app stores
-            just the server URL and its access key{Platform.OS === 'web' ? '' : ' (in the device keychain)'}.
+            Stored only on this phone{Platform.OS === 'web' ? '' : ', encrypted in the Android Keystore'}. Live data,
+            the engine, journal and paper trading work on the phone while the app is open. Placing real orders needs the
+            server, because Dhan only accepts orders from your whitelisted static IP.
+          </Text>
+          <Field label="Dhan client id" value={clientId} onChange={setClientId} keyboard="default" />
+          <Field label="Dhan access token" value={token} onChange={setToken} keyboard="default" secure />
+          {directMsg ? (
+            <Text style={{ color: directMsg.startsWith('Failed') ? colors.down : colors.up }}>{directMsg}</Text>
+          ) : null}
+          <Button
+            label={directBusy ? 'Checking with Dhan…' : settings.directClientId ? 'Update & test' : 'Save & test'}
+            onPress={saveDirect}
+            disabled={directBusy || !clientId || !token}
+          />
+          {settings.directClientId ? (
+            <Button
+              label="Remove from this phone"
+              color={colors.cardAlt}
+              onPress={() => {
+                setDirectMsg(null);
+                void settings.clearDirect();
+              }}
+            />
+          ) : null}
+        </Card>
+
+        <Card style={{ gap: 12 }}>
+          <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Dhan server (optional)</Text>
+          <Text style={ui.muted}>
+            {settings.connection === 'SERVER'
+              ? `Connected to ${settings.serverUrl}${settings.server ? ` · client ${settings.server.clientId}` : ''}`
+              : mode === 'DHAN'
+                ? 'Not used — the phone is connected to Dhan directly.'
+                : 'Not connected — the app is running the engine in DEMO mode on simulated data.'}
+          </Text>
+          <Text style={ui.muted}>
+            Use your static-IP server (README → Server setup) for live orders and for SL/target monitoring while the
+            phone is locked. When connected it takes priority over the phone connection. The app stores just the server
+            URL and its access key{Platform.OS === 'web' ? '' : ' (in the device keychain)'}.
           </Text>
           <Field label="Server URL" value={url} onChange={setUrl} keyboard="url" />
           <Field label="Server access key (APP_API_KEY)" value={key} onChange={setKey} keyboard="default" secure />
@@ -146,15 +209,15 @@ export default function SettingsScreen() {
             onPress={connect}
             disabled={connBusy || !url || !key}
           />
-          {mode === 'DHAN' ? (
-            <Button label="Disconnect (use demo)" color={colors.cardAlt} onPress={() => void settings.disconnect()} />
+          {settings.connection === 'SERVER' ? (
+            <Button label="Disconnect server" color={colors.cardAlt} onPress={() => void settings.disconnect()} />
           ) : null}
         </Card>
 
         {cfg ? (
           <Card style={{ gap: 12 }}>
             <Text style={[ui.sectionTitle, { marginTop: 0 }]}>
-              Engine settings {snap?.demo ? '(demo)' : '(server)'}
+              Engine settings {snap?.demo ? '(demo)' : settings.connection === 'DIRECT' ? '(this phone)' : '(server)'}
             </Text>
             <Text style={s.label}>Underlying</Text>
             <Segmented

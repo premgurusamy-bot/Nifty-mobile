@@ -20,6 +20,7 @@ import { DhanService, HttpError } from './service.ts';
 import { EngineRunner } from '../src/lib/engine/runner.ts';
 import { DhanEngineSource, FileStore, telegramNotifier } from './engine.ts';
 import { TokenKeeper } from './tokenKeeper.ts';
+import { writeEnvValue } from './envFile.ts';
 
 export interface ServerConfig {
   port: number;
@@ -229,7 +230,11 @@ export async function start(cfg: ServerConfig) {
   await engine.init();
   engine.syncTimer();
 
-  const token = new TokenKeeper(dhan, { envPath: cfg.envPath ?? null, autoRenew: cfg.tokenAutoRenew ?? true });
+  const envPath = cfg.envPath ?? null;
+  const token = new TokenKeeper(dhan, {
+    autoRenew: cfg.tokenAutoRenew ?? true,
+    persist: envPath ? (t) => writeEnvValue(envPath, 'DHAN_ACCESS_TOKEN', t) : undefined,
+  });
   token.start();
 
   const server = createApp(cfg, service, engine, token);

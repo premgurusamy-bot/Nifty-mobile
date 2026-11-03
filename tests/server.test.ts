@@ -318,7 +318,8 @@ test('engine: refresh via Dhan reproduces the workbook score end-to-end and pers
 
 // ---- Token keeper --------------------------------------------------------------
 
-import { TokenKeeper, extractToken, parseTokenValidity, writeEnvValue } from '../server/tokenKeeper.ts';
+import { TokenKeeper, extractToken, parseTokenValidity } from '../server/tokenKeeper.ts';
+import { writeEnvValue } from '../server/envFile.ts';
 import { writeFileSync } from 'node:fs';
 
 test('token validity parsing (Dhan "dd/MM/yyyy HH:mm" IST) and token extraction', () => {
@@ -345,7 +346,7 @@ test('token keeper: checks profile, renews near expiry, swaps the live token and
 
   // Far from expiry → check only, no renewal.
   fake.state.tokenValidity = '31/12/2099 09:00';
-  const k = new TokenKeeper(dhan, { envPath, autoRenew: true });
+  const k = new TokenKeeper(dhan, { persist: (t) => writeEnvValue(envPath, 'DHAN_ACCESS_TOKEN', t), autoRenew: true });
   await k.tick();
   assert.equal(k.status.ok, true);
   assert.equal(k.status.lastRenewal, null);
@@ -369,7 +370,7 @@ test('token keeper: checks profile, renews near expiry, swaps the live token and
 
 test('token keeper: invalid token reports not ok and /api/status says so', async () => {
   const dhan = new DhanClient({ clientId: FAKE_CLIENT, accessToken: 'expired-token', baseUrl: fake.url });
-  const k = new TokenKeeper(dhan, { envPath: null, autoRenew: true });
+  const k = new TokenKeeper(dhan, { autoRenew: true });
   await k.tick();
   assert.equal(k.status.ok, false);
   assert.match(k.status.message, /access token/);
@@ -379,4 +380,45 @@ test('token keeper: invalid token reports not ok and /api/status says so', async
   assert.equal(r.json.ok, false);
   assert.equal(r.json.token.ok, false);
   app.close();
+});
+
+// ---- Direct-to-Dhan mode (the phone talks to Dhan itself) -------------------------
+
+import { createLocalApi, DIRECT_ORDERS_MESSAGE, verifyDhanCredentials } from '../src/api/localApi.ts';
+
+test('direct mode: verify credentials, live quotes, engine reproduces the workbook, orders refused, token renewal saved', async () => {
+  assert.equal((await verifyDhanCredentials(FAKE_CLIENT, FAKE_TOKEN, fake.url)) > 20000, true);
+  await assert.rejects(verifyDhanCredentials(FAKE_CLIENT, 'wrong-token-wrong-token', fake.url), /access token/);
+
+  let saved: unknown = null;
+  const persisted: string[] = [];
+  const api = await createLocalApi({
+    clientId: FAKE_CLIENT,
+    accessToken: FAKE_TOKEN,
+    baseUrl: fake.url,
+    store: { load: async () => null, save: async (state, config) => void (saved = { state, config }) },
+    persistToken: (t) => void persisted.push(t),
+  });
+  try {
+    const st = await api.status();
+    assert.equal(st.liveOrders, false);
+    const q = await api.quotes(['NSE:NIFTY 50', 'NSE:RELIANCE']);
+    assert.equal(q.quotes.length, 2);
+
+    await api.engineConfig({ expiry: GOLDEN_EXPIRY });
+    const snap = await api.engineRefresh();
+    assert.equal(snap.status, 'Ready');
+    assert.ok(Math.abs(snap.dashboard!.decision.confidence - 88.89840619701363) < 1e-6);
+    assert.ok(saved, 'engine state persisted to the phone store');
+
+    const chain = await api.optionChain(GOLDEN_EXPIRY);
+    assert.equal(chain.rows.length, 21);
+    await assert.rejects(
+      api.placeOrder({ instrumentId: 'NSE:RELIANCE', side: 'BUY', qty: 1, type: 'MARKET', product: 'INTRADAY' }),
+      (e: Error) => e.message === DIRECT_ORDERS_MESSAGE,
+    );
+  } finally {
+    api.dispose();
+  }
+  assert.deepEqual(persisted, []); // far from expiry → no renewal
 });

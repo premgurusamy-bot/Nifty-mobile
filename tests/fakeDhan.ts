@@ -19,6 +19,8 @@ export interface Recorded {
 
 export const FAKE_TOKEN = 'fake-access-token';
 export const FAKE_CLIENT = '1100000001';
+/** Realistic-length token for app UI tests (real Dhan tokens are long JWTs). */
+export const FAKE_LONG_TOKEN = `eyJfake.${'x'.repeat(60)}.sig`;
 /** Requests for this expiry / 5-minute candles are answered with the workbook's real 27-Aug-2026 data. */
 export const GOLDEN_EXPIRY = '2099-12-29';
 
@@ -70,7 +72,7 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
     nextId: 5000,
     cash: 250000.5,
     /** Tokens the fake accepts; RenewToken adds a new one. */
-    tokens: new Set<string>([FAKE_TOKEN]),
+    tokens: new Set<string>([FAKE_TOKEN, FAKE_LONG_TOKEN]),
     /** What /profile reports as tokenValidity (dd/MM/yyyy HH:mm IST). */
     tokenValidity: '31/12/2099 09:00',
     renewals: 0,
@@ -90,9 +92,16 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
       const path = (req.url ?? '').replace(/^\/v2/, '');
       requests.push({ method: req.method!, path, headers: req.headers, body });
       const send = (status: number, json: unknown) => {
-        res.writeHead(status, { 'Content-Type': 'application/json' });
+        // CORS so the web build can be tested in direct mode (the Android app doesn't need it).
+        res.writeHead(status, {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+        });
         res.end(JSON.stringify(json));
       };
+      if (req.method === 'OPTIONS') return send(204, {});
       if (!state.tokens.has(String(req.headers['access-token']))) {
         return send(401, {
           errorType: 'Invalid_Authentication',
