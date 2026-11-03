@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { Button, Card, Segmented, styles as ui } from '../components/ui';
 import type { EngineConfig } from '../lib/engine/types';
@@ -77,11 +77,15 @@ export default function SettingsScreen() {
   const [expiry, setExpiry] = useState('');
   const [cfgMsg, setCfgMsg] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!cfg) return;
+  // Reload the form only when the saved settings change — the server sends a fresh
+  // config object every poll, which must not wipe edits in progress.
+  const cfgKey = cfg ? JSON.stringify(cfg) : '';
+  const [loadedKey, setLoadedKey] = useState('');
+  if (cfg && cfgKey !== loadedKey) {
+    setLoadedKey(cfgKey);
     setDraft(Object.fromEntries(FIELDS.map(([k]) => [k, String(cfg[k])])));
     setExpiry(cfg.expiry);
-  }, [cfg]);
+  }
 
   const connect = async () => {
     setConnBusy(true);

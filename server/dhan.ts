@@ -59,6 +59,11 @@ export class DhanClient {
     return this.opts.clientId;
   }
 
+  /** Swap in a renewed access token (used by the token keeper). */
+  setAccessToken(token: string) {
+    this.opts.accessToken = token;
+  }
+
   private async request<T>(method: string, path: string, body?: Record<string, unknown>): Promise<T> {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.opts.timeoutMs);
@@ -69,6 +74,8 @@ export class DhanClient {
         headers: {
           'access-token': this.opts.accessToken,
           'client-id': this.opts.clientId,
+          // The SDK's profile / RenewToken calls identify the client with this header.
+          dhanClientId: this.opts.clientId,
           'Content-Type': 'application/json',
           Accept: 'application/json',
         },
@@ -143,8 +150,14 @@ export class DhanClient {
   holdings() {
     return this.dataThrottle.run(() => this.request<any[]>('GET', '/holdings'));
   }
+  /** Token validity and account setup (GET /v2/profile). */
   profile() {
     return this.request<any>('GET', '/profile');
+  }
+
+  /** Extends the current access token (GET /v2/RenewToken). Returns the response as-is. */
+  renewToken() {
+    return this.request<any>('GET', '/RenewToken');
   }
 
   // ---- Orders ------------------------------------------------------------

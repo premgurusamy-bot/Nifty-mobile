@@ -315,3 +315,68 @@ test('engine: refresh via Dhan reproduces the workbook score end-to-end and pers
   assert.equal(bt.json.candles, 225);
   app.close();
 });
+
+// ---- Token keeper --------------------------------------------------------------
+
+import { TokenKeeper, extractToken, parseTokenValidity, writeEnvValue } from '../server/tokenKeeper.ts';
+import { writeFileSync } from 'node:fs';
+
+test('token validity parsing (Dhan "dd/MM/yyyy HH:mm" IST) and token extraction', () => {
+  assert.equal(parseTokenValidity('30/03/2025 15:37'), Date.UTC(2025, 2, 30, 10, 7));
+  assert.equal(parseTokenValidity('garbage'), null);
+  assert.equal(extractToken({ accessToken: 'a'.repeat(30) }), 'a'.repeat(30));
+  assert.equal(extractToken({ data: { token: 'b'.repeat(30) } }), 'b'.repeat(30));
+  assert.equal(extractToken({ status: 'ok' }), null);
+});
+
+test('writeEnvValue replaces one key and keeps the rest', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'env-'));
+  const p = join(dir, '.env');
+  writeFileSync(p, '# c\nDHAN_CLIENT_ID=1\nDHAN_ACCESS_TOKEN=old\nPORT=8787\n');
+  writeEnvValue(p, 'DHAN_ACCESS_TOKEN', 'new-token');
+  assert.equal(readFileSync(p, 'utf8'), '# c\nDHAN_CLIENT_ID=1\nDHAN_ACCESS_TOKEN=new-token\nPORT=8787\n');
+});
+
+test('token keeper: checks profile, renews near expiry, swaps the live token and persists it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tok-'));
+  const envPath = join(dir, '.env');
+  writeFileSync(envPath, `DHAN_CLIENT_ID=${FAKE_CLIENT}\nDHAN_ACCESS_TOKEN=${FAKE_TOKEN}\n`);
+  const dhan = new DhanClient({ clientId: FAKE_CLIENT, accessToken: FAKE_TOKEN, baseUrl: fake.url });
+
+  // Far from expiry → check only, no renewal.
+  fake.state.tokenValidity = '31/12/2099 09:00';
+  const k = new TokenKeeper(dhan, { envPath, autoRenew: true });
+  await k.tick();
+  assert.equal(k.status.ok, true);
+  assert.equal(k.status.lastRenewal, null);
+  assert.equal(lastTo('/profile', 'GET').headers.dhanclientid, FAKE_CLIENT);
+
+  // Expiring within 2 h → renews.
+  const soon = new Date(Date.now() + 5.5 * 3600_000 + 30 * 60_000);
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  fake.state.tokenValidity = `${p2(soon.getUTCDate())}/${p2(soon.getUTCMonth() + 1)}/${soon.getUTCFullYear()} ${p2(soon.getUTCHours())}:${p2(soon.getUTCMinutes())}`;
+  const before = fake.state.renewals;
+  await k.tick();
+  assert.equal(fake.state.renewals, before + 1);
+  assert.ok(k.status.lastRenewal);
+  const saved = readFileSync(envPath, 'utf8');
+  assert.match(saved, /DHAN_ACCESS_TOKEN=fake-renewed-token-/);
+  // The client now uses the renewed token.
+  await dhan.fundLimit();
+  assert.match(String(lastTo('/fundlimit', 'GET').headers['access-token']), /^fake-renewed-token-/);
+  fake.state.tokenValidity = '31/12/2099 09:00';
+});
+
+test('token keeper: invalid token reports not ok and /api/status says so', async () => {
+  const dhan = new DhanClient({ clientId: FAKE_CLIENT, accessToken: 'expired-token', baseUrl: fake.url });
+  const k = new TokenKeeper(dhan, { envPath: null, autoRenew: true });
+  await k.tick();
+  assert.equal(k.status.ok, false);
+  assert.match(k.status.message, /access token/);
+  const app = createApp(cfg({}), service, undefined, k);
+  const b = await listen(app);
+  const r = await call(b, '/api/status');
+  assert.equal(r.json.ok, false);
+  assert.equal(r.json.token.ok, false);
+  app.close();
+});

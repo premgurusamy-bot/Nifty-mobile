@@ -69,6 +69,11 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
     orders: [] as any[],
     nextId: 5000,
     cash: 250000.5,
+    /** Tokens the fake accepts; RenewToken adds a new one. */
+    tokens: new Set<string>([FAKE_TOKEN]),
+    /** What /profile reports as tokenValidity (dd/MM/yyyy HH:mm IST). */
+    tokenValidity: '31/12/2099 09:00',
+    renewals: 0,
   };
   const ltpOf = (seg: string, id: string) => {
     if (seg === 'IDX_I') return spot;
@@ -88,7 +93,7 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
         res.writeHead(status, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(json));
       };
-      if (req.headers['access-token'] !== FAKE_TOKEN) {
+      if (!state.tokens.has(String(req.headers['access-token']))) {
         return send(401, {
           errorType: 'Invalid_Authentication',
           errorCode: 'DH-901',
@@ -96,6 +101,20 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
         });
       }
       spot += 0.5;
+
+      if (req.method === 'GET' && path === '/profile') {
+        return send(200, {
+          dhanClientId: FAKE_CLIENT,
+          tokenValidity: state.tokenValidity,
+          activeSegment: 'Equity, Derivative',
+          dataPlan: 'Active',
+        });
+      }
+      if (req.method === 'GET' && path === '/RenewToken') {
+        const t = `fake-renewed-token-${++state.renewals}-${'x'.repeat(16)}`;
+        state.tokens.add(t);
+        return send(200, { dhanClientId: FAKE_CLIENT, accessToken: t, expiryTime: '2099-12-31T09:00:00' });
+      }
 
       if (req.method === 'POST' && path === '/marketfeed/quote') {
         const data: any = {};

@@ -25,6 +25,8 @@
   "devDependencies": {
     "@types/node": "^22.20.5",
     "@types/react": "~19.3.0",
+    "eslint": "^9.0.0",
+    "eslint-config-expo": "~58.0.4",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -34,8 +36,11 @@
     "web": "expo start --web",
     "test": "node --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "server": "node server/index.ts",
-    "server:fake-dhan": "node tests/fakeDhan.ts 9900"
+    "server": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON server/index.ts",
+    "server:fake-dhan": "node tests/fakeDhan.ts 9900",
+    "check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON server/cli.ts check",
+    "set-token": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON server/cli.ts set-token",
+    "lint": "expo lint"
   },
   "private": true,
   "engines": {

@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { Product } from '../lib/apiTypes';
 import { Button, Segmented, Stat, styles as ui } from '../components/ui';
@@ -26,11 +26,9 @@ export default function OrderScreen() {
   const isOption = kindOf(id) === 'OPTION';
   const [qtyText, setQtyText] = useState('1'); // lots for options, shares otherwise
   const ltp = getPrice(id) ?? 0;
-  const [limitText, setLimitText] = useState(() => ltp.toFixed(2));
-  // Live quotes can arrive after the ticket opens; prefill the limit once they do.
-  useEffect(() => {
-    if (ltp > 0 && (limitText === '0.00' || !limitText)) setLimitText(ltp.toFixed(2));
-  }, [ltp, limitText]);
+  // Until the user types a limit, it follows the LTP (live quotes can arrive after the ticket opens).
+  const [limitEdit, setLimitText] = useState<string | null>(null);
+  const limitText = limitEdit ?? ltp.toFixed(2);
   const [error, setError] = useState<string | null>(null);
 
   const qty = (parseInt(qtyText, 10) || 0) * lot;
@@ -156,7 +154,7 @@ export default function OrderScreen() {
         </View>
         {live ? (
           <Text style={[ui.muted, { color: colors.warn }]}>
-            LIVE — this order goes to your Dhan account. Dhan's charges and margin rules apply.
+            LIVE — this order goes to your Dhan account. Dhan&apos;s charges and margin rules apply.
           </Text>
         ) : (
           <Text style={ui.muted}>

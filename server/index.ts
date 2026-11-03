@@ -19,6 +19,7 @@ import { loadScripMaster, SCRIP_MASTER_URL } from './scripMaster.ts';
 import { DhanService, HttpError } from './service.ts';
 import { EngineRunner } from '../src/lib/engine/runner.ts';
 import { DhanEngineSource, FileStore, telegramNotifier } from './engine.ts';
+import { TokenKeeper } from './tokenKeeper.ts';
 
 export interface ServerConfig {
   port: number;
@@ -34,6 +35,9 @@ export interface ServerConfig {
   dataDir: string;
   telegramToken?: string;
   telegramChatId?: string;
+  /** Env file the token keeper writes renewed tokens to (null = don't persist). */
+  envPath?: string | null;
+  tokenAutoRenew?: boolean;
 }
 
 export function loadEnvFile(path = '.env') {
@@ -62,6 +66,7 @@ export function configFromEnv(env = process.env): ServerConfig {
     dataDir: env.DATA_DIR ?? 'server/data',
     telegramToken: env.TELEGRAM_BOT_TOKEN || undefined,
     telegramChatId: env.TELEGRAM_CHAT_ID || undefined,
+    tokenAutoRenew: env.TOKEN_AUTO_RENEW !== 'false',
   };
 }
 
@@ -96,7 +101,7 @@ function authorized(req: IncomingMessage, key: string) {
   return given.length === want.length && timingSafeEqual(given, want);
 }
 
-export function createApp(cfg: ServerConfig, service: DhanService, engine?: EngineRunner) {
+export function createApp(cfg: ServerConfig, service: DhanService, engine?: EngineRunner, token?: TokenKeeper) {
   return createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const send = (status: number, body: unknown) => {
       res.writeHead(status, {
@@ -116,7 +121,15 @@ export function createApp(cfg: ServerConfig, service: DhanService, engine?: Engi
     if (!authorized(req, cfg.appApiKey)) return send(401, { error: 'Unauthorized' });
 
     try {
-      if (req.method === 'GET' && path === '/api/status') return send(200, service.status());
+      if (req.method === 'GET' && path === '/api/status') {
+        const st = service.status();
+        if (token) {
+          const t = token.status;
+          st.token = { ok: t.ok, validUntil: t.validUntil, lastRenewal: t.lastRenewal, message: t.message };
+          if (!t.ok && t.lastCheck) st.ok = false;
+        }
+        return send(200, st);
+      }
 
       // ---- Option-buying engine (ported workbook) ----
       if (engine && path.startsWith('/api/engine')) {
@@ -216,18 +229,22 @@ export async function start(cfg: ServerConfig) {
   await engine.init();
   engine.syncTimer();
 
-  const server = createApp(cfg, service, engine);
+  const token = new TokenKeeper(dhan, { envPath: cfg.envPath ?? null, autoRenew: cfg.tokenAutoRenew ?? true });
+  token.start();
+
+  const server = createApp(cfg, service, engine, token);
   await new Promise<void>((r) => server.listen(cfg.port, cfg.host, r));
   console.log(
     `Nifty Trader server on http://${cfg.host}:${cfg.port} · live orders ${cfg.liveOrders ? 'ENABLED' : 'disabled'}`,
   );
-  return { server, service, engine };
+  return { server, service, engine, token };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const envPath = existsSync('server/.env') ? 'server/.env' : existsSync('.env') ? '.env' : null;
   loadEnvFile('server/.env');
   loadEnvFile('.env');
-  start(configFromEnv()).catch((e) => {
+  start({ ...configFromEnv(), envPath }).catch((e) => {
     console.error(e.message);
     process.exit(1);
   });

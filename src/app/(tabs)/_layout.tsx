@@ -7,9 +7,11 @@ import { colors } from '../../theme';
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
 
-const icon =
-  (name: IconName) =>
-  ({ color, size }: { color: unknown; size: number }) => <Ionicons name={name} size={size} color={color as string} />;
+function icon(name: IconName) {
+  return function TabIcon({ color, size }: { color: unknown; size: number }) {
+    return <Ionicons name={name} size={size} color={color as string} />;
+  };
+}
 
 const SettingsButton = () => (
   <Pressable

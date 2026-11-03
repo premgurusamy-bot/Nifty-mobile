@@ -43,6 +43,12 @@ export function EngineProvider({ children }: { children: ReactNode }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const demo = useRef<EngineRunner | null>(null);
+  // Don't show the demo's snapshot as if it were live (or vice versa) after switching.
+  const [sourceKey, setSourceKey] = useState<unknown>(api);
+  if (sourceKey !== api) {
+    setSourceKey(api);
+    setSnap(null);
+  }
 
   // ---- DEMO: local runner ----
   useEffect(() => {
@@ -86,7 +92,6 @@ export function EngineProvider({ children }: { children: ReactNode }) {
           setError(null);
         })
         .catch((e) => alive && setError(e.message));
-    setSnap(null);
     pull();
     const t = setInterval(pull, POLL_MS);
     return () => {

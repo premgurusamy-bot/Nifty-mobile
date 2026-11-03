@@ -54,7 +54,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const api = useMemo(() => (serverUrl && apiKey ? createApi(serverUrl, apiKey) : null), [serverUrl, apiKey]);
 
   useEffect(() => {
-    if (!api) return setServer(null);
+    if (!api) return; // disconnect() clears `server` itself
     api
       .status()
       .then((s) => {

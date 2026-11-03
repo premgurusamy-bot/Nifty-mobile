@@ -56,23 +56,35 @@ The engine runs on the **server**, as Excel's `OnTime` loop did, so stop losses 
 
 ## Server setup
 
-Requirements: Node ≥ 22.18 on a machine with a **static IP**. Dhan only accepts order APIs from a whitelisted IP. Market data works without one.
+Run this on your **static-IP machine** (Ubuntu/Debian with systemd, for example a cloud VPS):
 
 ```bash
-npm install
-cp server/.env.example server/.env      # fill in DHAN_CLIENT_ID, DHAN_ACCESS_TOKEN, APP_API_KEY
-# optional: bring over your journal, IV history and thresholds from Excel
-pip install openpyxl
-python3 scripts/import_workbook.py /path/to/NIFTY_Option_System_v4_fixed.xlsm
-npm run server
+curl -fsSL https://raw.githubusercontent.com/premgurusamy-bot/Nifty-mobile/ccr-f60cf00a-vmzuuf/server/setup.sh -o setup.sh
+sudo bash setup.sh
 ```
 
-- **Dhan token:** generate it at web.dhan.co → Profile → DhanHQ Trading APIs. Tokens expire, typically after 24 h. When the dashboard shows the red "token likely expired" banner, paste a new one into `server/.env` and restart.
-- **Importer:** it never reads the token or client-ID cells. It drops an open position from an earlier day, because its weekly contract has expired; use `--keep-position` to override.
-- **Live orders:** `LIVE_ORDERS=false` by default. In that mode the Portfolio/Orders tabs paper-trade on live Dhan prices. Set `true` to let the order ticket place **real** orders. The app shows a confirmation before every order, and the server also enforces lot sizes, tick size and `MAX_ORDER_VALUE`.
-- **Exposing the server:** put it behind HTTPS (for example Caddy or a Cloudflare tunnel) when the phone isn't on the same network. Every API call needs `Authorization: Bearer <APP_API_KEY>`.
-- **Telegram alerts:** set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. You get the same trade, partial and exit messages as the workbook.
-- **Instrument list:** at startup the server downloads Dhan's scrip master to get option security IDs and the current lot size. If that fails, it learns the IDs from the option chain.
+The script:
+
+- installs Node 22 if needed, puts the app in `/opt/nifty-trader`, and creates a `nifty` service user
+- asks for your **Dhan client id and access token** (typed on your server, hidden, saved only in `/opt/nifty-trader/server/.env`, mode 600), whether to enable live orders, optional Telegram alerts, and an optional domain for HTTPS (Caddy)
+- generates the app access key
+- **checks your credentials against Dhan**: token validity, NIFTY quote, expiries, option chain with Greeks
+- starts the `nifty-trader` systemd service, which restarts on failure and on reboot
+- prints the **Server URL** and **Access key** to type into the app (⚙ Settings → Dhan server)
+
+Re-run the same command to update to the latest code; your settings are kept.
+
+After installing:
+
+- **Cloud firewall:** open inbound TCP 8787 (or 80/443 with a domain) in your provider's firewall or security group.
+- **Live orders:** whitelist the server's static IP at web.dhan.co → Profile → DhanHQ Trading APIs.
+- **Token:** the server checks the token every 30 minutes and renews it (`/v2/RenewToken`) about 2 hours before expiry, saving the new one to `.env`. If it has already expired, generate a new token at web.dhan.co and run `cd /opt/nifty-trader && sudo -u nifty npm run set-token && sudo systemctl restart nifty-trader`. The dashboard shows a red banner while the token is invalid.
+- **Useful commands:** `journalctl -u nifty-trader -f` (logs), `sudo -u nifty npm run check` (test Dhan from `/opt/nifty-trader`).
+- **Import your Excel history:** `pip install openpyxl`, stop the service, then run `python3 scripts/import_workbook.py <workbook.xlsm> server/data/engine.json`. The importer never reads the token or client-ID cells. It drops an open position from an earlier day, because that weekly contract has expired; `--keep-position` overrides.
+- **Orders:** `LIVE_ORDERS=false` by default, and Portfolio/Orders paper-trade on live Dhan prices. With `true`, the order ticket places **real** orders. The app confirms every order, and the server enforces lot size, tick size and `MAX_ORDER_VALUE`.
+- **Security:** without a domain the app connects over plain `http://IP:8787`, and the access key is sent unencrypted. Use a domain (HTTPS) if you enable live orders.
+
+Other platforms: install Node ≥ 22.18, copy `server/.env.example` to `server/.env`, fill it in, and run `npm run server` from the repo root.
 
 ## App setup
 

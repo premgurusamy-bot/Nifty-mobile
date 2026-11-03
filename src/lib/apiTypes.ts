@@ -16,6 +16,8 @@ export interface StatusResponse {
   lotSize: number;
   scripMaster: boolean;
   error?: string;
+  /** Dhan access token check (GET /v2/profile), when the server runs a token keeper. */
+  token?: { ok: boolean; validUntil: number | null; lastRenewal: number | null; message: string };
 }
 
 export interface QuotesResponse {
