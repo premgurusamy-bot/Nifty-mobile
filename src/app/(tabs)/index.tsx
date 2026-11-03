@@ -46,7 +46,8 @@ const time = (ms: number | null) => {
 
 export default function DashboardScreen() {
   const { snap, busy, error, refresh, updateConfig, mode, phone, enter, cancelEntry, exit, setTradeMode } = useEngine();
-  const [priceText, setPriceText] = useState('');
+  // null = follow the market premium; a string = the price you typed.
+  const [priceEdit, setPriceText] = useState<string | null>(null);
   const [toggling, setToggling] = useState(false);
   const [modeBusy, setModeBusy] = useState(false);
   const [blocked, setBlocked] = useState<PreflightView | null>(null);
@@ -99,7 +100,12 @@ export default function DashboardScreen() {
   };
 
   // Editable buy price: blank = market; a price below the premium waits as a limit order.
-  const limit = priceText.trim() ? Number(priceText) : null;
+  // The box shows the live premium until you edit it. Unchanged (or emptied) → market order;
+  // a different price → limit order at that price.
+  const marketText = cand ? cand.entry.toFixed(2) : '';
+  const priceText = priceEdit ?? marketText;
+  const edited = priceEdit != null && priceEdit.trim() !== '' && cand != null && Number(priceEdit) !== cand.entry;
+  const limit = edited ? Number(priceEdit) : null;
   const limitValid =
     limit == null || (Number.isFinite(limit) && limit > 0 && Math.abs(Math.round(limit * 20) / 20 - limit) < 1e-9);
   const atPrice = limit ?? cand?.entry ?? 0;
@@ -119,7 +125,7 @@ export default function DashboardScreen() {
     const go = () => {
       setTradeMsg(null);
       enter(limit ?? undefined)
-        .then(() => setPriceText(''))
+        .then(() => setPriceText(null))
         .catch((e) => setTradeMsg((e as Error).message));
     };
     if (isLive)
@@ -273,9 +279,26 @@ export default function DashboardScreen() {
                   Premium now {formatNumber(cand.entry)} · quantity {qtyLabel(cand.qty)}
                 </Text>
                 <View style={{ gap: 6 }}>
-                  <Text style={s.label}>Buy price (blank = market)</Text>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                    <Text style={s.label}>
+                      {edited ? 'Buy price — your limit' : 'Buy price — market (edit to set your price)'}
+                    </Text>
+                    {edited ? (
+                      <Text
+                        style={[s.label, { color: colors.accent, fontWeight: '700' }]}
+                        onPress={() => setPriceText(null)}
+                        accessibilityRole="button"
+                      >
+                        Use market price
+                      </Text>
+                    ) : null}
+                  </View>
                   <TextInput
-                    style={[s.input, !limitValid && { borderColor: colors.down }]}
+                    style={[
+                      s.input,
+                      !limitValid && { borderColor: colors.down },
+                      edited && { borderColor: colors.accent },
+                    ]}
                     value={priceText}
                     onChangeText={(t) => {
                       setPriceText(t.replace(/[^\d.]/g, ''));
@@ -284,18 +307,20 @@ export default function DashboardScreen() {
                     placeholder={`Market (~${formatNumber(cand.entry)})`}
                     placeholderTextColor={colors.muted}
                     keyboardType="decimal-pad"
+                    selectTextOnFocus
                   />
                 </View>
                 <Text style={ui.muted}>
-                  At {limit == null ? 'market' : formatNumber(atPrice)}: SL {formatNumber(cand.sl + shift)} · T1{' '}
-                  {formatNumber(cand.target1 + shift)} · T2 {formatNumber(cand.target2 + shift)} · max loss{' '}
-                  {formatINR(cand.maxLoss, 0)}. Daily limits still apply.
+                  At {limit == null ? `market (~${formatNumber(atPrice)})` : formatNumber(atPrice)}: SL{' '}
+                  {formatNumber(cand.sl + shift)} · T1 {formatNumber(cand.target1 + shift)} · T2{' '}
+                  {formatNumber(cand.target2 + shift)} · max loss {formatINR(cand.maxLoss, 0)}. Daily limits still
+                  apply.
                 </Text>
                 <Button
                   label={
                     busy
                       ? 'Working…'
-                      : `ENTER BUY ${cand.direction} ${cand.strike} × ${cand.qty} ${limit == null ? '@ market' : `@ ${formatNumber(limit)}`}${isLive ? ' (LIVE)' : ''}`
+                      : `ENTER BUY ${cand.direction} ${cand.strike} × ${cand.qty} ${limit == null ? '@ market' : `@ ${formatNumber(limit)} (limit)`}${isLive ? ' (LIVE)' : ''}`
                   }
                   color={cand.direction === 'CE' ? colors.up : colors.down}
                   onPress={doEnter}

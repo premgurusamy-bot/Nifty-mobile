@@ -67,7 +67,7 @@ The engine runs on the **server**, as Excel's `OnTime` loop did, so stop losses 
   - **ENTER** places a market BUY for the engine's plan (strike, lots sized to max risk), then a STOP_LOSS sell order at Dhan at the plan's SL, so the stop holds even when the app is closed.
   - While the app is open, T1 books half at market and re-places the stop at breakeven, and T2 or the trailing stop sells the rest.
   - If the exchange stop filled while the app was closed, the position is closed on the next refresh at the real fill.
-  - **Buy price:** leave it blank to buy at market, or type a lower price (0.05 steps) to place a limit order. A limit below the premium waits as **Entry order pending**, checked on every refresh, with a **Cancel entry order** button. SL, T1 and T2 keep their distances from the actual fill. In PAPER the same limit logic is simulated.
+  - **Buy price:** the box shows the live market premium; leave it as is to buy at market, or change it (0.05 steps) to place a limit order at your price (**Use market price** switches back). A limit below the premium waits as **Entry order pending**, checked on every refresh, with a **Cancel entry order** button. SL, T1 and T2 keep their distances from the actual fill. In PAPER the same limit logic is simulated.
   - **EXIT** cancels the stop and sells at market.
   - The journal records real fill prices, and Portfolio/Orders show your Dhan account.
 - You can't switch between PAPER and LIVE while a position is open. Every live order asks for confirmation, and daily limits (trades/day, no revenge trade, ₹ max loss) apply to manual entries too.
