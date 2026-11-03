@@ -1,8 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Platform } from 'react-native';
 import { createApi, type Api } from '../api/client';
+import { fetchPublicIp } from '../../server/preflight.ts';
 import { createLocalApi, verifyDhanCredentials, type LocalApi } from '../api/localApi';
 import type { EngineStore } from '../lib/engine/runner';
 import type { StatusResponse } from '../lib/apiTypes';
@@ -16,6 +17,8 @@ const DHAN_TOKEN_KEY = 'nifty.dhan-access-token';
 const DIRECT_ENGINE_KEY = 'nifty/engine-direct/v1';
 /** Test builds only (fake Dhan). Unset in real builds → api.dhan.co. */
 const DHAN_BASE_URL = process.env.EXPO_PUBLIC_DHAN_BASE_URL || undefined;
+const PUBLIC_IP_URL = process.env.EXPO_PUBLIC_PUBLIC_IP_URL || undefined;
+const STATIC_IP_KEY = 'nifty/static-ip';
 
 const directEngineStore: EngineStore = {
   load: async () => {
@@ -53,6 +56,11 @@ interface SettingsValue {
   /** Verifies with Dhan, then saves the client id + token on this phone. */
   saveDirect: (clientId: string, accessToken: string) => Promise<number>;
   clearDirect: () => Promise<void>;
+  /** Static IP whitelisted at Dhan for orders (saved on this phone). */
+  staticIp: string;
+  saveStaticIp: (ip: string) => Promise<void>;
+  /** Re-read connection status (e.g. after switching PAPER/LIVE). */
+  refreshStatus: () => Promise<void>;
 }
 
 const Ctx = createContext<SettingsValue | null>(null);
@@ -64,6 +72,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [server, setServer] = useState<StatusResponse | null>(null);
   const [direct, setDirect] = useState<{ clientId: string; token: string } | null>(null);
   const [localApi, setLocalApi] = useState<LocalApi | null>(null);
+  const [staticIp, setStaticIp] = useState('');
+  const staticIpRef = useRef('');
 
   useEffect(() => {
     (async () => {
@@ -74,6 +84,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
           secret.get(DHAN_CLIENT_KEY),
           secret.get(DHAN_TOKEN_KEY),
         ]);
+        const ip = (await AsyncStorage.getItem(STATIC_IP_KEY)) ?? '';
+        staticIpRef.current = ip;
+        setStaticIp(ip);
         if (u && k) {
           setServerUrl(u);
           setApiKey(k);
@@ -97,6 +110,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       clientId: direct.clientId,
       accessToken: direct.token,
       baseUrl: DHAN_BASE_URL,
+      staticIp: () => staticIpRef.current,
+      publicIp: () => fetchPublicIp(PUBLIC_IP_URL),
       store: directEngineStore,
       // A renewed token replaces the saved one (without restarting the connection).
       persistToken: (t) => secret.set(DHAN_TOKEN_KEY, t),
@@ -166,6 +181,19 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setServer(null);
   }, []);
 
+  const saveStaticIp = useCallback(async (ip: string) => {
+    const clean = ip.trim();
+    await AsyncStorage.setItem(STATIC_IP_KEY, clean);
+    staticIpRef.current = clean;
+    setStaticIp(clean);
+  }, []);
+
+  const refreshStatus = useCallback(async () => {
+    if (!api) return;
+    const s = await api.status();
+    setServer(s);
+  }, [api]);
+
   const directClientId = direct?.clientId ?? '';
   const value = useMemo<SettingsValue>(
     () => ({
@@ -180,8 +208,25 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       directClientId,
       saveDirect,
       clearDirect,
+      staticIp,
+      saveStaticIp,
+      refreshStatus,
     }),
-    [loaded, serverUrl, api, server, connect, disconnect, connection, directClientId, saveDirect, clearDirect],
+    [
+      loaded,
+      serverUrl,
+      api,
+      server,
+      connect,
+      disconnect,
+      connection,
+      directClientId,
+      saveDirect,
+      clearDirect,
+      staticIp,
+      saveStaticIp,
+      refreshStatus,
+    ],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

@@ -9,6 +9,7 @@
  */
 
 export type Direction = 'CE' | 'PE';
+export type TradeMode = 'PAPER' | 'LIVE';
 
 /** 5-minute candle. `t` is epoch ms (candle start). */
 export interface Candle {
@@ -65,6 +66,10 @@ export interface EngineConfig {
   /** 0 = no limit. */
   maxDailyLoss: number;
   autoRefresh: boolean;
+  /** PAPER: the engine trades its signals on paper (like the workbook). LIVE: real Dhan orders, entries only via ENTER. */
+  tradeMode: TradeMode;
+  /** Product for live option orders: INTRADAY (auto square-off) or MARGIN (carry forward / NRML). */
+  liveProduct: 'INTRADAY' | 'MARGIN';
   /** Seconds between automatic refreshes (floor 15, like the workbook). */
   refreshSeconds: number;
   alertsEnabled: boolean;
@@ -85,6 +90,8 @@ export const DEFAULT_CONFIG: EngineConfig = {
   maxTradesPerDay: 3,
   maxDailyLoss: 3000,
   autoRefresh: false,
+  tradeMode: 'PAPER',
+  liveProduct: 'INTRADAY',
   refreshSeconds: 15,
   alertsEnabled: true,
 };
@@ -106,6 +113,14 @@ export interface PendingSetup {
   setAt: number;
 }
 
+/** Dhan order references for a live position. */
+export interface LiveLegs {
+  securityId: string;
+  entryOrderId: string;
+  /** Exchange-side stop-loss order protecting the remaining quantity. */
+  slOrderId: string | null;
+}
+
 export interface OpenPosition {
   direction: Direction;
   strike: number;
@@ -121,6 +136,8 @@ export interface OpenPosition {
   partialPnl: number;
   remainingQty: number;
   currentSl: number;
+  /** Present when the position was opened with real Dhan orders. */
+  live?: LiveLegs;
 }
 
 export interface JournalRow {
@@ -275,6 +292,8 @@ export interface Dashboard {
   };
   breakdown: ScoreBreakdown;
   plan: TradePlan | null;
+  /** What a manual ENTER would trade now (null while a position is open). */
+  candidatePlan: TradePlan | null;
   /** Live premium of the open position's strike, when one is open. */
   positionLtp: number | null;
 }

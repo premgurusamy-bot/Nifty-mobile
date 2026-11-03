@@ -3,7 +3,9 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { BacktestResult } from '../lib/engine/backtest';
 import { EngineRunner, type EngineSnapshot, type EngineStore } from '../lib/engine/runner';
 import { SimEngineSource } from '../lib/engine/simSource';
-import type { EngineConfig } from '../lib/engine/types';
+import type { PreflightResult } from '../../server/preflight.ts';
+import { isLocalApi } from '../api/localApi';
+import type { EngineConfig, TradeMode } from '../lib/engine/types';
 import { useSettings, type DataMode } from './SettingsContext';
 
 /**
@@ -20,6 +22,14 @@ interface EngineValue {
   updateConfig: (patch: Partial<EngineConfig>) => Promise<void>;
   backtest: () => Promise<BacktestResult>;
   resetJournal: () => Promise<void>;
+  /** True when connected to Dhan from this phone (LIVE trading possible). */
+  phone: boolean;
+  /** Manual ENTER / EXIT of the engine's trade (real Dhan orders in LIVE mode). */
+  enter: () => Promise<void>;
+  exit: () => Promise<void>;
+  /** Returns the pre-flight result when switching to LIVE (null otherwise); LIVE only applies if it passed. */
+  setTradeMode: (mode: TradeMode) => Promise<PreflightResult | null>;
+  preflight: () => Promise<PreflightResult>;
 }
 
 const Ctx = createContext<EngineValue | null>(null);
@@ -38,7 +48,8 @@ const demoStore: EngineStore = {
 };
 
 export function EngineProvider({ children }: { children: ReactNode }) {
-  const { api, mode } = useSettings();
+  const { api, mode, refreshStatus } = useSettings();
+  const phoneApi = isLocalApi(api) ? api : null;
   const [snap, setSnap] = useState<EngineSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -150,9 +161,81 @@ export function EngineProvider({ children }: { children: ReactNode }) {
     [api, run],
   );
 
+  const enter = useCallback(
+    () =>
+      run(async () => {
+        if (phoneApi) return phoneApi.engineEnter();
+        if (api) throw new Error('Manual entry is available with the phone connection.');
+        const r = demo.current!;
+        await r.manualEnter();
+        return r.snapshot(true);
+      }),
+    [api, phoneApi, run],
+  );
+
+  const exit = useCallback(
+    () =>
+      run(async () => {
+        if (phoneApi) return phoneApi.engineExit();
+        if (api) throw new Error('Manual exit is available with the phone connection.');
+        const r = demo.current!;
+        await r.manualExit();
+        return r.snapshot(true);
+      }),
+    [api, phoneApi, run],
+  );
+
+  const setTradeMode = useCallback(
+    async (m: TradeMode) => {
+      if (!phoneApi) throw new Error('Connect your Dhan account in Settings to trade LIVE.');
+      let pf: PreflightResult | null = null;
+      await run(async () => {
+        const r = await phoneApi.setTradeMode(m);
+        pf = r.preflight;
+        return r.snapshot;
+      });
+      await refreshStatus().catch(() => {});
+      return pf;
+    },
+    [phoneApi, run, refreshStatus],
+  );
+
+  const preflight = useCallback(async () => {
+    if (!phoneApi) throw new Error('Connect your Dhan account in Settings first.');
+    return phoneApi.preflight();
+  }, [phoneApi]);
+
   const value = useMemo(
-    () => ({ mode, snap, busy, error, refresh, updateConfig, backtest, resetJournal }),
-    [mode, snap, busy, error, refresh, updateConfig, backtest, resetJournal],
+    () => ({
+      mode,
+      snap,
+      busy,
+      error,
+      refresh,
+      updateConfig,
+      backtest,
+      resetJournal,
+      phone: !!phoneApi,
+      enter,
+      exit,
+      setTradeMode,
+      preflight,
+    }),
+    [
+      mode,
+      snap,
+      busy,
+      error,
+      refresh,
+      updateConfig,
+      backtest,
+      resetJournal,
+      phoneApi,
+      enter,
+      exit,
+      setTradeMode,
+      preflight,
+    ],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

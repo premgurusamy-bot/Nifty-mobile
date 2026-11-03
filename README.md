@@ -54,18 +54,26 @@ The workbook's decision engine was ported rule for rule to TypeScript. A golden 
 
 The engine runs on the **server**, as Excel's `OnTime` loop did, so stop losses and targets are tracked even while your phone is locked. Without a server, the app runs the same engine in **demo mode** on an accelerated NIFTY simulation (each refresh = one 5-minute candle).
 
-## Connect without a server (Dhan account on the phone)
+## Phone-only setup (no server)
 
-⚙ Settings → **Dhan account (this phone)**: enter your Dhan client id and access token and tap **Save & test**. The app checks them with Dhan (token + NIFTY quote) and saves them on the phone only, encrypted by the Android Keystore (`expo-secure-store`). The same server code then runs inside the app, so the Dashboard engine, live option chain, markets, journal and paper trading all work straight from Dhan.
+1. ⚙ Settings → **Dhan account (this phone)**: enter your Dhan client id and access token and tap **Save & test**. They are checked with Dhan and stored only on the phone, encrypted by the Android Keystore.
+2. **Static IP (for LIVE orders)**: enter the static IP whitelisted on your Dhan account, tap **Save**, and **Register with Dhan** if Dhan doesn't have it yet. Dhan accepts orders only from that IP, so for LIVE trading the phone must be online through it: your static-IP Wi-Fi, or a dedicated-IP VPN on the phone. Market data works from any network.
+3. **Pre-flight check**: verifies the token, live data, option chain + Greeks, funds, the static IP, that the phone is actually online through it (public-IP lookup), that Dhan has it whitelisted, the underlying (NIFTY) and market hours. It runs automatically before switching to LIVE, and any ✘ blocks LIVE.
 
-Limits of phone-only mode:
-- **No real orders:** Dhan only accepts order APIs from your whitelisted static IP. Portfolio/Orders paper-trade on live prices.
-- **Engine runs only while the app is open:** Android pauses background apps, so SL/target monitoring stops while the phone is locked.
-- **Token renewal:** the token is renewed automatically while the app is open. If it expires, paste a new one and tap **Update & test**.
+**Dashboard → Trading mode**
 
-For live orders and round-the-clock monitoring, use the server below. When a server is connected it takes priority; the phone credentials stay saved but unused.
+- **PAPER** (default): the engine paper-trades its signals, like the workbook. Nothing is sent to Dhan.
+- **LIVE**: confirmed signals are **not** traded automatically; they show *SIGNAL CONFIRMED - tap ENTER*.
+  - **ENTER** places a market BUY for the engine's plan (strike, lots sized to max risk), then a STOP_LOSS sell order at Dhan at the plan's SL, so the stop holds even when the app is closed.
+  - While the app is open, T1 books half at market and re-places the stop at breakeven, and T2 or the trailing stop sells the rest.
+  - If the exchange stop filled while the app was closed, the position is closed on the next refresh at the real fill.
+  - **EXIT** cancels the stop and sells at market.
+  - The journal records real fill prices, and Portfolio/Orders show your Dhan account.
+- You can't switch between PAPER and LIVE while a position is open. Every live order asks for confirmation, and daily limits (trades/day, no revenge trade, ₹ max loss) apply to manual entries too.
 
-## Server setup
+**Limits:** the engine runs only while the app is open (Android pauses background apps); the exchange stop is what protects you when it's closed. LIVE supports NIFTY options. Product is Intraday (Dhan squares off before close) or Carry forward (NRML), set in Settings.
+
+## Server setup (optional, not needed for phone-only use)
 
 Run this on your **static-IP machine** (Ubuntu/Debian with systemd, for example a cloud VPS):
 

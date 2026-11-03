@@ -1,11 +1,41 @@
 import { useState } from 'react';
-import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
-import { Breakdown, ConfidenceMeter, KV, signalColor } from '../../components/engine';
+import {
+  ActivityIndicator,
+  Alert,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  View,
+} from 'react-native';
+import {
+  Breakdown,
+  ConfidenceMeter,
+  KV,
+  PreflightList,
+  signalColor,
+  type PreflightView,
+} from '../../components/engine';
 import { LineChart } from '../../components/LineChart';
-import { Button, Card, Empty, styles as ui } from '../../components/ui';
+import { Button, Card, Empty, Segmented, styles as ui } from '../../components/ui';
+import type { TradeMode } from '../../lib/engine/types';
 import { formatINR, formatNumber, formatSigned } from '../../lib/format';
 import { useEngine } from '../../state/EngineContext';
 import { colors, pnlColor } from '../../theme';
+
+/** Yes/No confirmation that works on Android and in the web build. */
+const confirmDialog = (title: string, msg: string, yes: string, onYes: () => void) => {
+  if (Platform.OS === 'web') {
+    if (globalThis.confirm?.(`${title}\n\n${msg}`)) onYes();
+    return;
+  }
+  Alert.alert(title, msg, [
+    { text: 'Cancel', style: 'cancel' },
+    { text: yes, style: 'destructive', onPress: onYes },
+  ]);
+};
 
 const time = (ms: number | null) => {
   if (!ms) return '—';
@@ -14,8 +44,11 @@ const time = (ms: number | null) => {
 };
 
 export default function DashboardScreen() {
-  const { snap, busy, error, refresh, updateConfig, mode } = useEngine();
+  const { snap, busy, error, refresh, updateConfig, mode, phone, enter, exit, setTradeMode } = useEngine();
   const [toggling, setToggling] = useState(false);
+  const [modeBusy, setModeBusy] = useState(false);
+  const [blocked, setBlocked] = useState<PreflightView | null>(null);
+  const [tradeMsg, setTradeMsg] = useState<string | null>(null);
 
   if (!snap) {
     return (
@@ -35,6 +68,62 @@ export default function DashboardScreen() {
   };
   const p = st.position;
   const ltp = d?.positionLtp ?? null;
+  const isLive = cfg.tradeMode === 'LIVE';
+  const cand = d?.candidatePlan ?? null;
+
+  const switchMode = (m: TradeMode) => {
+    if (m === cfg.tradeMode) return;
+    setBlocked(null);
+    setTradeMsg(null);
+    const go = async () => {
+      setModeBusy(true);
+      try {
+        const pf = await setTradeMode(m);
+        if (pf && !pf.ok) setBlocked(pf);
+      } catch (e) {
+        setTradeMsg((e as Error).message);
+      } finally {
+        setModeBusy(false);
+      }
+    };
+    if (m === 'LIVE') {
+      confirmDialog(
+        'Switch to LIVE trading?',
+        'A pre-flight check runs first. In LIVE mode the ENTER and EXIT buttons place REAL orders on your Dhan account, and every entry gets a stop-loss order at Dhan. Signals are never traded automatically.',
+        'Run check & go LIVE',
+        () => void go(),
+      );
+    } else void go();
+  };
+
+  const doEnter = () => {
+    if (!cand) return;
+    const what = `BUY ${cand.direction} ${cand.strike} × ${cand.qty} at market (~${formatNumber(cand.entry)})\nSL ${formatNumber(cand.sl)} · T1 ${formatNumber(cand.target1)} · T2 ${formatNumber(cand.target2)} · max loss ${formatINR(cand.maxLoss, 0)}`;
+    const go = () => {
+      setTradeMsg(null);
+      enter().catch((e) => setTradeMsg((e as Error).message));
+    };
+    if (isLive)
+      confirmDialog(
+        'Place LIVE order?',
+        `${what}\n\nA stop-loss sell order is placed at Dhan right after the fill.`,
+        'Buy now',
+        go,
+      );
+    else confirmDialog('Paper entry', what, 'Enter (paper)', go);
+  };
+
+  const doExit = () => {
+    if (!p) return;
+    const what = `Sell ${p.remainingQty} ${p.direction} ${p.strike} at market${ltp ? ` (~${formatNumber(ltp)})` : ''}`;
+    const go = () => {
+      setTradeMsg(null);
+      exit().catch((e) => setTradeMsg((e as Error).message));
+    };
+    if (isLive)
+      confirmDialog('Exit LIVE position?', `${what}\nThe stop-loss order at Dhan is cancelled first.`, 'Exit now', go);
+    else confirmDialog('Exit paper position?', what, 'Exit', go);
+  };
   const openPnl = p && ltp ? (ltp - p.entry) * p.remainingQty + p.partialPnl : null;
 
   return (
@@ -63,6 +152,35 @@ export default function DashboardScreen() {
           <Switch value={cfg.autoRefresh} disabled={toggling} onValueChange={toggleAuto} />
         </View>
       </View>
+      {/* Trade mode: PAPER (engine paper-trades) / LIVE (real Dhan orders via ENTER/EXIT) */}
+      <Card
+        style={{
+          gap: 10,
+          borderColor: isLive ? colors.down : colors.border,
+          borderWidth: isLive ? 1 : StyleSheet.hairlineWidth,
+        }}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Trading mode</Text>
+          {modeBusy ? <ActivityIndicator color={colors.accent} /> : null}
+        </View>
+        <Segmented
+          options={[
+            { label: 'PAPER', value: 'PAPER' as TradeMode },
+            { label: 'LIVE', value: 'LIVE' as TradeMode },
+          ]}
+          value={cfg.tradeMode}
+          onChange={(m) =>
+            phone ? switchMode(m) : setTradeMsg('Connect your Dhan account in ⚙ Settings to trade LIVE.')
+          }
+        />
+        <Text style={[ui.muted, isLive && { color: colors.down, fontWeight: '700' }]}>
+          {isLive
+            ? 'LIVE — ENTER / EXIT place real orders on your Dhan account. Signals are not traded automatically.'
+            : 'PAPER — signals are traded on paper, nothing is sent to Dhan.'}
+        </Text>
+        {blocked ? <PreflightList result={blocked} /> : null}
+      </Card>
       {snap.banner ? <Text style={s.banner}>{snap.banner}</Text> : null}
       {error ? <Text style={s.banner}>{error}</Text> : null}
       <Button
@@ -94,6 +212,42 @@ export default function DashboardScreen() {
               CE score {formatNumber(d.decision.scoreCE, 1)} · PE score {formatNumber(d.decision.scorePE, 1)} · pattern{' '}
               {d.decision.pattern}
             </Text>
+          </Card>
+
+          {/* Manual entry / exit */}
+          <Card style={{ gap: 10 }}>
+            <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Manual {isLive ? 'LIVE' : 'paper'} trade</Text>
+            {p ? (
+              <Button
+                label={
+                  busy ? 'Working…' : `EXIT ${p.direction} ${p.strike} × ${p.remainingQty}${isLive ? ' (LIVE)' : ''}`
+                }
+                color={colors.down}
+                onPress={doExit}
+                disabled={busy}
+              />
+            ) : cand ? (
+              <>
+                <Text style={ui.muted}>
+                  Enters the engine&apos;s current pick with its plan: SL {formatNumber(cand.sl)} · T1{' '}
+                  {formatNumber(cand.target1)} · T2 {formatNumber(cand.target2)} · max loss {formatINR(cand.maxLoss, 0)}
+                  . Daily limits still apply.
+                </Text>
+                <Button
+                  label={
+                    busy
+                      ? 'Working…'
+                      : `ENTER BUY ${cand.direction} ${cand.strike} × ${cand.qty}${isLive ? ' (LIVE)' : ''}`
+                  }
+                  color={cand.direction === 'CE' ? colors.up : colors.down}
+                  onPress={doEnter}
+                  disabled={busy}
+                />
+              </>
+            ) : (
+              <Text style={ui.muted}>No strike available to enter yet.</Text>
+            )}
+            {tradeMsg ? <Text style={{ color: colors.down, fontWeight: '600' }}>{tradeMsg}</Text> : null}
           </Card>
 
           {p ? (

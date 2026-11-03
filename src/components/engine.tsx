@@ -102,3 +102,34 @@ const s = StyleSheet.create({
   tick: { position: 'absolute', top: 0, bottom: 0, width: 2, backgroundColor: colors.text, opacity: 0.6 },
   small: { color: colors.muted, fontSize: 11 },
 });
+
+export interface PreflightView {
+  ok: boolean;
+  at: number;
+  items: { id: string; label: string; status: 'pass' | 'warn' | 'fail'; detail: string }[];
+}
+
+const MARK = { pass: '✔', warn: '!', fail: '✘' } as const;
+const MARK_COLOR = { pass: colors.up, warn: colors.warn, fail: colors.down } as const;
+
+/** Pre-flight checklist (✔ pass / ! warning / ✘ blocks LIVE). */
+export function PreflightList({ result }: { result: PreflightView }) {
+  return (
+    <View style={{ gap: 8 }}>
+      <Text style={{ color: result.ok ? colors.up : colors.down, fontWeight: '700' }}>
+        {result.ok ? 'All checks passed — LIVE trading allowed' : 'LIVE trading blocked — fix the ✘ items'}
+      </Text>
+      {result.items.map((i) => (
+        <View key={i.id} style={{ flexDirection: 'row', gap: 10, alignItems: 'flex-start' }}>
+          <Text style={{ color: MARK_COLOR[i.status], fontWeight: '800', width: 16, textAlign: 'center' }}>
+            {MARK[i.status]}
+          </Text>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>{i.label}</Text>
+            <Text style={{ color: colors.muted, fontSize: 12 }}>{i.detail}</Text>
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}

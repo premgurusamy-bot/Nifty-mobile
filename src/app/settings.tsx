@@ -1,5 +1,8 @@
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { isIPv4 } from '../../server/preflight.ts';
+import { isLocalApi } from '../api/localApi';
+import { PreflightList, type PreflightView } from '../components/engine';
 import { Button, Card, Segmented, styles as ui } from '../components/ui';
 import type { EngineConfig } from '../lib/engine/types';
 import { useEngine } from '../state/EngineContext';
@@ -65,12 +68,7 @@ function Field({
 
 export default function SettingsScreen() {
   const settings = useSettings();
-  const { snap, updateConfig, mode } = useEngine();
-
-  const [url, setUrl] = useState(settings.serverUrl);
-  const [key, setKey] = useState('');
-  const [connMsg, setConnMsg] = useState<string | null>(null);
-  const [connBusy, setConnBusy] = useState(false);
+  const { snap, updateConfig, preflight } = useEngine();
 
   const [clientId, setClientId] = useState('');
   const [token, setToken] = useState('');
@@ -107,19 +105,47 @@ export default function SettingsScreen() {
     setExpiry(cfg.expiry);
   }
 
-  const connect = async () => {
-    setConnBusy(true);
-    setConnMsg(null);
+  const [ip, setIp] = useState(settings.staticIp);
+  const [ipMsg, setIpMsg] = useState<string | null>(null);
+  const [ipBusy, setIpBusy] = useState(false);
+  const [pf, setPf] = useState<PreflightView | null>(null);
+  const [pfBusy, setPfBusy] = useState(false);
+  const [pfErr, setPfErr] = useState<string | null>(null);
+
+  const saveIp = async () => {
+    setIpMsg(null);
+    if (ip.trim() && !isIPv4(ip)) return setIpMsg(`Failed: "${ip}" is not an IPv4 address (like 203.0.113.7)`);
+    await settings.saveStaticIp(ip);
+    setIpMsg(ip.trim() ? 'Saved on this phone' : 'Cleared');
+  };
+
+  const registerIp = async () => {
+    setIpBusy(true);
+    setIpMsg(null);
     try {
-      const st = await settings.connect(url, key);
-      setConnMsg(
-        `Connected · client ${st.clientId} · live orders ${st.liveOrders ? 'ENABLED' : 'disabled'}${st.error ? ` · ${st.error}` : ''}`,
-      );
-      setKey('');
+      if (!isIPv4(ip)) throw new Error(`"${ip}" is not an IPv4 address`);
+      await settings.saveStaticIp(ip);
+      const api = settings.api;
+      if (!isLocalApi(api)) throw new Error('Connect your Dhan account above first');
+      const ips = await api.registerStaticIp(ip.trim());
+      setIpMsg(`Registered with Dhan · whitelisted: ${ips.join(', ') || '—'}`);
     } catch (e) {
-      setConnMsg(`Failed: ${(e as Error).message}`);
+      setIpMsg(`Failed: ${(e as Error).message}`);
     } finally {
-      setConnBusy(false);
+      setIpBusy(false);
+    }
+  };
+
+  const runCheck = async () => {
+    setPfBusy(true);
+    setPfErr(null);
+    try {
+      if (ip.trim() !== settings.staticIp) await settings.saveStaticIp(ip);
+      setPf(await preflight());
+    } catch (e) {
+      setPfErr((e as Error).message);
+    } finally {
+      setPfBusy(false);
     }
   };
 
@@ -159,9 +185,9 @@ export default function SettingsScreen() {
               : 'Enter your Dhan client id and access token to get live data straight from Dhan — no server needed.'}
           </Text>
           <Text style={ui.muted}>
-            Stored only on this phone{Platform.OS === 'web' ? '' : ', encrypted in the Android Keystore'}. Live data,
-            the engine, journal and paper trading work on the phone while the app is open. Placing real orders needs the
-            server, because Dhan only accepts orders from your whitelisted static IP.
+            Stored only on this phone{Platform.OS === 'web' ? '' : ', encrypted in the Android Keystore'}. The engine,
+            live data, journal and trading run on the phone while the app is open. LIVE orders also need your static IP
+            (below) and a passing pre-flight check.
           </Text>
           <Field label="Dhan client id" value={clientId} onChange={setClientId} keyboard="default" />
           <Field label="Dhan access token" value={token} onChange={setToken} keyboard="default" secure />
@@ -186,32 +212,55 @@ export default function SettingsScreen() {
         </Card>
 
         <Card style={{ gap: 12 }}>
-          <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Dhan server (optional)</Text>
+          <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Static IP (for LIVE orders)</Text>
           <Text style={ui.muted}>
-            {settings.connection === 'SERVER'
-              ? `Connected to ${settings.serverUrl}${settings.server ? ` · client ${settings.server.clientId}` : ''}`
-              : mode === 'DHAN'
-                ? 'Not used — the phone is connected to Dhan directly.'
-                : 'Not connected — the app is running the engine in DEMO mode on simulated data.'}
+            Dhan accepts orders only from the static IP whitelisted on your account. For LIVE trading this phone must be
+            online through that IP — your static-IP Wi-Fi, or a dedicated-IP VPN on the phone. Market data works from
+            any network.
           </Text>
-          <Text style={ui.muted}>
-            Use your static-IP server (README → Server setup) for live orders and for SL/target monitoring while the
-            phone is locked. When connected it takes priority over the phone connection. The app stores just the server
-            URL and its access key{Platform.OS === 'web' ? '' : ' (in the device keychain)'}.
-          </Text>
-          <Field label="Server URL" value={url} onChange={setUrl} keyboard="url" />
-          <Field label="Server access key (APP_API_KEY)" value={key} onChange={setKey} keyboard="default" secure />
-          {connMsg ? (
-            <Text style={{ color: connMsg.startsWith('Failed') ? colors.down : colors.up }}>{connMsg}</Text>
-          ) : null}
+          <Field label="Static IP (IPv4)" value={ip} onChange={setIp} keyboard="decimal-pad" />
+          {ipMsg ? <Text style={{ color: ipMsg.startsWith('Failed') ? colors.down : colors.up }}>{ipMsg}</Text> : null}
+          <Button label="Save" onPress={() => void saveIp()} />
           <Button
-            label={connBusy ? 'Connecting…' : 'Save & test connection'}
-            onPress={connect}
-            disabled={connBusy || !url || !key}
+            label={ipBusy ? 'Registering…' : 'Register with Dhan (primary IP)'}
+            color={colors.cardAlt}
+            onPress={() => void registerIp()}
+            disabled={ipBusy || !ip.trim() || settings.connection !== 'DIRECT'}
           />
-          {settings.connection === 'SERVER' ? (
-            <Button label="Disconnect server" color={colors.cardAlt} onPress={() => void settings.disconnect()} />
+          <Text style={[ui.muted, { fontSize: 12 }]}>
+            Registering replaces the primary IP on your Dhan account. Dhan may limit how often it can be changed.
+          </Text>
+          {cfg ? (
+            <>
+              <Text style={s.label}>Live order product</Text>
+              <Segmented
+                options={[
+                  { label: 'Intraday', value: 'INTRADAY' as const },
+                  { label: 'Carry forward (NRML)', value: 'MARGIN' as const },
+                ]}
+                value={cfg.liveProduct}
+                onChange={(v) => void updateConfig({ liveProduct: v }).catch((e) => setIpMsg(`Failed: ${e.message}`))}
+              />
+            </>
           ) : null}
+        </Card>
+
+        <Card style={{ gap: 12 }}>
+          <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Pre-flight check</Text>
+          <Text style={ui.muted}>
+            Runs automatically before switching to LIVE. Checks the token, live data, option chain + Greeks, funds, your
+            static IP, that this phone is actually online through it, that Dhan has it whitelisted, and market hours.
+          </Text>
+          <Button
+            label={pfBusy ? 'Checking…' : 'Run pre-flight check'}
+            onPress={() => void runCheck()}
+            disabled={pfBusy || settings.connection !== 'DIRECT'}
+          />
+          {settings.connection !== 'DIRECT' ? (
+            <Text style={ui.muted}>Connect your Dhan account above first.</Text>
+          ) : null}
+          {pfErr ? <Text style={{ color: colors.down }}>{pfErr}</Text> : null}
+          {pf ? <PreflightList result={pf} /> : null}
         </Card>
 
         {cfg ? (

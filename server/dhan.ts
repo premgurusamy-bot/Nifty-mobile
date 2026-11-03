@@ -172,21 +172,34 @@ export class DhanClient {
     exchangeSegment: string;
     transactionType: 'BUY' | 'SELL';
     quantity: number;
-    orderType: 'MARKET' | 'LIMIT';
+    orderType: 'MARKET' | 'LIMIT' | 'STOP_LOSS';
     productType: string;
     price: number;
+    /** Required for STOP_LOSS (trigger), 0 otherwise. */
+    triggerPrice?: number;
     correlationId?: string;
   }) {
     return this.tradeThrottle.run(() =>
       this.request<{ orderId: string; orderStatus: string }>('POST', '/orders', {
         validity: 'DAY',
         disclosedQuantity: 0,
-        triggerPrice: 0,
         afterMarketOrder: false,
         ...p,
+        triggerPrice: p.triggerPrice ?? 0,
       }),
     );
   }
+  // ---- Static IP (order APIs are only accepted from a whitelisted IP) ----------
+  getIP() {
+    return this.request<any>('GET', '/ip/getIP');
+  }
+  setIP(ip: string, ipFlag: 'PRIMARY' | 'SECONDARY' = 'PRIMARY') {
+    return this.request<any>('POST', '/ip/setIP', { ip, ipFlag });
+  }
+  modifyIP(ip: string, ipFlag: 'PRIMARY' | 'SECONDARY' = 'PRIMARY') {
+    return this.request<any>('PUT', '/ip/modifyIP', { ip, ipFlag });
+  }
+
   cancelOrder(orderId: string) {
     return this.tradeThrottle.run(() => this.request<any>('DELETE', `/orders/${encodeURIComponent(orderId)}`));
   }

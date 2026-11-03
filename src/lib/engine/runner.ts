@@ -4,7 +4,15 @@
  * are injected so this file stays platform-neutral.
  */
 import { runBacktest, type BacktestResult } from './backtest.ts';
-import { isWithinMarketHours, runCycle } from './decision.ts';
+import {
+  buildTradePlan,
+  canTakeNewTrade,
+  closeOpenPosition,
+  isWithinMarketHours,
+  openTrade,
+  runCycle,
+} from './decision.ts';
+import { findStrike, legOf } from './indicators.ts';
 import {
   DEFAULT_CONFIG,
   INDEX_PRESETS,
@@ -15,6 +23,8 @@ import {
   type EngineConfig,
   type EngineEvent,
   type EngineState,
+  type LiveLegs,
+  type TradePlan,
 } from './types.ts';
 
 export interface EngineDataSource {
@@ -68,6 +78,15 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   num('refreshSeconds', 15, 3600);
   if (patch.autoRefresh !== undefined) next.autoRefresh = !!patch.autoRefresh;
   if (patch.alertsEnabled !== undefined) next.alertsEnabled = !!patch.alertsEnabled;
+  if (patch.tradeMode !== undefined) {
+    if (patch.tradeMode !== 'PAPER' && patch.tradeMode !== 'LIVE') throw new Error('tradeMode must be PAPER or LIVE');
+    next.tradeMode = patch.tradeMode;
+  }
+  if (patch.liveProduct !== undefined) {
+    if (patch.liveProduct !== 'INTRADAY' && patch.liveProduct !== 'MARGIN')
+      throw new Error('liveProduct must be INTRADAY or MARGIN');
+    next.liveProduct = patch.liveProduct;
+  }
   if (patch.expiry !== undefined) {
     const e = String(patch.expiry).trim();
     if (e && !/^\d{4}-\d{2}-\d{2}$/.test(e)) throw new Error('expiry must be YYYY-MM-DD or blank');
@@ -101,6 +120,13 @@ export class EngineRunner {
   banner = '';
   lastRefresh: number | null = null;
   candles: Candle[] = [];
+  /** Option chain from the latest cycle (prices for manual entry / exit). */
+  lastChain: ChainSnapshot | null = null;
+  /**
+   * Runs after every successful cycle with the state before and after it —
+   * live trading uses it to mirror partial bookings / exits with real orders.
+   */
+  afterCycle: ((before: EngineState, after: EngineState) => Promise<void>) | null = null;
   private running: Promise<void> | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private source: EngineDataSource;
@@ -153,12 +179,21 @@ export class EngineRunner {
       return;
     }
     try {
+      const before = this.state;
       const { state, dashboard } = runCycle(this.state, this.config, { ...data, now });
       this.state = state;
       this.dashboard = dashboard;
       this.candles = data.candles;
+      this.lastChain = data.chain;
+      if (this.afterCycle) {
+        try {
+          await this.afterCycle(before, this.state);
+        } catch (e) {
+          this.status = `Live order error - ${(e as Error).message}`;
+        }
+      }
       this.lastRefresh = now;
-      this.status = 'Ready';
+      if (!this.status.startsWith('Live order error')) this.status = 'Ready';
       // Every event raised during a cycle is stamped with that cycle's clock.
       const fresh = state.events.filter((e) => e.at === now);
       if (fresh.length) this.onEvents(fresh, this.config);
@@ -172,6 +207,134 @@ export class EngineRunner {
     this.config = sanitizeConfig(patch, this.config);
     await this.store.save(this.state, this.config);
     this.syncTimer();
+  }
+
+  /** Current premium of a strike from the latest chain. */
+  premium(direction: 'CE' | 'PE', strike: number): number | null {
+    if (!this.lastChain) return null;
+    const ltp = legOf(findStrike(this.lastChain, strike), direction)?.ltp ?? 0;
+    return ltp > 0 ? ltp : null;
+  }
+
+  /** Plan a manual ENTER would use now (the dashboard's leading direction + best strike). */
+  entryPlan(): TradePlan {
+    if (this.state.position) throw new Error('A position is already open — exit it first.');
+    const d = this.dashboard;
+    if (!d || !this.lastChain) throw new Error('No market data yet — tap Refresh now first.');
+    const gate = canTakeNewTrade(this.state, this.config);
+    if (!gate.ok) throw new Error(gate.reason);
+    const plan =
+      d.candidatePlan ??
+      buildTradePlan(this.lastChain, d.decision.direction, d.decision.selectedStrike, d.market.atr, this.config);
+    if (!plan || plan.entry <= 0)
+      throw new Error(`No premium for ${d.decision.direction} ${d.decision.selectedStrike}`);
+    return plan;
+  }
+
+  /** Open a position from a manual ENTER (paper at LTP, or live at the actual fill). */
+  async manualEnter(opts: { entry?: number; qty?: number; live?: LiveLegs; plan?: TradePlan } = {}) {
+    const plan = opts.plan ?? this.entryPlan();
+    const d = this.dashboard!;
+    const now = this.clock();
+    const next: EngineState = JSON.parse(JSON.stringify(this.state));
+    openTrade(next, this.config, {
+      direction: plan.direction,
+      plan,
+      entry: opts.entry ?? plan.entry,
+      qty: opts.qty ?? plan.qty,
+      now,
+      spot: d.market.spot,
+      confidence: d.decision.confidence,
+      trend: d.market.trend,
+      pcr: d.chain.pcr,
+      oiBias: d.decision.oiStrength,
+      iv: d.greeks.iv,
+      delta: d.greeks.delta,
+      reason: `${opts.live ? 'Manual LIVE entry' : 'Manual entry'}: ${d.decision.decisionText} | Confidence ${d.decision.confidence.toFixed(2)}/100`,
+    });
+    if (opts.live && next.position) next.position.live = opts.live;
+    this.state = next;
+    if (this.dashboard) {
+      // Reflect the new position immediately, without waiting for the next refresh.
+      this.dashboard = {
+        ...this.dashboard,
+        decision: {
+          ...this.dashboard.decision,
+          signal: 'IN POSITION',
+          decisionText: 'POSITION OPEN - monitoring for SL/Target',
+        },
+        candidatePlan: null,
+        positionLtp: next.position!.entry,
+      };
+    }
+    this.onEvents(
+      next.events.filter((e) => e.at === now),
+      this.config,
+    );
+    await this.store.save(this.state, this.config);
+    return this.state.position!;
+  }
+
+  /** Close the open position (manual EXIT at LTP / live fill, or an exchange stop that filled). */
+  async manualExit(opts: { price?: number; reason?: string } = {}) {
+    const p = this.state.position;
+    if (!p) throw new Error('No open position.');
+    const price = opts.price ?? this.premium(p.direction, p.strike);
+    if (!price) throw new Error(`No premium for ${p.direction} ${p.strike} — tap Refresh now first.`);
+    const now = this.clock();
+    const next: EngineState = JSON.parse(JSON.stringify(this.state));
+    closeOpenPosition(next, price, opts.reason ?? 'MANUAL EXIT', now);
+    this.state = next;
+    const d = this.dashboard;
+    if (d && this.lastChain) {
+      this.dashboard = {
+        ...d,
+        decision: {
+          ...d.decision,
+          signal: 'NO TRADE',
+          decisionText: `POSITION CLOSED - ${opts.reason ?? 'MANUAL EXIT'} @ ${price.toFixed(2)}`,
+        },
+        candidatePlan: buildTradePlan(
+          this.lastChain,
+          d.decision.direction,
+          d.decision.selectedStrike,
+          d.market.atr,
+          this.config,
+        ),
+        positionLtp: null,
+      };
+    }
+    this.onEvents(
+      next.events.filter((e) => e.at === now),
+      this.config,
+    );
+    await this.store.save(this.state, this.config);
+  }
+
+  /**
+   * Replace a closed trade's exit with the real fill (live mode): the engine
+   * books exits at the SL/target level, the exchange may fill elsewhere.
+   * `leg` is the position as it was just before the final exit.
+   */
+  async amendExit(leg: NonNullable<EngineState['position']>, fillPrice: number, note: string) {
+    const next: EngineState = JSON.parse(JSON.stringify(this.state));
+    const j = next.journal.find((x) => x.id === leg.journalId);
+    if (!j || j.exit == null) return;
+    const oldLeg = (j.exit - leg.entry) * leg.remainingQty;
+    const newLeg = (fillPrice - leg.entry) * leg.remainingQty;
+    j.exit = fillPrice;
+    j.pnl = leg.partialPnl + newLeg;
+    j.exitReason = `${j.exitReason} · ${note} @ ${fillPrice.toFixed(2)}`;
+    next.realizedToday += newLeg - oldLeg;
+    this.state = next;
+    await this.store.save(this.state, this.config);
+  }
+
+  /** Persist an in-place edit of the open position (e.g. a new stop-loss order id). */
+  async patchPosition(patch: Partial<NonNullable<EngineState['position']>>) {
+    if (!this.state.position) return;
+    this.state = { ...this.state, position: { ...this.state.position, ...patch } };
+    await this.store.save(this.state, this.config);
   }
 
   async resetJournal() {

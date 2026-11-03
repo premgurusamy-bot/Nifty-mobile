@@ -41,12 +41,23 @@ function goldenIntraday() {
   };
 }
 
+/** Premium of a golden-chain option by the security id goldenChain() assigns. */
+function goldenLtp(securityId: string): number | null {
+  const n = Number(securityId);
+  const type = n >= 70000 ? 'pe' : n >= 60000 ? 'ce' : null;
+  if (!type) return null;
+  const strike = (n - (type === 'ce' ? 60000 : 70000)) * 50;
+  const s = goldenFixture().chain.strikes.find((x: any) => x.strike === strike);
+  return s?.[type]?.ltp || null;
+}
+
 /** Workbook fixture → Dhan /optionchain response shape. */
 function goldenChain() {
   const fx = goldenFixture();
   const oc: any = {};
   for (const s of fx.chain.strikes) {
-    const leg = (l: any) => ({
+    const leg = (l: any, type: 'CE' | 'PE') => ({
+      security_id: (type === 'CE' ? 60000 : 70000) + Math.round(s.strike / 50),
       last_price: l.ltp,
       oi: l.oi,
       previous_oi: l.prevOi,
@@ -54,7 +65,7 @@ function goldenChain() {
       implied_volatility: l.iv,
       greeks: { delta: l.delta, gamma: l.gamma, theta: l.theta, vega: l.vega },
     });
-    oc[`${s.strike.toFixed(6)}`] = { ce: leg(s.ce), pe: leg(s.pe) };
+    oc[`${s.strike.toFixed(6)}`] = { ce: leg(s.ce, 'CE'), pe: leg(s.pe, 'PE') };
   }
   return { data: { last_price: fx.chain.spot, oc }, status: 'success' };
 }
@@ -76,9 +87,16 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
     /** What /profile reports as tokenValidity (dd/MM/yyyy HH:mm IST). */
     tokenValidity: '31/12/2099 09:00',
     renewals: 0,
+    /** Whitelisted static IPs (GET /ip/getIP). */
+    ips: { primary: '', secondary: '' },
+    /** What the test public-IP endpoint reports as this device's IP. */
+    publicIp: '198.51.100.20',
   };
   const ltpOf = (seg: string, id: string) => {
     if (seg === 'IDX_I') return spot;
+    // Golden-chain option ids fill at that chain's own premium.
+    const g = goldenLtp(id);
+    if (seg === 'NSE_FNO' && g) return g;
     if (seg === 'NSE_FNO') return 100 + (Number(id) % 50);
     return 1000 + (Number(id) % 1000);
   };
@@ -102,6 +120,11 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
         res.end(JSON.stringify(json));
       };
       if (req.method === 'OPTIONS') return send(204, {});
+      // Test-only stand-in for api.ipify.org (GET) and a switch to change it (POST {ip}).
+      if (path === '/__test/ip') {
+        if (req.method === 'POST') state.publicIp = body.ip;
+        return send(200, { ip: state.publicIp });
+      }
       if (!state.tokens.has(String(req.headers['access-token']))) {
         return send(401, {
           errorType: 'Invalid_Authentication',
@@ -252,6 +275,19 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
         const o = state.orders.find((x) => x.orderId === one[1]);
         return o ? send(200, o) : send(404, { errorCode: 'DH-905', errorMessage: 'Order not found' });
       }
+      if (req.method === 'GET' && path === '/ip/getIP') {
+        return send(200, {
+          dhanClientId: FAKE_CLIENT,
+          primaryIP: state.ips.primary,
+          secondaryIP: state.ips.secondary,
+          modifyDatePrimary: '',
+        });
+      }
+      if ((req.method === 'POST' && path === '/ip/setIP') || (req.method === 'PUT' && path === '/ip/modifyIP')) {
+        if (body.ipFlag === 'SECONDARY') state.ips.secondary = body.ip;
+        else state.ips.primary = body.ip;
+        return send(200, { status: 'SUCCESS', message: 'IP saved' });
+      }
       if (req.method === 'POST' && path === '/orders') {
         const orderId = String(state.nextId++);
         const isMarket = body.orderType === 'MARKET';
@@ -268,6 +304,7 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
           tradingSymbol: '',
           quantity: body.quantity,
           price: body.price,
+          triggerPrice: body.triggerPrice,
           averageTradedPrice: isMarket ? ltpOf(body.exchangeSegment, body.securityId) : 0,
           filledQty: isMarket ? body.quantity : 0,
           createTime: istStamp(),

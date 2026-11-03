@@ -22,6 +22,7 @@ import type {
   EngineState,
   JournalRow,
   Leg,
+  LiveLegs,
   OpenPosition,
   ScoreBreakdown,
   Signal,
@@ -322,6 +323,97 @@ export function checkAndCloseIfHit(s: EngineState, ltp: number, cfg: EngineConfi
   return false;
 }
 
+// ---------------------------------------------------------------- opening / closing trades
+
+export interface OpenTradeArgs {
+  direction: Direction;
+  plan: TradePlan;
+  /** Actual entry price (plan LTP for paper, average fill for live). */
+  entry: number;
+  qty: number;
+  now: number;
+  spot: number;
+  confidence: number;
+  trend: string;
+  pcr: number;
+  oiBias: string;
+  iv: number;
+  delta: number;
+  reason: string;
+  live?: LiveLegs;
+}
+
+/**
+ * Journal + open the position + daily counters (LogSignal / OpenPosition / IncrementTradesToday).
+ * SL and targets keep the plan's distances from the actual entry price.
+ */
+export function openTrade(s: EngineState, cfg: EngineConfig, a: OpenTradeArgs): OpenPosition {
+  const shift = a.entry - a.plan.entry;
+  const sl = Math.max(0.05, a.plan.sl + shift);
+  const target1 = a.plan.target1 + shift;
+  const target2 = a.plan.target2 + shift;
+  const id = `J${++s.seq}`;
+  const row: JournalRow = {
+    id,
+    date: istDate(a.now),
+    time: istTime(a.now),
+    spot: a.spot,
+    strike: a.plan.strike,
+    direction: a.direction,
+    entry: a.entry,
+    sl,
+    target: target1,
+    exit: null,
+    pnl: null,
+    confidence: a.confidence,
+    trend: a.trend,
+    pcr: a.pcr,
+    oiBias: a.oiBias,
+    iv: a.iv,
+    delta: a.delta,
+    entryReason: a.reason,
+    exitReason: '',
+  };
+  s.journal.push(row);
+  s.position = {
+    direction: a.direction,
+    strike: a.plan.strike,
+    entry: a.entry,
+    originalSl: sl,
+    target1,
+    target2,
+    totalQty: a.qty,
+    journalId: id,
+    openedAt: a.now,
+    partialBooked: false,
+    partialQty: 0,
+    partialPnl: 0,
+    remainingQty: a.qty,
+    currentSl: sl,
+    live: a.live,
+  };
+  pushEvent(
+    s,
+    {
+      kind: 'TRADE',
+      message: `${cfg.symbol} ${a.live ? 'LIVE' : 'signal'}: BUY ${a.direction} ${a.plan.strike} @ ${fmt2(a.entry)}`,
+    },
+    a.now,
+  );
+  s.tradesToday += 1;
+  s.lastFiredKey = `${istDate(a.now)}|${a.direction}|${a.plan.strike}`;
+  s.pending = null;
+  return s.position;
+}
+
+/** Close whatever quantity is still open at `price` (manual exit, or an exchange stop that filled). */
+export function closeOpenPosition(s: EngineState, price: number, reason: string, now: number): boolean {
+  const p = s.position;
+  if (!p) return false;
+  finalize(s, p, price, p.remainingQty, p.partialPnl, reason, now);
+  return true;
+}
+
 // ---------------------------------------------------------------- the refresh cycle
 
 export interface RefreshInput {
@@ -447,59 +539,29 @@ export function runCycle(
             plan = tp;
             signal = direction === 'CE' ? 'BUY CE' : 'BUY PE';
             decisionText = `TRADE - CONFIRMED BREAK (${label})`;
-            const id = `J${++s.seq}`;
-            // LogSignal runs before the dashboard's decision cell is rewritten, so the
-            // workbook journals the previous cycle's setup text — kept as-is.
-            const row: JournalRow = {
-              id,
-              date: istDate(now),
-              time: istTime(now),
-              spot,
-              strike: selectedStrike,
-              direction,
-              entry: tp.entry,
-              sl: tp.sl,
-              target: tp.target1,
-              exit: null,
-              pnl: null,
-              confidence,
-              trend: tech.trend,
-              pcr: metrics.pcr,
-              oiBias: oiStrength,
-              iv: greeks.iv,
-              delta: greeks.delta,
-              entryReason: `Auto-signal: ${s.lastDecisionText || decisionText} | Confidence ${confidence.toFixed(2)}/100`,
-              exitReason: '',
-            };
-            s.journal.push(row);
-            s.position = {
-              direction,
-              strike: selectedStrike,
-              entry: tp.entry,
-              originalSl: tp.sl,
-              target1: tp.target1,
-              target2: tp.target2,
-              totalQty: tp.qty,
-              journalId: id,
-              openedAt: now,
-              partialBooked: false,
-              partialQty: 0,
-              partialPnl: 0,
-              remainingQty: tp.qty,
-              currentSl: tp.sl,
-            };
-            positionLtp = tp.entry;
-            pushEvent(
-              s,
-              {
-                kind: 'TRADE',
-                message: `${cfg.symbol} signal: BUY ${direction} ${selectedStrike} @ ${fmt2(tp.entry)}`,
-              },
-              now,
-            );
-            s.tradesToday += 1;
-            s.lastFiredKey = key;
-            s.pending = null;
+            if (cfg.tradeMode === 'LIVE') {
+              // Live mode never trades by itself: the confirmed signal waits for ENTER.
+              decisionText = `SIGNAL CONFIRMED - tap ENTER to trade live (${label})`;
+            } else {
+              openTrade(s, cfg, {
+                direction,
+                plan: tp,
+                entry: tp.entry,
+                qty: tp.qty,
+                now,
+                spot,
+                confidence,
+                trend: tech.trend,
+                pcr: metrics.pcr,
+                oiBias: oiStrength,
+                iv: greeks.iv,
+                delta: greeks.delta,
+                // LogSignal runs before the dashboard's decision cell is rewritten, so the
+                // workbook journals the previous cycle's setup text — kept as-is.
+                reason: `Auto-signal: ${s.lastDecisionText || decisionText} | Confidence ${confidence.toFixed(2)}/100`,
+              });
+              positionLtp = tp.entry;
+            }
           }
         }
       }
@@ -507,6 +569,11 @@ export function runCycle(
   }
 
   s.lastDecisionText = decisionText;
+
+  // What a manual ENTER would trade right now: the best strike for the leading direction.
+  const candidatePlan = s.position
+    ? null
+    : (plan ?? buildTradePlan(chain, direction, selectedStrike, tech.last.atr, cfg));
 
   const dashboard: Dashboard = {
     at: now,
@@ -553,6 +620,7 @@ export function runCycle(
     },
     breakdown,
     plan,
+    candidatePlan,
     positionLtp,
   };
   return { state: s, dashboard };

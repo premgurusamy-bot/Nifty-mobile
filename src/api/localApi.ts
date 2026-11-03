@@ -1,22 +1,26 @@
 /**
- * Direct-to-Dhan mode: the phone itself talks to api.dhan.co with the client id
- * and access token saved on this device. It reuses the server's Dhan client,
- * mapping, service and engine code, behind the same interface as the server
- * API (`createApi`), so every screen works unchanged.
+ * Phone mode: the app talks to api.dhan.co itself with the client id and access
+ * token saved on this device. It reuses the server's Dhan client, mapping,
+ * service, engine data source, token keeper and live trader behind the same
+ * interface as the server API, so every screen works unchanged.
  *
- * Differences from running the server:
- *  - Orders are refused: Dhan only accepts order APIs from a whitelisted static
- *    IP, which a phone doesn't have. Portfolio/Orders paper-trade on live prices.
+ *  - PAPER mode (default): live data, the engine paper-trades its signals,
+ *    Portfolio/Orders are a paper account on live prices.
+ *  - LIVE mode (only after the pre-flight check passes): ENTER/EXIT place real
+ *    Dhan orders, each entry gets an exchange stop-loss, Portfolio/Orders show
+ *    the Dhan account. Dhan accepts orders only from your whitelisted static IP,
+ *    so the phone must be online through that IP (static-IP Wi-Fi or VPN).
  *  - The engine runs only while the app is open (Android pauses background JS).
- *  - No scrip master download; option security ids come from the option chain.
  */
 import { DhanClient } from '../../server/dhan.ts';
 import { DhanEngineSource } from '../../server/engineSource.ts';
+import { LiveTrader } from '../../server/liveTrader.ts';
+import { extractIps, isIPv4, runPreflight, type PreflightResult } from '../../server/preflight.ts';
 import { DhanService } from '../../server/service.ts';
 import { TokenKeeper } from '../../server/tokenKeeper.ts';
 import type { StatusResponse } from '../lib/apiTypes';
-import { EngineRunner, type EngineStore } from '../lib/engine/runner.ts';
-import type { EngineConfig } from '../lib/engine/types';
+import { EngineRunner, type EngineSnapshot, type EngineStore } from '../lib/engine/runner.ts';
+import type { EngineConfig, TradeMode } from '../lib/engine/types';
 import type { Api } from './client';
 
 export interface LocalApiOptions {
@@ -26,20 +30,42 @@ export interface LocalApiOptions {
   store: EngineStore;
   /** Called with a renewed token so it can be saved on the device. */
   persistToken?: (token: string) => void | Promise<void>;
-  /** Tests only: point at a fake Dhan. */
+  /** The static IP saved in Settings (read at check time). */
+  staticIp?: () => string;
+  /** Tests only: point at a fake Dhan / stub the public-IP lookup. */
   baseUrl?: string;
+  publicIp?: () => Promise<string>;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export const DIRECT_ORDERS_MESSAGE =
-  'Orders need the server: Dhan only accepts order APIs from your whitelisted static IP, not from a phone.';
+  'Paper mode: switch the Dashboard to LIVE (after the pre-flight check passes) to place real Dhan orders.';
 
-export type LocalApi = Api & { dispose: () => void };
+export interface PhoneTrading {
+  /** Manual ENTER: paper position, or a real Dhan buy + stop-loss in LIVE mode. */
+  engineEnter: () => Promise<EngineSnapshot>;
+  /** Manual EXIT of the open position (real sell in LIVE mode). */
+  engineExit: () => Promise<EngineSnapshot>;
+  /** Switching to LIVE runs the pre-flight check and refuses if anything fails. */
+  setTradeMode: (mode: TradeMode) => Promise<{ snapshot: EngineSnapshot; preflight: PreflightResult | null }>;
+  preflight: () => Promise<PreflightResult>;
+  /** Register (or replace) the PRIMARY whitelisted IP at Dhan. */
+  registerStaticIp: (ip: string) => Promise<string[]>;
+  dhanIps: () => Promise<string[]>;
+}
+
+export type LocalApi = Api & PhoneTrading & { dispose: () => void };
+
+export const isLocalApi = (a: Api | null): a is LocalApi => !!a && 'engineEnter' in a;
 
 export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
   const dhan = new DhanClient({ clientId: o.clientId, accessToken: o.accessToken, baseUrl: o.baseUrl });
   const service = new DhanService(dhan, { liveOrders: false, maxOrderValue: 0 });
   const engine = new EngineRunner(new DhanEngineSource(dhan), o.store);
   await engine.init();
+  const trader = new LiveTrader(dhan, service, { sleep: o.sleep });
+  engine.afterCycle = (before, after) => trader.afterCycle(engine, before, after);
+  service.setLiveOrders(engine.config.tradeMode === 'LIVE');
   engine.syncTimer();
   const token = new TokenKeeper(dhan, { autoRenew: true, persist: o.persistToken });
   token.start();
@@ -51,6 +77,9 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
     if (!t.ok && t.lastCheck) st.ok = false;
     return st;
   };
+  const live = () => engine.config.tradeMode === 'LIVE';
+  const preflight = () =>
+    runPreflight({ dhan, staticIp: o.staticIp?.() ?? '', config: engine.config, publicIp: o.publicIp });
 
   return {
     status: async () => status(),
@@ -67,11 +96,14 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
     optionChain: (expiry) => service.optionChain(expiry),
     portfolio: () => service.portfolio(),
     orders: () => service.orders(),
-    placeOrder: async () => {
-      throw new Error(DIRECT_ORDERS_MESSAGE);
+    placeOrder: async (body) => {
+      if (!live()) throw new Error(DIRECT_ORDERS_MESSAGE);
+      return { order: await service.placeOrder(body) };
     },
-    cancelOrder: async () => {
-      throw new Error(DIRECT_ORDERS_MESSAGE);
+    cancelOrder: async (id) => {
+      if (!live()) throw new Error(DIRECT_ORDERS_MESSAGE);
+      await service.cancelOrder(id);
+      return { ok: true as const };
     },
     engine: async () => engine.snapshot(),
     engineRefresh: async () => {
@@ -79,7 +111,9 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
       return engine.snapshot();
     },
     engineConfig: async (patch: Partial<EngineConfig>) => {
-      await engine.updateConfig(patch);
+      // Trade mode changes go through setTradeMode (pre-flight gate).
+      const { tradeMode: _ignored, ...rest } = patch;
+      await engine.updateConfig(rest);
       return engine.snapshot();
     },
     engineBacktest: async () => {
@@ -87,9 +121,42 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
       return engine.backtest();
     },
     engineResetJournal: async () => {
+      if (engine.state.position) throw new Error('Exit the open position before clearing the journal.');
       await engine.resetJournal();
       return engine.snapshot();
     },
+
+    engineEnter: async () => {
+      if (!engine.dashboard) await engine.refresh();
+      if (live()) await trader.enter(engine);
+      else await engine.manualEnter();
+      return engine.snapshot();
+    },
+    engineExit: async () => {
+      await trader.exit(engine);
+      return engine.snapshot();
+    },
+    setTradeMode: async (mode) => {
+      if (mode === engine.config.tradeMode) return { snapshot: engine.snapshot(), preflight: null };
+      if (engine.state.position) throw new Error('Exit the open position before switching between PAPER and LIVE.');
+      let pf: PreflightResult | null = null;
+      if (mode === 'LIVE') {
+        pf = await preflight();
+        if (!pf.ok) return { snapshot: engine.snapshot(), preflight: pf };
+      }
+      await engine.updateConfig({ tradeMode: mode });
+      service.setLiveOrders(mode === 'LIVE');
+      return { snapshot: engine.snapshot(), preflight: pf };
+    },
+    preflight,
+    registerStaticIp: async (ip) => {
+      if (!isIPv4(ip)) throw new Error(`"${ip}" is not an IPv4 address`);
+      const current = extractIps(await dhan.getIP().catch(() => null));
+      if (current.length) await dhan.modifyIP(ip, 'PRIMARY');
+      else await dhan.setIP(ip, 'PRIMARY');
+      return extractIps(await dhan.getIP());
+    },
+    dhanIps: async () => extractIps(await dhan.getIP()),
     dispose: () => {
       engine.stop();
       token.stop();

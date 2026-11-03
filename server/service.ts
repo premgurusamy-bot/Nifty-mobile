@@ -78,6 +78,11 @@ export class DhanService implements Resolver {
     for (const e of EQUITIES) this.remember(equityId(e.symbol), { segment: 'NSE_EQ', securityId: e.dhanId });
   }
 
+  /** Phone mode turns order APIs on only while the app is in LIVE trade mode. */
+  setLiveOrders(on: boolean) {
+    this.opts = { ...this.opts, liveOrders: on };
+  }
+
   setScripMaster(sm: ScripMaster) {
     this.scrip = sm;
     for (const e of EQUITIES) {
