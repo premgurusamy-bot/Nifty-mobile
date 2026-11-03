@@ -16,7 +16,9 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.premgurusamy.niftytrader",
+      "versionCode": 1
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -26,7 +28,15 @@
     "scheme": "niftytrader",
     "backgroundColor": "#0B0F14",
     "plugins": [
-      "expo-router"
+      "expo-router",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
     ]
   }
 }

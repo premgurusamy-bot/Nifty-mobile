@@ -83,7 +83,8 @@ npm start            # press a / i / w, or scan the QR code with Expo Go
 
 Open ⚙ Settings, then enter the server URL and `APP_API_KEY` and tap **Save & test connection**. The key is stored in the device keychain. Clear them (Disconnect) to return to demo mode.
 
-Installable builds: `npx eas-cli@latest build -p android` (or `-p ios`).
+Installable Android APK (sideload on your phone): `npx eas-cli@latest build -p android --profile preview`.
+Play Store bundle: `--profile production`. Local build with the Android SDK installed: `npx expo prebuild -p android && cd android && ./gradlew assembleRelease`.
 
 ## Development
 
