@@ -25,7 +25,9 @@ interface EngineValue {
   /** True when connected to Dhan from this phone (LIVE trading possible). */
   phone: boolean;
   /** Manual ENTER / EXIT of the engine's trade (real Dhan orders in LIVE mode). */
-  enter: () => Promise<void>;
+  /** `limit` = buy price per unit (blank = market). */
+  enter: (limit?: number) => Promise<void>;
+  cancelEntry: () => Promise<void>;
   exit: () => Promise<void>;
   /** Returns the pre-flight result when switching to LIVE (null otherwise); LIVE only applies if it passed. */
   setTradeMode: (mode: TradeMode) => Promise<PreflightResult | null>;
@@ -162,12 +164,24 @@ export function EngineProvider({ children }: { children: ReactNode }) {
   );
 
   const enter = useCallback(
-    () =>
+    (limit?: number) =>
       run(async () => {
-        if (phoneApi) return phoneApi.engineEnter();
+        if (phoneApi) return phoneApi.engineEnter(limit);
         if (api) throw new Error('Manual entry is available with the phone connection.');
         const r = demo.current!;
-        await r.manualEnter();
+        await r.placeEntry(limit);
+        return r.snapshot(true);
+      }),
+    [api, phoneApi, run],
+  );
+
+  const cancelEntry = useCallback(
+    () =>
+      run(async () => {
+        if (phoneApi) return phoneApi.engineCancelEntry();
+        if (api) throw new Error('Not available with the server connection.');
+        const r = demo.current!;
+        await r.cancelPendingEntry();
         return r.snapshot(true);
       }),
     [api, phoneApi, run],
@@ -217,6 +231,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
       resetJournal,
       phone: !!phoneApi,
       enter,
+      cancelEntry,
       exit,
       setTradeMode,
       preflight,
@@ -232,6 +247,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
       resetJournal,
       phoneApi,
       enter,
+      cancelEntry,
       exit,
       setTradeMode,
       preflight,

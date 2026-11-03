@@ -42,8 +42,13 @@ export const DIRECT_ORDERS_MESSAGE =
   'Paper mode: switch the Dashboard to LIVE (after the pre-flight check passes) to place real Dhan orders.';
 
 export interface PhoneTrading {
-  /** Manual ENTER: paper position, or a real Dhan buy + stop-loss in LIVE mode. */
-  engineEnter: () => Promise<EngineSnapshot>;
+  /**
+   * Manual ENTER: paper position, or a real Dhan buy + stop-loss in LIVE mode.
+   * `limit` = buy price; below the premium it waits as a pending limit order.
+   */
+  engineEnter: (limit?: number) => Promise<EngineSnapshot>;
+  /** Cancel a pending limit entry. */
+  engineCancelEntry: () => Promise<EngineSnapshot>;
   /** Manual EXIT of the open position (real sell in LIVE mode). */
   engineExit: () => Promise<EngineSnapshot>;
   /** Switching to LIVE runs the pre-flight check and refuses if anything fails. */
@@ -122,14 +127,19 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
     },
     engineResetJournal: async () => {
       if (engine.state.position) throw new Error('Exit the open position before clearing the journal.');
+      if (engine.state.pendingEntry) throw new Error('Cancel the pending entry order before clearing the journal.');
       await engine.resetJournal();
       return engine.snapshot();
     },
 
-    engineEnter: async () => {
+    engineEnter: async (limit?: number) => {
       if (!engine.dashboard) await engine.refresh();
-      if (live()) await trader.enter(engine);
-      else await engine.manualEnter();
+      if (live()) await trader.enter(engine, limit);
+      else await engine.placeEntry(limit);
+      return engine.snapshot();
+    },
+    engineCancelEntry: async () => {
+      await trader.cancelEntry(engine);
       return engine.snapshot();
     },
     engineExit: async () => {
@@ -139,6 +149,8 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
     setTradeMode: async (mode) => {
       if (mode === engine.config.tradeMode) return { snapshot: engine.snapshot(), preflight: null };
       if (engine.state.position) throw new Error('Exit the open position before switching between PAPER and LIVE.');
+      if (engine.state.pendingEntry)
+        throw new Error('Cancel the pending entry order before switching between PAPER and LIVE.');
       let pf: PreflightResult | null = null;
       if (mode === 'LIVE') {
         pf = await preflight();

@@ -121,6 +121,13 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
       };
       if (req.method === 'OPTIONS') return send(204, {});
       // Test-only stand-in for api.ipify.org (GET) and a switch to change it (POST {ip}).
+      // Test-only: mark a resting order as filled at a price (POST {orderId, price}).
+      if (path === '/__test/fill' && req.method === 'POST') {
+        const o = state.orders.find((x) => x.orderId === String(body.orderId));
+        if (!o) return send(404, { error: 'no such order' });
+        Object.assign(o, { orderStatus: 'TRADED', averageTradedPrice: body.price, filledQty: o.quantity });
+        return send(200, o);
+      }
       if (path === '/__test/ip') {
         if (req.method === 'POST') state.publicIp = body.ip;
         return send(200, { ip: state.publicIp });

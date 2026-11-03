@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import {
@@ -44,7 +45,8 @@ const time = (ms: number | null) => {
 };
 
 export default function DashboardScreen() {
-  const { snap, busy, error, refresh, updateConfig, mode, phone, enter, exit, setTradeMode } = useEngine();
+  const { snap, busy, error, refresh, updateConfig, mode, phone, enter, cancelEntry, exit, setTradeMode } = useEngine();
+  const [priceText, setPriceText] = useState('');
   const [toggling, setToggling] = useState(false);
   const [modeBusy, setModeBusy] = useState(false);
   const [blocked, setBlocked] = useState<PreflightView | null>(null);
@@ -96,12 +98,29 @@ export default function DashboardScreen() {
     } else void go();
   };
 
+  // Editable buy price: blank = market; a price below the premium waits as a limit order.
+  const limit = priceText.trim() ? Number(priceText) : null;
+  const limitValid =
+    limit == null || (Number.isFinite(limit) && limit > 0 && Math.abs(Math.round(limit * 20) / 20 - limit) < 1e-9);
+  const atPrice = limit ?? cand?.entry ?? 0;
+  const shift = cand ? atPrice - cand.entry : 0; // SL/targets keep their distance from the entry
+  const lots = (q: number) => (cfg.lotSize > 0 ? q / cfg.lotSize : 0);
+  const qtyLabel = (q: number) => `${q} (${lots(q)} lot${lots(q) === 1 ? '' : 's'})`;
+  const pe = st.pendingEntry;
+
   const doEnter = () => {
     if (!cand) return;
-    const what = `BUY ${cand.direction} ${cand.strike} × ${cand.qty} at market (~${formatNumber(cand.entry)})\nSL ${formatNumber(cand.sl)} · T1 ${formatNumber(cand.target1)} · T2 ${formatNumber(cand.target2)} · max loss ${formatINR(cand.maxLoss, 0)}`;
+    if (!limitValid) return setTradeMsg('Buy price must be a positive number in steps of 0.05 (e.g. 110.05)');
+    const how =
+      limit == null
+        ? `at market (~${formatNumber(cand.entry)})`
+        : `limit @ ${formatNumber(limit)}${limit < cand.entry ? ` — waits until the premium comes down (now ${formatNumber(cand.entry)})` : ''}`;
+    const what = `BUY ${cand.direction} ${cand.strike} × ${qtyLabel(cand.qty)} ${how}\nSL ${formatNumber(cand.sl + shift)} · T1 ${formatNumber(cand.target1 + shift)} · T2 ${formatNumber(cand.target2 + shift)} · max loss ${formatINR(cand.maxLoss, 0)}`;
     const go = () => {
       setTradeMsg(null);
-      enter().catch((e) => setTradeMsg((e as Error).message));
+      enter(limit ?? undefined)
+        .then(() => setPriceText(''))
+        .catch((e) => setTradeMsg((e as Error).message));
     };
     if (isLive)
       confirmDialog(
@@ -217,7 +236,29 @@ export default function DashboardScreen() {
           {/* Manual entry / exit */}
           <Card style={{ gap: 10 }}>
             <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Manual {isLive ? 'LIVE' : 'paper'} trade</Text>
-            {p ? (
+            {pe ? (
+              <>
+                <Text style={ui.title}>
+                  Entry order pending: BUY {pe.plan.direction} {pe.plan.strike} × {qtyLabel(pe.plan.qty)} @ ≤{' '}
+                  {formatNumber(pe.limit)}
+                </Text>
+                <Text style={ui.muted}>
+                  {pe.live
+                    ? `Limit order ${pe.live.orderId} is waiting at Dhan. `
+                    : 'Fills when the premium comes down to your price. '}
+                  Checked on every refresh — turn on Auto refresh to follow it.
+                </Text>
+                <Button
+                  label={busy ? 'Working…' : 'Cancel entry order'}
+                  color={colors.cardAlt}
+                  onPress={() => {
+                    setTradeMsg(null);
+                    cancelEntry().catch((e) => setTradeMsg((e as Error).message));
+                  }}
+                  disabled={busy}
+                />
+              </>
+            ) : p ? (
               <Button
                 label={
                   busy ? 'Working…' : `EXIT ${p.direction} ${p.strike} × ${p.remainingQty}${isLive ? ' (LIVE)' : ''}`
@@ -229,15 +270,32 @@ export default function DashboardScreen() {
             ) : cand ? (
               <>
                 <Text style={ui.muted}>
-                  Enters the engine&apos;s current pick with its plan: SL {formatNumber(cand.sl)} · T1{' '}
-                  {formatNumber(cand.target1)} · T2 {formatNumber(cand.target2)} · max loss {formatINR(cand.maxLoss, 0)}
-                  . Daily limits still apply.
+                  Premium now {formatNumber(cand.entry)} · quantity {qtyLabel(cand.qty)}
+                </Text>
+                <View style={{ gap: 6 }}>
+                  <Text style={s.label}>Buy price (blank = market)</Text>
+                  <TextInput
+                    style={[s.input, !limitValid && { borderColor: colors.down }]}
+                    value={priceText}
+                    onChangeText={(t) => {
+                      setPriceText(t.replace(/[^\d.]/g, ''));
+                      setTradeMsg(null);
+                    }}
+                    placeholder={`Market (~${formatNumber(cand.entry)})`}
+                    placeholderTextColor={colors.muted}
+                    keyboardType="decimal-pad"
+                  />
+                </View>
+                <Text style={ui.muted}>
+                  At {limit == null ? 'market' : formatNumber(atPrice)}: SL {formatNumber(cand.sl + shift)} · T1{' '}
+                  {formatNumber(cand.target1 + shift)} · T2 {formatNumber(cand.target2 + shift)} · max loss{' '}
+                  {formatINR(cand.maxLoss, 0)}. Daily limits still apply.
                 </Text>
                 <Button
                   label={
                     busy
                       ? 'Working…'
-                      : `ENTER BUY ${cand.direction} ${cand.strike} × ${cand.qty}${isLive ? ' (LIVE)' : ''}`
+                      : `ENTER BUY ${cand.direction} ${cand.strike} × ${cand.qty} ${limit == null ? '@ market' : `@ ${formatNumber(limit)}`}${isLive ? ' (LIVE)' : ''}`
                   }
                   color={cand.direction === 'CE' ? colors.up : colors.down}
                   onPress={doEnter}
@@ -393,4 +451,16 @@ const s = StyleSheet.create({
   header: { flexDirection: 'row', gap: 12 },
   signal: { fontSize: 34, fontWeight: '800', letterSpacing: 0.5 },
   banner: { color: '#fff', backgroundColor: '#7F1D1D', padding: 10, borderRadius: 10, fontWeight: '600' },
+  label: { color: colors.muted, fontSize: 12 },
+  input: {
+    backgroundColor: colors.cardAlt,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 10,
+    color: colors.text,
+    fontSize: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontVariant: ['tabular-nums'],
+  },
 });

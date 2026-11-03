@@ -187,6 +187,18 @@ export interface EngineState {
   seq: number;
   /** Decision text from the previous cycle (journal entry reason). */
   lastDecisionText: string;
+  /** A manual limit entry waiting for the premium to reach its price. */
+  pendingEntry: PendingEntry | null;
+}
+
+/** Manual ENTER at a limit price below the market. */
+export interface PendingEntry {
+  plan: TradePlan;
+  /** Limit price per unit. */
+  limit: number;
+  placedAt: number;
+  /** Set when the limit order was placed with Dhan (LIVE mode). */
+  live?: { securityId: string; orderId: string };
 }
 
 export const initialEngineState = (): EngineState => ({
@@ -202,6 +214,7 @@ export const initialEngineState = (): EngineState => ({
   events: [],
   seq: 0,
   lastDecisionText: '',
+  pendingEntry: null,
 });
 
 export type Signal = 'BUY CE' | 'BUY PE' | 'WAIT' | 'NO TRADE' | 'IN POSITION';

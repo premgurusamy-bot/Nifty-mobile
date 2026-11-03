@@ -65,6 +65,9 @@ export function resetIfNewDay(s: EngineState, now: number) {
     s.blockedReason = '';
     s.realizedToday = 0;
     s.pending = null;
+    // Paper limit entries are day orders. A live one stays tracked until Dhan itself
+    // reports it expired/cancelled, so it can never become an untracked orphan.
+    if (s.pendingEntry && !s.pendingEntry.live) s.pendingEntry = null;
   }
 }
 
@@ -542,6 +545,9 @@ export function runCycle(
             if (cfg.tradeMode === 'LIVE') {
               // Live mode never trades by itself: the confirmed signal waits for ENTER.
               decisionText = `SIGNAL CONFIRMED - tap ENTER to trade live (${label})`;
+            } else if (s.pendingEntry) {
+              // Your own limit entry is waiting — don't stack an automatic one on top.
+              decisionText = `SIGNAL CONFIRMED - your limit entry @ ${fmt2(s.pendingEntry.limit)} is pending (${label})`;
             } else {
               openTrade(s, cfg, {
                 direction,

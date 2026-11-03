@@ -11,8 +11,8 @@
  *
  * No Node-only imports: runs inside the app (phone talks to Dhan directly).
  */
-import type { EngineRunner } from '../src/lib/engine/runner.ts';
-import type { EngineState, LiveLegs, OpenPosition } from '../src/lib/engine/types.ts';
+import { validateLimit, type EngineRunner } from '../src/lib/engine/runner.ts';
+import type { EngineState, LiveLegs, OpenPosition, TradePlan } from '../src/lib/engine/types.ts';
 import { optionId } from '../src/lib/instruments.ts';
 import type { DhanClient } from './dhan.ts';
 import { roundToTick } from './mapping.ts';
@@ -125,9 +125,14 @@ export class LiveTrader {
     }
   }
 
-  /** Manual ENTER in LIVE mode: market buy, then protective stop. */
-  async enter(runner: EngineRunner): Promise<OpenPosition> {
+  /**
+   * Manual ENTER in LIVE mode. No limit: market buy. With a limit: a LIMIT buy
+   * at that price, which stays pending at Dhan until it fills (checked on every
+   * refresh) or you cancel it. Either way the protective stop goes in on fill.
+   */
+  async enter(runner: EngineRunner, limit?: number): Promise<OpenPosition | null> {
     if (this.busy) throw new Error('Another live order is in progress');
+    if (runner.state.pendingEntry) throw new Error('An entry order is already pending — cancel it first.');
     this.busy = true;
     try {
       const cfg = runner.config;
@@ -136,18 +141,102 @@ export class LiveTrader {
       const expiry = runner.dashboard?.expiry;
       if (!expiry) throw new Error('No expiry — tap Refresh now first');
       const securityId = await this.securityIdFor(plan.direction, plan.strike, expiry);
-      const buy = await this.marketOrder(securityId, 'BUY', plan.qty, cfg.liveProduct);
-      const live: LiveLegs = { securityId, entryOrderId: buy.orderId, slOrderId: null };
-      const pos = await runner.manualEnter({ plan, entry: buy.avgPrice, qty: buy.filledQty, live });
-      try {
-        const sl = await this.placeStop(securityId, pos.remainingQty, pos.currentSl, cfg.liveProduct);
-        await runner.patchPosition({ live: { ...live, slOrderId: sl } });
-      } catch (e) {
-        runner.status = `Bought, but the stop-loss order failed: ${(e as Error).message} — place one in Dhan now`;
+      if (limit == null) {
+        const buy = await this.marketOrder(securityId, 'BUY', plan.qty, cfg.liveProduct);
+        return await this.opened(runner, plan, securityId, buy);
       }
-      return runner.state.position!;
+      validateLimit(limit);
+      const res = await this.dhan.placeOrder({
+        securityId,
+        exchangeSegment: 'NSE_FNO',
+        transactionType: 'BUY',
+        quantity: plan.qty,
+        orderType: 'LIMIT',
+        productType: cfg.liveProduct,
+        price: roundToTick(limit),
+      });
+      const orderId = String(res.orderId);
+      await runner.setPendingEntry({
+        plan,
+        limit: roundToTick(limit),
+        placedAt: Date.now(),
+        live: { securityId, orderId },
+      });
+      // A marketable limit fills at once — open straight away if so.
+      const o = await this.order(orderId).catch(() => null);
+      if (upper(o?.orderStatus) === 'TRADED')
+        return await this.opened(runner, plan, securityId, this.fillOf(orderId, o));
+      return null;
     } finally {
       this.busy = false;
+    }
+  }
+
+  private fillOf(orderId: string, o: any): Fill {
+    const status = upper(o?.orderStatus);
+    return {
+      orderId,
+      status,
+      avgPrice: num(o?.averageTradedPrice) || num(o?.price),
+      // Only a fully TRADED order may fall back to its order quantity.
+      filledQty: num(o?.filledQty) || (status === 'TRADED' ? num(o?.quantity) : 0),
+    };
+  }
+
+  /** Entry filled: open the engine position at the real fill, then place the protective stop. */
+  private async opened(runner: EngineRunner, plan: TradePlan, securityId: string, buy: Fill) {
+    const live: LiveLegs = { securityId, entryOrderId: buy.orderId, slOrderId: null };
+    const limitNote = runner.state.pendingEntry
+      ? `limit ${runner.state.pendingEntry.limit.toFixed(2)} filled`
+      : undefined;
+    const pos = await runner.manualEnter({ plan, entry: buy.avgPrice, qty: buy.filledQty, live, reason: limitNote });
+    try {
+      const sl = await this.placeStop(securityId, pos.remainingQty, pos.currentSl, runner.config.liveProduct);
+      await runner.patchPosition({ live: { ...live, slOrderId: sl } });
+    } catch (e) {
+      runner.status = `Bought, but the stop-loss order failed: ${(e as Error).message} — place one in Dhan now`;
+    }
+    return runner.state.position!;
+  }
+
+  /** Cancel a pending limit entry (if it filled meanwhile, the position is opened instead). */
+  async cancelEntry(runner: EngineRunner) {
+    const pe = runner.state.pendingEntry;
+    if (!pe) return;
+    if (!pe.live) return runner.setPendingEntry(null);
+    if (this.busy) throw new Error('Another live order is in progress');
+    this.busy = true;
+    try {
+      await this.cancelQuietly(pe.live.orderId);
+      const o = await this.order(pe.live.orderId).catch(() => null);
+      const f = this.fillOf(pe.live.orderId, o);
+      if (f.filledQty > 0) {
+        // Filled (fully, or partly before the cancel landed): that quantity is a real position.
+        await this.opened(runner, pe.plan, pe.live.securityId, f);
+        runner.status = `The limit order had already filled (${f.filledQty} @ ${f.avgPrice.toFixed(2)}) — position opened`;
+        return;
+      }
+      await runner.setPendingEntry(null);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  /** On every refresh: has the pending limit entry filled at Dhan? */
+  private async checkPendingEntry(runner: EngineRunner) {
+    const pe = runner.state.pendingEntry;
+    if (!pe?.live) return;
+    const o = await this.order(pe.live.orderId).catch(() => null);
+    if (!o) return;
+    const f = this.fillOf(pe.live.orderId, o);
+    if (f.status === 'TRADED') {
+      await this.opened(runner, pe.plan, pe.live.securityId, f);
+    } else if (f.status === 'CANCELLED' || f.status === 'EXPIRED' || f.status === 'REJECTED') {
+      if (f.filledQty > 0) await this.opened(runner, pe.plan, pe.live.securityId, f);
+      else {
+        await runner.setPendingEntry(null);
+        runner.status = `Limit entry ${f.status.toLowerCase()}${o.omsErrorDescription ? `: ${o.omsErrorDescription}` : ''}`;
+      }
     }
   }
 
@@ -190,8 +279,18 @@ export class LiveTrader {
    * `before` is the state going into the cycle, `after` the result.
    */
   async afterCycle(runner: EngineRunner, before: EngineState, after: EngineState) {
+    if (this.busy) return;
+    if (!after.position && after.pendingEntry?.live) {
+      this.busy = true;
+      try {
+        await this.checkPendingEntry(runner);
+      } finally {
+        this.busy = false;
+      }
+      return;
+    }
     const prev = before.position;
-    if (!prev?.live || this.busy) return;
+    if (!prev?.live) return;
     const product = runner.config.liveProduct;
     const live = prev.live;
     this.busy = true;

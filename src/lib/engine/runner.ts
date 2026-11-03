@@ -56,6 +56,14 @@ export interface EngineSnapshot {
   demo: boolean;
 }
 
+const roundTick = (p: number) => Math.round(p * 20) / 20;
+
+/** Limit prices must be positive and on the 0.05 tick. */
+export function validateLimit(limit: number) {
+  if (!Number.isFinite(limit) || limit <= 0) throw new Error('Enter a valid buy price');
+  if (Math.abs(roundTick(limit) - limit) > 1e-9) throw new Error('Price must be in steps of 0.05');
+}
+
 export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig): EngineConfig {
   const next: EngineConfig = { ...base };
   const num = (k: keyof EngineConfig, min: number, max: number) => {
@@ -185,6 +193,8 @@ export class EngineRunner {
       this.dashboard = dashboard;
       this.candles = data.candles;
       this.lastChain = data.chain;
+      await this.fillPaperEntry();
+      this.status = 'Ready'; // live trading may replace this with a notice below
       if (this.afterCycle) {
         try {
           await this.afterCycle(before, this.state);
@@ -193,7 +203,6 @@ export class EngineRunner {
         }
       }
       this.lastRefresh = now;
-      if (!this.status.startsWith('Live order error')) this.status = 'Ready';
       // Every event raised during a cycle is stamped with that cycle's clock.
       const fresh = state.events.filter((e) => e.at === now);
       if (fresh.length) this.onEvents(fresh, this.config);
@@ -231,8 +240,51 @@ export class EngineRunner {
     return plan;
   }
 
+  /**
+   * Manual ENTER in paper mode. Without a limit (or with a limit at/above the
+   * premium) it fills now at the premium; below the premium it waits as a
+   * pending limit entry that fills on a later refresh.
+   */
+  async placeEntry(limit?: number) {
+    if (this.state.pendingEntry) throw new Error('An entry order is already pending — cancel it first.');
+    const plan = this.entryPlan();
+    const premium = this.premium(plan.direction, plan.strike) ?? plan.entry;
+    if (limit == null || limit >= premium) return this.manualEnter({ plan, entry: premium });
+    validateLimit(limit);
+    this.state = { ...this.state, pendingEntry: { plan, limit: roundTick(limit), placedAt: this.clock() } };
+    await this.store.save(this.state, this.config);
+    return null;
+  }
+
+  /** Paper: cancel the pending limit entry. */
+  async cancelPendingEntry() {
+    if (this.state.pendingEntry?.live) throw new Error('Live entry orders are cancelled through Dhan');
+    await this.setPendingEntry(null);
+  }
+
+  /** Record a pending limit entry (used by live trading after placing the Dhan order). */
+  async setPendingEntry(p: NonNullable<EngineState['pendingEntry']> | null) {
+    this.state = { ...this.state, pendingEntry: p };
+    await this.store.save(this.state, this.config);
+  }
+
+  /** Paper: fill the pending limit entry once the premium has come down to it. */
+  private async fillPaperEntry() {
+    const pe = this.state.pendingEntry;
+    if (!pe || pe.live) return;
+    if (this.state.position) return this.setPendingEntry(null);
+    const premium = this.premium(pe.plan.direction, pe.plan.strike);
+    if (premium != null && premium <= pe.limit) {
+      await this.manualEnter({
+        plan: pe.plan,
+        entry: premium,
+        reason: `Limit entry filled (limit ${pe.limit.toFixed(2)})`,
+      });
+    }
+  }
+
   /** Open a position from a manual ENTER (paper at LTP, or live at the actual fill). */
-  async manualEnter(opts: { entry?: number; qty?: number; live?: LiveLegs; plan?: TradePlan } = {}) {
+  async manualEnter(opts: { entry?: number; qty?: number; live?: LiveLegs; plan?: TradePlan; reason?: string } = {}) {
     const plan = opts.plan ?? this.entryPlan();
     const d = this.dashboard!;
     const now = this.clock();
@@ -250,8 +302,9 @@ export class EngineRunner {
       oiBias: d.decision.oiStrength,
       iv: d.greeks.iv,
       delta: d.greeks.delta,
-      reason: `${opts.live ? 'Manual LIVE entry' : 'Manual entry'}: ${d.decision.decisionText} | Confidence ${d.decision.confidence.toFixed(2)}/100`,
+      reason: `${opts.live ? 'Manual LIVE entry' : 'Manual entry'}${opts.reason ? ` · ${opts.reason}` : ''}: ${d.decision.decisionText} | Confidence ${d.decision.confidence.toFixed(2)}/100`,
     });
+    next.pendingEntry = null;
     if (opts.live && next.position) next.position.live = opts.live;
     this.state = next;
     if (this.dashboard) {

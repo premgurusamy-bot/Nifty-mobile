@@ -252,9 +252,110 @@ test('LIVE: T1 partial books half at market and re-protects the rest at breakeve
   assert.match(j.exitReason, /live fill @/);
 });
 
+test('LIVE limit entry: rests at Dhan, opens on fill with the stop placed, SL keeps its distance', async () => {
+  // Earlier tests closed a loss today → the no-revenge rule (correctly) blocks entries; start a clean day.
+  await api.engineResetJournal();
+  await api.engineConfig({ maxTradesPerDay: 50 });
+  const plan = (await api.engine()).dashboard!.candidatePlan!;
+  const limit = Math.round((plan.entry - 5) * 20) / 20;
+  const n0 = ordersSent().length;
+  let s = await api.engineEnter(limit);
+  assert.equal(s.state.position, null);
+  const pe = s.state.pendingEntry!;
+  assert.equal(pe.limit, limit);
+  const buy = ordersSent().slice(n0)[0];
+  assert.deepEqual([buy.transactionType, buy.orderType, buy.price, buy.quantity], ['BUY', 'LIMIT', limit, plan.qty]);
+  assert.equal(ordersSent().length, n0 + 1, 'no stop until the entry fills');
+  await assert.rejects(api.engineEnter(limit), /already pending/);
+
+  // Still waiting on the next refresh…
+  s = await api.engineRefresh();
+  assert.ok(s.state.pendingEntry);
+  // …then Dhan fills it at our price.
+  const o = order(pe.live!.orderId);
+  Object.assign(o, { orderStatus: 'TRADED', averageTradedPrice: limit, filledQty: plan.qty });
+  s = await api.engineRefresh();
+  const p = s.state.position!;
+  assert.equal(s.state.pendingEntry, null);
+  assert.equal(p.entry, limit);
+  assert.ok(Math.abs(p.currentSl - (plan.sl - 5)) < 0.06, `${p.currentSl} vs ${plan.sl - 5}`);
+  const stop = ordersSent().at(-1);
+  assert.deepEqual([stop.orderType, stop.quantity], ['STOP_LOSS', plan.qty]);
+  assert.match(s.state.journal.at(-1)!.entryReason, /limit .* filled/);
+  await api.engineExit();
+});
+
+test('LIVE limit entry: cancel, and a partial fill before cancel becomes a position of that size', async () => {
+  const plan = (await api.engine()).dashboard!.candidatePlan!;
+  const limit = Math.round((plan.entry - 8) * 20) / 20;
+  let s = await api.engineEnter(limit);
+  let id = s.state.pendingEntry!.live!.orderId;
+  s = await api.engineCancelEntry();
+  assert.equal(s.state.pendingEntry, null);
+  assert.equal(order(id).orderStatus, 'CANCELLED');
+  assert.equal(s.state.position, null);
+
+  s = await api.engineEnter(limit);
+  id = s.state.pendingEntry!.live!.orderId;
+  Object.assign(order(id), { orderStatus: 'CANCELLED', averageTradedPrice: limit, filledQty: 65 });
+  s = await api.engineRefresh();
+  assert.equal(s.state.position!.totalQty, 65);
+  assert.equal(ordersSent().at(-1).quantity, 65); // stop covers what was actually bought
+  await api.engineExit();
+});
+
 test('LIVE → PAPER switch; switching is blocked while a position is open', async () => {
   await api.setTradeMode('PAPER');
   assert.equal((await api.engine()).config.tradeMode, 'PAPER');
   assert.equal((await api.status()).liveOrders, false);
   assert.ok(stored?.state, 'engine state persisted on the phone');
+});
+
+// ---- Paper limit entry (engine runner on the workbook data, premiums scaled per refresh) ----
+
+import { readFileSync } from 'node:fs';
+const fx = JSON.parse(readFileSync(new URL('./fixtures/workbook-2026-08-27.json', import.meta.url), 'utf8'));
+
+test('PAPER limit entry: waits below the premium, fills when the premium drops to it, cancel works', async () => {
+  let factor = 1;
+  const scaled = () => ({
+    ...fx.chain,
+    expiry: '2099-12-29',
+    strikes: fx.chain.strikes.map((k: any) => ({
+      ...k,
+      ce: { ...k.ce, ltp: k.ce.ltp * factor },
+      pe: { ...k.pe, ltp: k.pe.ltp * factor },
+    })),
+  });
+  const runner = new EngineRunner(
+    { load: async () => ({ candles: fx.candles, chain: scaled() }), now: () => Date.UTC(2026, 7, 27, 6, 10) },
+    { load: async () => null, save: async () => {} },
+  );
+  await runner.refresh();
+  const plan = runner.entryPlan();
+  const limit = Math.round(plan.entry * 0.9 * 20) / 20;
+
+  assert.equal(await runner.placeEntry(limit), null);
+  assert.equal(runner.state.pendingEntry!.limit, limit);
+  await assert.rejects(runner.placeEntry(limit), /already pending/);
+  await assert.rejects(runner.placeEntry(10.03), /already pending/);
+
+  factor = 0.95; // premium falls, but not to the limit yet
+  await runner.refresh();
+  assert.equal(runner.state.position, null);
+
+  factor = 0.88; // now below the limit → fills at the premium
+  await runner.refresh();
+  const p = runner.state.position!;
+  assert.ok(p, 'position opened');
+  assert.equal(runner.state.pendingEntry, null);
+  assert.ok(p.entry <= limit);
+  assert.ok(Math.abs(p.originalSl - (plan.sl + (p.entry - plan.entry))) < 1e-9);
+  assert.match(runner.state.journal.at(-1)!.entryReason, /Limit entry filled \(limit /);
+  await runner.manualExit();
+
+  await runner.placeEntry(Math.round(p.entry * 0.5 * 20) / 20);
+  await runner.cancelPendingEntry();
+  assert.equal(runner.state.pendingEntry, null);
+  await assert.rejects(runner.placeEntry(12.34), /steps of 0\.05/);
 });
