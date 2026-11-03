@@ -39,3 +39,8 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# server runtime data (engine state, journal)
+server/data/
+.env
+server/.env

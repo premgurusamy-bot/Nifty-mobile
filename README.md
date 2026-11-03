@@ -1,76 +1,108 @@
 # Nifty Trader (mobile)
 
-A React Native / Expo app for **paper trading** NIFTY 50 stocks and NIFTY weekly options. It runs on Android, iOS and web from one TypeScript codebase.
+Your **NIFTY Option Buying System** (the `NIFTY_Option_System_v4` Excel/VBA workbook) as a mobile app, on the **Dhan HQ API v2**.
 
-> ⚠️ **Simulated data, virtual money.** Prices come from a built-in market simulator and options are priced with Black-Scholes. Nothing here is investment advice, and the app places no real orders. See [Connecting a real broker](#connecting-a-real-broker) to go live.
+The workbook's decision engine was ported rule for rule to TypeScript. A golden test checks it against the workbook's own last refresh (27-Aug-2026 11:40 IST): fed the same candles, option chain and IV history, the app reproduces Excel's EMA20/EMA50/VWAP/ATR on all 225 candles. It also matches PCR, Max Pain, OI support/resistance, swing levels, the **88.898 confidence score with all 10 factor scores**, the Greeks and the IV snapshot.
 
-## Features
+> Decision-support tool, like the workbook. The engine only **signals** and paper-tracks its position; it never places orders by itself. Confidence and R:R are a filter, not a prediction.
 
-| Tab | What it does |
+## What's in the app
+
+| Tab | Workbook equivalent |
 | --- | --- |
-| **Markets** | NIFTY 50 index card with an intraday chart, OHLC and prev. close, plus a live-ticking watchlist of 16 constituents with sparklines |
-| **Option Chain** | NIFTY calls and puts for the next 3 weekly (Tuesday) expiries: premiums, delta, IV smile, ITM shading. Tap a premium to trade it |
-| **Portfolio** | Account value, cash, invested amount, unrealised/realised P&L, charges and positions marked to market. Includes a reset button |
-| **Orders** | Order book showing OPEN, FILLED, CANCELLED and REJECTED orders with reasons. Open limit orders can be cancelled |
+| **Dashboard** | `01_Dashboard` + `04_Analytics`. Signal (BUY CE / BUY PE / WAIT / NO TRADE / IN POSITION), decision text, confidence meter, trade plan or open position (trailing SL, T1/T2, partial booking), market, option-chain metrics, Greeks, 10-factor score breakdown, daily discipline, alerts. *Refresh now* and *Auto refresh* work like the workbook's buttons. |
+| **Option Chain** | `03_OptionChain`. Live Dhan chain (LTP, delta, IV, OI), 3 expiries, tap a premium to open the order ticket. |
+| **Journal** | `07_TradeJournal`, `11_Summary` (daily table + equity curve) and `08_Backtest`. |
+| **Markets** | Live NIFTY 50 index + watchlist with intraday charts. |
+| **Portfolio / Orders** | Dhan funds, positions, holdings and order book (live), or a paper account on live prices. |
+| **Settings** (⚙) | `09_Settings` + `05_DecisionEngine` thresholds, NIFTY/BANKNIFTY/FINNIFTY presets, server connection. |
 
-- **Order ticket:** Buy or Sell, Market or Limit. Options are traded in lots (lot size 65), equities in shares.
-- **Paper engine:** starts with ₹10,00,000 virtual cash and charges a flat ₹20 brokerage per fill. It checks funds and quantity, and resting limit orders fill when the price crosses the limit.
-- **Saved on device:** the portfolio is stored with AsyncStorage, so it survives restarts.
-- **Market clock:** shows the NSE session state (pre-open 09:00–09:15, open 09:15–15:30 IST, Mon–Fri) and formats numbers the Indian way (₹12,34,567.89).
+### The engine (ported modules)
 
-### Simplifications (deliberate, for a v1)
-- Long-only: SELL can only close a position you hold. There is no short selling or margin.
-- Exchange holidays, expiry settlement, taxes, STT and GST are not modelled.
-- The NIFTY lot size and weekly expiry day change from time to time. Check `NIFTY_LOT_SIZE` in `src/lib/instruments.ts` and `nextWeeklyExpiry` in `src/lib/time.ts` against current NSE circulars.
+`src/lib/engine/` is pure TypeScript with no React or network code, so the same engine runs on the server and on the phone.
 
-## Getting started
+| File | VBA module(s) |
+| --- | --- |
+| `indicators.ts` | `modAnalytics`: EMA20/50, session-reset VWAP, Wilder ATR14 (gap-free at day open), PCR, Max Pain, OI support/resistance, ATM |
+| `priceAction.ts` | `modPriceAction` v4: engulfing, pin bars, doji, inside bar, EMA/VWAP pullbacks, OI and swing level reactions, volume confirmation, confluence bonus, 0–10 rescale, swing levels |
+| `decision.ts` | `modDecisionEngine`, `modSignalState`, `modPosition`, `modIVHistory`, `modTradeJournal`: best strike (ATM + 2 OTM), 10-factor score, the **armed → pending → confirmed-break** state machine, the daily trade limit, no-revenge rule, ₹ daily max loss, trade plan (ATR × mult × delta risk, lots sized to max risk), half booking at T1 with the stop trailed to breakeven, T2/SL exits, IV percentile after 20 snapshots |
+| `backtest.ts` | `modBacktest`, `modSummary` |
+| `runner.ts` | `modMain.RefreshAll` / auto-refresh loop (market-hours gated, 15 s floor) |
+
+**Deliberate differences from the VBA** (bug fixes):
+
+- Best-strike stepping uses the configured strike interval. The VBA hard-coded 50, which is wrong for BANKNIFTY.
+- The no-revenge-trade check compares journal dates reliably. The VBA compared a date cell with a text string.
+- R:R shows as `1:2.0`. Excel had auto-converted `1:2` into a time (`0:01:02`).
+
+**Kept as in the workbook (so you know):**
+
+- SL and target exits are booked at the SL/target *level*, not at the (possibly gapped) live premium.
+- Journal entry reasons record the previous cycle's setup text (e.g. "SETUP PENDING - waiting for break of …").
+
+**Not ported yet:** the V5 multi-instrument screener (`modV5Screener`, `modMarketRegime`, `14_V5Config`) and the NSE-website fallback (`modNSEDirect`).
+
+## Architecture
+
+```
+ Phone app (Expo)  ──HTTPS + access key──▶  Bridge server (server/, Node)  ──▶  Dhan HQ API v2
+  dashboard, journal,                       • runs the engine every 15 s in market hours
+  chain, orders                             • holds your Dhan token (never on the phone)
+                                            • journal / IV history in server/data/engine.json
+                                            • respects Dhan rate limits, Telegram alerts
+```
+
+The engine runs on the **server**, as Excel's `OnTime` loop did, so stop losses and targets are tracked even while your phone is locked. Without a server, the app runs the same engine in **demo mode** on an accelerated NIFTY simulation (each refresh = one 5-minute candle).
+
+## Server setup
+
+Requirements: Node ≥ 22.18 on a machine with a **static IP**. Dhan only accepts order APIs from a whitelisted IP. Market data works without one.
 
 ```bash
 npm install
-npm start          # then press a (Android), i (iOS) or w (web), or scan the QR with Expo Go
+cp server/.env.example server/.env      # fill in DHAN_CLIENT_ID, DHAN_ACCESS_TOKEN, APP_API_KEY
+# optional: bring over your journal, IV history and thresholds from Excel
+pip install openpyxl
+python3 scripts/import_workbook.py /path/to/NIFTY_Option_System_v4_fixed.xlsm
+npm run server
 ```
 
-Other scripts:
+- **Dhan token:** generate it at web.dhan.co → Profile → DhanHQ Trading APIs. Tokens expire, typically after 24 h. When the dashboard shows the red "token likely expired" banner, paste a new one into `server/.env` and restart.
+- **Importer:** it never reads the token or client-ID cells. It drops an open position from an earlier day, because its weekly contract has expired; use `--keep-position` to override.
+- **Live orders:** `LIVE_ORDERS=false` by default. In that mode the Portfolio/Orders tabs paper-trade on live Dhan prices. Set `true` to let the order ticket place **real** orders. The app shows a confirmation before every order, and the server also enforces lot sizes, tick size and `MAX_ORDER_VALUE`.
+- **Exposing the server:** put it behind HTTPS (for example Caddy or a Cloudflare tunnel) when the phone isn't on the same network. Every API call needs `Authorization: Bearer <APP_API_KEY>`.
+- **Telegram alerts:** set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. You get the same trade, partial and exit messages as the workbook.
+- **Instrument list:** at startup the server downloads Dhan's scrip master to get option security IDs and the current lot size. If that fails, it learns the IDs from the option chain.
+
+## App setup
 
 ```bash
-npm test           # unit tests for the trading engine, options pricing, market clock (node:test)
-npm run typecheck  # tsc --noEmit
-npx expo export --platform web   # static web build in dist/
+npm install
+npm start            # press a / i / w, or scan the QR code with Expo Go
 ```
 
-To build installable apps, use EAS: `npx eas-cli@latest build -p android` (or `-p ios`).
+Open ⚙ Settings, then enter the server URL and `APP_API_KEY` and tap **Save & test connection**. The key is stored in the device keychain. Clear them (Disconnect) to return to demo mode.
 
-## Project layout
+Installable builds: `npx eas-cli@latest build -p android` (or `-p ios`).
 
-```
-src/
-  app/                    Expo Router screens (file-based routing)
-    _layout.tsx           Root stack, theme and providers
-    (tabs)/               Markets, Option Chain, Portfolio, Orders
-    instrument/[id].tsx   Instrument detail with chart and Buy/Sell
-    order.tsx             Order ticket (modal)
-  lib/                    Pure TypeScript with no React, unit-tested
-    simulator.ts          Correlated random-walk market feed
-    blackScholes.ts       Option pricing, IV smile
-    optionChain.ts        Chain builder, option pricing by ID
-    portfolio.ts          Paper-trading engine (orders, fills, P&L)
-    instruments.ts        Symbols, lot size, instrument IDs
-    time.ts               IST market hours, weekly expiries
-    format.ts             Indian number and ₹ formatting
-  state/                  React context: live market feed and saved portfolio
-  components/             Chart, quote row, UI primitives
-tests/                    node:test suites for src/lib
+## Development
+
+```bash
+npm test               # 43 tests: golden workbook match, engine rules, Dhan mapping, server API
+npm run typecheck
+npm run server:fake-dhan   # local fake Dhan API on :9900 (serves the workbook's real 27-Aug data)
 ```
 
-Instrument IDs: `NSE:NIFTY 50`, `NSE:RELIANCE`, `NFO:NIFTY:2026-11-10:26000:CE`.
+`tests/fakeDhan.ts` mimics Dhan's v2 endpoints, using the request formats from Dhan's official Python SDK (dhanhq 2.3.0). The integration tests check exactly what would be sent to Dhan (headers, security IDs, segments, product types, tick rounding).
 
-## Connecting a real broker
+**Not tested here:** live calls to api.dhan.co, which weren't reachable from the build environment. The first time you run against your real account, watch `server` logs and the dashboard status line.
 
-All market data flows through `src/state/MarketContext.tsx`, which exposes `quotes`, `history`, `spot` and `getPrice(id)`. To use live data:
-
-1. Pick a broker API, such as Zerodha Kite Connect, Upstox, Angel One SmartAPI or Dhan.
-2. **Run a small backend.** Broker API secrets and the OAuth login flow must not ship inside the mobile app. The backend completes the login, keeps the access token, and relays the broker's WebSocket ticks to the app.
-3. Replace the simulator `setInterval` in `MarketContext` with a WebSocket subscription to your backend, and map the ticks into the `Quote` shape.
-4. For real orders, change `placeOrder` and `cancelOrder` in `PortfolioContext` to call your backend instead of the local engine, then load positions and orders from the broker.
-
-Live trading also brings regulatory duties (SEBI rules for algo and retail API trading, and the broker's own app-registration terms). Read them before going live.
+```
+src/lib/engine/   ported decision engine (pure TS)
+src/lib/          instruments, Black-Scholes, simulator, paper-trading engine, formatting
+src/app/          Expo Router screens
+src/state/        settings, engine, market data and portfolio contexts
+server/           Dhan client, mapping, engine runner, HTTP API
+scripts/          workbook importer
+tests/            node:test suites, fake Dhan, golden fixture
+```

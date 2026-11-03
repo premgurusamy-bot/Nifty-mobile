@@ -2,10 +2,19 @@ import { blackScholes, roundToTick, smileIV } from './blackScholes.ts';
 import { NIFTY_STRIKE_STEP, optionId, parseOptionId } from './instruments.ts';
 import { yearsToExpiry } from './time.ts';
 
+export interface ChainLeg {
+  id: string;
+  ltp: number;
+  delta: number;
+  iv: number;
+  /** Open interest (live data only). */
+  oi?: number;
+}
+
 export interface ChainRow {
   strike: number;
-  ce: { id: string; ltp: number; delta: number; iv: number };
-  pe: { id: string; ltp: number; delta: number; iv: number };
+  ce: ChainLeg;
+  pe: ChainLeg;
 }
 
 export const atmStrike = (spot: number, step = NIFTY_STRIKE_STEP) => Math.round(spot / step) * step;

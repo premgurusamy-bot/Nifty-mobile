@@ -101,4 +101,4 @@ export function stepSim(state: SimState, rand: () => number, scale = 1): SimStat
 }
 
 export const change = (q: Quote) => q.ltp - q.prevClose;
-export const changePct = (q: Quote) => ((q.ltp - q.prevClose) / q.prevClose) * 100;
+export const changePct = (q: Quote) => (q.prevClose ? ((q.ltp - q.prevClose) / q.prevClose) * 100 : 0);

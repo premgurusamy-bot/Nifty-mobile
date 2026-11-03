@@ -23,11 +23,13 @@ const STATUS_LABEL: Record<MarketStatus, string> = {
 };
 const STATUS_COLOR: Record<MarketStatus, string> = { OPEN: colors.up, PRE_OPEN: colors.warn, CLOSED: colors.muted };
 
-export function StatusPill({ status }: { status: MarketStatus }) {
+export function StatusPill({ status, live }: { status: MarketStatus; live?: boolean }) {
   return (
     <View style={styles.pill}>
       <View style={[styles.dot, { backgroundColor: STATUS_COLOR[status] }]} />
-      <Text style={styles.pillText}>{STATUS_LABEL[status]} · Simulated feed</Text>
+      <Text style={styles.pillText}>
+        {STATUS_LABEL[status]} · {live ? 'Dhan live data' : 'Simulated feed'}
+      </Text>
     </View>
   );
 }

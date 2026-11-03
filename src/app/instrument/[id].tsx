@@ -5,19 +5,20 @@ import { Button, Card, Change, Stat, StatusPill, styles as ui } from '../../comp
 import { formatNumber, formatSigned } from '../../lib/format';
 import { EQUITIES, displayName, isTradeable, kindOf, lotSize, parseOptionId } from '../../lib/instruments';
 import { change, changePct } from '../../lib/simulator';
-import { useMarket } from '../../state/MarketContext';
+import { useMarket, useWatch } from '../../state/MarketContext';
 import { usePortfolio } from '../../state/PortfolioContext';
 import { colors, pnlColor } from '../../theme';
 
 export default function InstrumentScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { quotes, history, getPrice, status, spot } = useMarket();
-  const { state } = usePortfolio();
+  const { quotes, history, getPrice, status, spot, source } = useMarket();
+  const { positionFor, mode } = usePortfolio();
+  useWatch(id ? [id] : []);
 
   const quote = quotes[id];
   const ltp = getPrice(id);
   const kind = kindOf(id);
-  const position = state.positions[id];
+  const position = positionFor(id);
   const name = EQUITIES.find((e) => `NSE:${e.symbol}` === id)?.name;
   const opt = parseOptionId(id);
 
@@ -34,7 +35,7 @@ export default function InstrumentScreen() {
   return (
     <ScrollView style={{ backgroundColor: colors.bg }} contentContainerStyle={{ padding: 16, gap: 12 }}>
       <Stack.Screen options={{ title: displayName(id) }} />
-      <StatusPill status={status} />
+      <StatusPill status={status} live={source === 'DHAN'} />
       <Card>
         {name ? <Text style={ui.muted}>{name}</Text> : null}
         <Text style={ui.h1}>{formatNumber(ltp)}</Text>
@@ -81,7 +82,7 @@ export default function InstrumentScreen() {
             label="SELL"
             color={colors.down}
             onPress={() => trade('SELL')}
-            disabled={!position}
+            disabled={mode === 'PAPER' && !position}
             style={{ flex: 1 }}
           />
         </View>

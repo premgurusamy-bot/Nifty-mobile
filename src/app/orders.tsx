@@ -1,10 +1,10 @@
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Empty, styles as ui } from '../../components/ui';
-import { formatNumber } from '../../lib/format';
-import { displayName } from '../../lib/instruments';
-import type { Order, OrderStatus } from '../../lib/portfolio';
-import { usePortfolio } from '../../state/PortfolioContext';
-import { colors } from '../../theme';
+import { Alert, FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Empty, styles as ui } from '../components/ui';
+import { formatNumber } from '../lib/format';
+import { displayName } from '../lib/instruments';
+import type { Order, OrderStatus } from '../lib/portfolio';
+import { usePortfolio } from '../state/PortfolioContext';
+import { colors } from '../theme';
 
 const STATUS_COLOR: Record<OrderStatus, string> = {
   OPEN: colors.warn,
@@ -18,8 +18,11 @@ const time = (ms: number) => {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
 };
 
+const alertError = (msg: string) =>
+  Platform.OS === 'web' ? globalThis.alert?.(msg) : Alert.alert('Cancel failed', msg);
+
 export default function OrdersScreen() {
-  const { state, cancelOrder } = usePortfolio();
+  const { orders, cancelOrder, mode } = usePortfolio();
 
   const renderItem = ({ item: o }: { item: Order }) => (
     <View style={s.row}>
@@ -37,7 +40,7 @@ export default function OrdersScreen() {
       <View style={{ alignItems: 'flex-end', gap: 6 }}>
         <Text style={[s.status, { color: STATUS_COLOR[o.status] }]}>{o.status}</Text>
         {o.status === 'OPEN' && (
-          <Pressable onPress={() => cancelOrder(o.id)} hitSlop={8}>
+          <Pressable onPress={() => void cancelOrder(o.id).catch((e) => alertError(e.message))} hitSlop={8}>
             <Text style={{ color: colors.accent, fontWeight: '600' }}>Cancel</Text>
           </Pressable>
         )}
@@ -48,9 +51,14 @@ export default function OrdersScreen() {
   return (
     <FlatList
       style={{ backgroundColor: colors.bg }}
-      data={state.orders}
+      data={orders}
       keyExtractor={(o) => o.id}
       renderItem={renderItem}
+      ListHeaderComponent={
+        <Text style={[ui.muted, { padding: 16, paddingBottom: 4 }]}>
+          {mode === 'LIVE' ? "Dhan order book (today's orders)" : 'Paper orders (simulated fills)'}
+        </Text>
+      }
       ListEmptyComponent={<Empty title="No orders yet" hint="Orders you place will appear here." />}
     />
   );

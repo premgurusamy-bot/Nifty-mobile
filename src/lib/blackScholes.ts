@@ -46,3 +46,29 @@ export function smileIV(spot: number, strike: number, baseIV = 0.12): number {
 
 /** Exchange tick size for NIFTY options. */
 export const roundToTick = (p: number, tick = 0.05) => Math.max(tick, Math.round(p / tick) * tick);
+
+export interface Greeks {
+  price: number;
+  delta: number;
+  gamma: number;
+  /** Per calendar day (Dhan convention, e.g. -6.2). */
+  theta: number;
+  /** Per 1 vol point. */
+  vega: number;
+}
+
+const normPdf = (x: number) => 0.3989422804014327 * Math.exp((-x * x) / 2);
+
+export function greeks({ spot, strike, t, iv, r = RISK_FREE_RATE, type }: BSInput): Greeks {
+  const sqrtT = Math.sqrt(t);
+  const d1 = (Math.log(spot / strike) + (r + (iv * iv) / 2) * t) / (iv * sqrtT);
+  const d2 = d1 - iv * sqrtT;
+  const disc = Math.exp(-r * t);
+  const { price, delta } = blackScholes({ spot, strike, t, iv, r, type });
+  const gamma = normPdf(d1) / (spot * iv * sqrtT);
+  const vega = (spot * normPdf(d1) * sqrtT) / 100;
+  const common = (-spot * normPdf(d1) * iv) / (2 * sqrtT);
+  const thetaYear =
+    type === 'CE' ? common - r * strike * disc * normCdf(d2) : common + r * strike * disc * normCdf(-d2);
+  return { price, delta, gamma, theta: thetaYear / 365, vega };
+}
