@@ -117,6 +117,8 @@ export class DhanClient {
     fromDate: string;
     toDate: string;
     interval?: number;
+    /** Include open interest per candle (F&O / commodity contracts). */
+    oi?: boolean;
   }) {
     return this.dataThrottle.run(() => this.request<any>('POST', '/charts/intraday', { interval: 1, oi: false, ...p }));
   }
@@ -189,6 +191,25 @@ export class DhanClient {
       }),
     );
   }
+  // ---- Instrument list (CSV) -------------------------------------------------
+  /** Segment-wise instrument list, e.g. MCX_COMM (GET /v2/instrument/{segment}); raw CSV text. */
+  async instrumentCsv(segment: string): Promise<string> {
+    return this.dataThrottle.run(async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 60_000);
+      try {
+        const res = await fetch(`${this.opts.baseUrl}/instrument/${encodeURIComponent(segment)}`, {
+          headers: { 'access-token': this.opts.accessToken, 'client-id': this.opts.clientId, Accept: 'text/csv' },
+          signal: ctrl.signal,
+        });
+        if (!res.ok) throw new DhanError(`Instrument list HTTP ${res.status}`, res.status);
+        return await res.text();
+      } finally {
+        clearTimeout(timer);
+      }
+    });
+  }
+
   // ---- Static IP (order APIs are only accepted from a whitelisted IP) ----------
   getIP() {
     return this.request<any>('GET', '/ip/getIP');

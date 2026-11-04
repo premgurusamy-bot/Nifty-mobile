@@ -8,7 +8,13 @@
  * and in the app (demo mode on simulated data).
  */
 
-export type Direction = 'CE' | 'PE';
+import type { InstrumentKind, Session } from './catalog.ts';
+
+/** Option side bought (CE/PE) for index options; LONG/SHORT for futures. */
+export type Direction = 'CE' | 'PE' | 'LONG' | 'SHORT';
+export type OptionSide = 'CE' | 'PE';
+/** +1 = profits when price rises (long futures, any bought option), -1 = short. */
+export const sideOf = (d: Direction): 1 | -1 => (d === 'SHORT' ? -1 : 1);
 export type TradeMode = 'PAPER' | 'LIVE';
 
 /** 5-minute candle. `t` is epoch ms (candle start). */
@@ -19,6 +25,8 @@ export interface Candle {
   l: number;
   c: number;
   v: number;
+  /** Open interest (futures, when Dhan provides it). */
+  oi?: number;
 }
 
 /** One side of a strike, as Dhan's option chain returns it (IV in percent, e.g. 9.8). */
@@ -51,6 +59,22 @@ export interface ChainSnapshot {
 /** Editable thresholds — 05_DecisionEngine + 09_Settings in the workbook. */
 export interface EngineConfig {
   symbol: string;
+  /** INDEX_OPTIONS (workbook option-buying) or MCX_FUTURES (long/short mini futures). */
+  instrumentKind: InstrumentKind;
+  /** Segment orders go to (NSE_FNO / MCX_COMM). */
+  tradeSegment: string;
+  /** ₹ per 1.00 price move per quantity unit (options 1; MCX per lot). */
+  pointValue: number;
+  tickSize: number;
+  session: Session;
+  /** Cap on lots per trade (0 = sized by max risk only). */
+  maxLots: number;
+  /** MCX: roll to the next month this many days before expiry. */
+  rollDays: number;
+  /** MCX: current futures contract (resolved from Dhan's instrument list, or entered by hand). */
+  futSecurityId: string;
+  futExpiry: string;
+  futTradingSymbol: string;
   underlyingSecurityId: number;
   underlyingSegment: string;
   strikeInterval: number;
@@ -77,6 +101,17 @@ export interface EngineConfig {
 
 export const DEFAULT_CONFIG: EngineConfig = {
   symbol: 'NIFTY',
+  instrumentKind: 'INDEX_OPTIONS',
+  tradeSegment: 'NSE_FNO',
+  pointValue: 1,
+  tickSize: 0.05,
+  session: 'NSE',
+  // Guards against absurd sizing when a premium is near zero (expiry afternoon): risk/lot → tiny → lots → huge.
+  maxLots: 10,
+  rollDays: 3,
+  futSecurityId: '',
+  futExpiry: '',
+  futTradingSymbol: '',
   underlyingSecurityId: 13,
   underlyingSegment: 'IDX_I',
   strikeInterval: 50,
@@ -136,12 +171,20 @@ export interface OpenPosition {
   partialPnl: number;
   remainingQty: number;
   currentSl: number;
+  /** +1 long / -1 short (absent in older saved state = +1). */
+  side?: 1 | -1;
+  /** ₹ per point per quantity unit (absent = 1). */
+  pointValue?: number;
+  /** Instrument traded (absent in older saved state = NIFTY). */
+  symbol?: string;
   /** Present when the position was opened with real Dhan orders. */
   live?: LiveLegs;
 }
 
 export interface JournalRow {
   id: string;
+  /** Instrument (absent in rows from before multi-instrument support = NIFTY). */
+  symbol?: string;
   /** IST date YYYY-MM-DD */
   date: string;
   /** IST time HH:MM:SS */
@@ -181,8 +224,10 @@ export interface EngineState {
   realizedToday: number;
   position: OpenPosition | null;
   journal: JournalRow[];
-  /** Avg ATM IV snapshots (12_IVHistory column F), oldest first. */
+  /** Avg ATM IV snapshots (12_IVHistory column F), oldest first — for the selected instrument. */
   ivHistory: number[];
+  /** IV histories of the other instruments, kept while they're not selected. */
+  ivBank?: Record<string, number[]>;
   events: EngineEvent[];
   seq: number;
   /** Decision text from the previous cycle (journal entry reason). */
@@ -217,7 +262,15 @@ export const initialEngineState = (): EngineState => ({
   pendingEntry: null,
 });
 
-export type Signal = 'BUY CE' | 'BUY PE' | 'WAIT' | 'NO TRADE' | 'IN POSITION';
+export type Signal = 'BUY CE' | 'BUY PE' | 'BUY' | 'SELL' | 'WAIT' | 'NO TRADE' | 'IN POSITION';
+
+/** One scored factor, for display (both option and futures models). */
+export interface Factor {
+  key: string;
+  label: string;
+  value: number;
+  max: number;
+}
 
 export interface TradePlan {
   strike: number;
@@ -304,6 +357,18 @@ export interface Dashboard {
     scorePE: number;
   };
   breakdown: ScoreBreakdown;
+  /** Score factors in display order (options: the workbook's 10; futures: the futures model). */
+  factors: Factor[];
+  /** Futures-only market details. */
+  futures?: {
+    contract: string;
+    expiry: string;
+    dayOpen: number;
+    oi: number;
+    oiChange: number;
+    buildup: string;
+    momentum: number;
+  };
   plan: TradePlan | null;
   /** What a manual ENTER would trade now (null while a position is open). */
   candidatePlan: TradePlan | null;

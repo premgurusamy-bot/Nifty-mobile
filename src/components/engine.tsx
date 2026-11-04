@@ -6,7 +6,13 @@ import { colors } from '../theme';
 import { Card, styles as ui } from './ui';
 
 export const signalColor = (s: Signal) =>
-  s === 'BUY CE' ? colors.up : s === 'BUY PE' ? colors.down : s === 'NO TRADE' ? colors.muted : colors.warn;
+  s === 'BUY CE' || s === 'BUY'
+    ? colors.up
+    : s === 'BUY PE' || s === 'SELL'
+      ? colors.down
+      : s === 'NO TRADE'
+        ? colors.muted
+        : colors.warn;
 
 /** Two-column key/value table, like the workbook's Field/Value blocks. */
 export function KV({ title, rows }: { title: string; rows: [string, string | number, string?][] }) {
@@ -131,5 +137,39 @@ export function PreflightList({ result }: { result: PreflightView }) {
         </View>
       ))}
     </View>
+  );
+}
+
+/** Score breakdown for either model (the workbook's 10 option factors, or the futures factors). */
+export function FactorBreakdown({
+  factors,
+  total,
+}: {
+  factors: { key: string; label: string; value: number; max: number }[];
+  total: number;
+}) {
+  return (
+    <Card style={{ gap: 8 }}>
+      <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Confidence score breakdown</Text>
+      {factors.map((f) => (
+        <View key={f.key} style={{ gap: 3 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <Text style={s.kvKey}>{f.label}</Text>
+            <Text style={s.kvVal}>
+              {formatNumber(f.value, f.value % 1 ? 2 : 0)} / {f.max}
+            </Text>
+          </View>
+          <View style={s.track}>
+            <View style={[s.fill, { width: `${Math.min(100, (f.value / f.max) * 100)}%` }]} />
+          </View>
+        </View>
+      ))}
+      <View
+        style={[s.kvRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: 8 }]}
+      >
+        <Text style={[s.kvKey, { color: colors.text, fontWeight: '700' }]}>TOTAL</Text>
+        <Text style={[s.kvVal, { fontWeight: '800' }]}>{formatNumber(total)}</Text>
+      </View>
+    </Card>
   );
 }

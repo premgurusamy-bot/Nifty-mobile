@@ -12,7 +12,7 @@ import {
   View,
 } from 'react-native';
 import {
-  Breakdown,
+  FactorBreakdown,
   ConfidenceMeter,
   KV,
   PreflightList,
@@ -102,26 +102,38 @@ export default function DashboardScreen() {
   // Editable buy price: blank = market; a price below the premium waits as a limit order.
   // The box shows the live premium until you edit it. Unchanged (or emptied) → market order;
   // a different price → limit order at that price.
-  const marketText = cand ? cand.entry.toFixed(2) : '';
+  const isFut = cfg.instrumentKind === 'MCX_FUTURES';
+  const tick = cfg.tickSize || 0.05;
+  const dp = tick >= 1 ? 0 : 2;
+  const contract = cfg.futTradingSymbol || cfg.symbol;
+  const sideOfDir = (dir: string) => (dir === 'SHORT' ? -1 : 1);
+  /** "BUY PE 24200" (options) / "BUY GOLDM DEC FUT" or "SELL …" (futures). */
+  const tradeLabel = (dir: string, strike: number) =>
+    dir === 'LONG' || dir === 'SHORT' ? `${dir === 'LONG' ? 'BUY' : 'SELL'} ${contract}` : `BUY ${dir} ${strike}`;
+  const marketText = cand ? cand.entry.toFixed(dp) : '';
   const priceText = priceEdit ?? marketText;
   const edited = priceEdit != null && priceEdit.trim() !== '' && cand != null && Number(priceEdit) !== cand.entry;
   const limit = edited ? Number(priceEdit) : null;
   const limitValid =
-    limit == null || (Number.isFinite(limit) && limit > 0 && Math.abs(Math.round(limit * 20) / 20 - limit) < 1e-9);
+    limit == null || (Number.isFinite(limit) && limit > 0 && Math.abs(Math.round(limit / tick) * tick - limit) < 1e-6);
   const atPrice = limit ?? cand?.entry ?? 0;
   const shift = cand ? atPrice - cand.entry : 0; // SL/targets keep their distance from the entry
   const lots = (q: number) => (cfg.lotSize > 0 ? q / cfg.lotSize : 0);
-  const qtyLabel = (q: number) => `${q} (${lots(q)} lot${lots(q) === 1 ? '' : 's'})`;
+  // MCX quantities are lots already; option quantities are units.
+  const qtyLabel = (q: number) =>
+    isFut ? `${q} lot${q === 1 ? '' : 's'}` : `${q} (${lots(q)} lot${lots(q) === 1 ? '' : 's'})`;
   const pe = st.pendingEntry;
 
   const doEnter = () => {
     if (!cand) return;
-    if (!limitValid) return setTradeMsg('Buy price must be a positive number in steps of 0.05 (e.g. 110.05)');
+    if (!limitValid) return setTradeMsg(`Price must be a positive number in steps of ${tick}`);
+    const side = sideOfDir(cand.direction);
+    const waits = limit != null && side * (cand.entry - limit) > 0;
     const how =
       limit == null
-        ? `at market (~${formatNumber(cand.entry)})`
-        : `limit @ ${formatNumber(limit)}${limit < cand.entry ? ` — waits until the premium comes down (now ${formatNumber(cand.entry)})` : ''}`;
-    const what = `BUY ${cand.direction} ${cand.strike} × ${qtyLabel(cand.qty)} ${how}\nSL ${formatNumber(cand.sl + shift)} · T1 ${formatNumber(cand.target1 + shift)} · T2 ${formatNumber(cand.target2 + shift)} · max loss ${formatINR(cand.maxLoss, 0)}`;
+        ? `at market (~${formatNumber(cand.entry, dp)})`
+        : `limit @ ${formatNumber(limit, dp)}${waits ? ` — waits until the price ${side > 0 ? 'comes down' : 'rises'} to it (now ${formatNumber(cand.entry, dp)})` : ''}`;
+    const what = `${tradeLabel(cand.direction, cand.strike)} × ${qtyLabel(cand.qty)} ${how}\nSL ${formatNumber(cand.sl + shift)} · T1 ${formatNumber(cand.target1 + shift)} · T2 ${formatNumber(cand.target2 + shift)} · max loss ${formatINR(cand.maxLoss, 0)}`;
     const go = () => {
       setTradeMsg(null);
       enter(limit ?? undefined)
@@ -131,8 +143,8 @@ export default function DashboardScreen() {
     if (isLive)
       confirmDialog(
         'Place LIVE order?',
-        `${what}\n\nA stop-loss sell order is placed at Dhan right after the fill.`,
-        'Buy now',
+        `${what}\n\nA stop-loss order is placed at Dhan right after the fill.`,
+        side > 0 ? 'Buy now' : 'Sell now',
         go,
       );
     else confirmDialog('Paper entry', what, 'Enter (paper)', go);
@@ -140,7 +152,8 @@ export default function DashboardScreen() {
 
   const doExit = () => {
     if (!p) return;
-    const what = `Sell ${p.remainingQty} ${p.direction} ${p.strike} at market${ltp ? ` (~${formatNumber(ltp)})` : ''}`;
+    const closing = (p.side ?? 1) > 0 ? 'Sell' : 'Buy back';
+    const what = `${closing} ${qtyLabel(p.remainingQty)} ${p.direction === 'LONG' || p.direction === 'SHORT' ? contract : `${p.direction} ${p.strike}`} at market${ltp ? ` (~${formatNumber(ltp, dp)})` : ''}`;
     const go = () => {
       setTradeMsg(null);
       exit().catch((e) => setTradeMsg((e as Error).message));
@@ -149,7 +162,8 @@ export default function DashboardScreen() {
       confirmDialog('Exit LIVE position?', `${what}\nThe stop-loss order at Dhan is cancelled first.`, 'Exit now', go);
     else confirmDialog('Exit paper position?', what, 'Exit', go);
   };
-  const openPnl = p && ltp ? (ltp - p.entry) * p.remainingQty + p.partialPnl : null;
+  const openPnl =
+    p && ltp ? (p.side ?? 1) * (ltp - p.entry) * p.remainingQty * (p.pointValue ?? 1) + p.partialPnl : null;
 
   return (
     <ScrollView
@@ -162,7 +176,9 @@ export default function DashboardScreen() {
       {/* Header: Last refresh / Status / Refresh Now / Auto refresh */}
       <View style={s.header}>
         <View style={{ flex: 1 }}>
-          <Text style={[ui.title, { fontSize: 18 }]}>{cfg.symbol} OPTION BUYING</Text>
+          <Text style={[ui.title, { fontSize: 18 }]}>
+            {cfg.symbol} {isFut ? 'FUTURES (MCX)' : 'OPTION BUYING'}
+          </Text>
           <Text style={ui.muted}>
             {snap.demo ? 'DEMO · accelerated simulation · ' : 'Dhan live · '}
             {snap.marketOpen ? 'market open' : 'market closed'}
@@ -229,13 +245,14 @@ export default function DashboardScreen() {
             <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
               <Text style={[ui.h1, { fontSize: 24 }]}>{formatNumber(d.decision.confidence, 1)}</Text>
               <Text style={ui.muted}>
-                / 100 confidence · {d.decision.direction} {d.decision.selectedStrike}
+                / 100 confidence ·{' '}
+                {isFut ? `${d.decision.direction} ${contract}` : `${d.decision.direction} ${d.decision.selectedStrike}`}
               </Text>
             </View>
             <ConfidenceMeter value={d.decision.confidence} watch={cfg.confWatch} high={cfg.confHigh} />
             <Text style={ui.muted}>
-              CE score {formatNumber(d.decision.scoreCE, 1)} · PE score {formatNumber(d.decision.scorePE, 1)} · pattern{' '}
-              {d.decision.pattern}
+              {isFut ? 'Long' : 'CE'} score {formatNumber(d.decision.scoreCE, 1)} · {isFut ? 'Short' : 'PE'} score{' '}
+              {formatNumber(d.decision.scorePE, 1)} · pattern {d.decision.pattern}
             </Text>
           </Card>
 
@@ -245,8 +262,8 @@ export default function DashboardScreen() {
             {pe ? (
               <>
                 <Text style={ui.title}>
-                  Entry order pending: BUY {pe.plan.direction} {pe.plan.strike} × {qtyLabel(pe.plan.qty)} @ ≤{' '}
-                  {formatNumber(pe.limit)}
+                  Entry order pending: {tradeLabel(pe.plan.direction, pe.plan.strike)} × {qtyLabel(pe.plan.qty)} @{' '}
+                  {sideOfDir(pe.plan.direction) > 0 ? '≤' : '≥'} {formatNumber(pe.limit)}
                 </Text>
                 <Text style={ui.muted}>
                   {pe.live
@@ -267,7 +284,9 @@ export default function DashboardScreen() {
             ) : p ? (
               <Button
                 label={
-                  busy ? 'Working…' : `EXIT ${p.direction} ${p.strike} × ${p.remainingQty}${isLive ? ' (LIVE)' : ''}`
+                  busy
+                    ? 'Working…'
+                    : `EXIT ${p.direction === 'LONG' || p.direction === 'SHORT' ? `${p.direction} ${contract}` : `${p.direction} ${p.strike}`} × ${p.remainingQty}${isLive ? ' (LIVE)' : ''}`
                 }
                 color={colors.down}
                 onPress={doExit}
@@ -276,12 +295,14 @@ export default function DashboardScreen() {
             ) : cand ? (
               <>
                 <Text style={ui.muted}>
-                  Premium now {formatNumber(cand.entry)} · quantity {qtyLabel(cand.qty)}
+                  {isFut ? 'Price' : 'Premium'} now {formatNumber(cand.entry, dp)} · quantity {qtyLabel(cand.qty)}
+                  {isFut ? ` · ₹${formatNumber(cfg.pointValue, 0)} per point per lot` : ''}
                 </Text>
                 <View style={{ gap: 6 }}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                     <Text style={s.label}>
-                      {edited ? 'Buy price — your limit' : 'Buy price — market (edit to set your price)'}
+                      {sideOfDir(cand.direction) > 0 ? 'Buy' : 'Sell'} price —{' '}
+                      {edited ? 'your limit' : 'market (edit to set your price)'}
                     </Text>
                     {edited ? (
                       <Text
@@ -320,7 +341,7 @@ export default function DashboardScreen() {
                   label={
                     busy
                       ? 'Working…'
-                      : `ENTER BUY ${cand.direction} ${cand.strike} × ${cand.qty} ${limit == null ? '@ market' : `@ ${formatNumber(limit)} (limit)`}${isLive ? ' (LIVE)' : ''}`
+                      : `ENTER ${tradeLabel(cand.direction, cand.strike)} × ${cand.qty} ${limit == null ? '@ market' : `@ ${formatNumber(limit, dp)} (limit)`}${isLive ? ' (LIVE)' : ''}`
                   }
                   color={cand.direction === 'CE' ? colors.up : colors.down}
                   onPress={doEnter}
@@ -335,10 +356,10 @@ export default function DashboardScreen() {
 
           {p ? (
             <KV
-              title={`Open position · ${p.direction} ${p.strike}`}
+              title={`Open position · ${p.direction === 'LONG' || p.direction === 'SHORT' ? `${p.direction} ${contract}` : `${p.direction} ${p.strike}`}`}
               rows={[
                 ['Entry', p.entry],
-                ['Live premium', ltp ?? '—'],
+                [isFut ? 'Live price' : 'Live premium', ltp ?? '—'],
                 ['Current (trailing) SL', p.currentSl, colors.down],
                 ['Target 1', p.target1, colors.up],
                 ['Target 2', p.target2, colors.up],
@@ -355,7 +376,9 @@ export default function DashboardScreen() {
             <KV
               title="Trade plan"
               rows={[
-                ['Selected strike', `${d.plan.strike} ${d.plan.direction}`],
+                isFut
+                  ? ['Contract', `${d.plan.direction} ${contract}`]
+                  : ['Selected strike', `${d.plan.strike} ${d.plan.direction}`],
                 ['Entry', d.plan.entry],
                 ['Stop loss', d.plan.sl, colors.down],
                 ['Target 1', d.plan.target1, colors.up],
@@ -381,19 +404,23 @@ export default function DashboardScreen() {
               ['Market sentiment', d.decision.sentiment],
               ['Market trend', d.decision.trend],
               ['OI strength', d.decision.oiStrength],
-              [
-                'IV percentile',
-                d.decision.ivPercentile < 0
-                  ? `building history (${st.ivSnapshots}/20)`
-                  : `${formatNumber(d.decision.ivPercentile, 0)}%`,
-              ],
+              ...(isFut
+                ? []
+                : ([
+                    [
+                      'IV percentile',
+                      d.decision.ivPercentile < 0
+                        ? `building history (${st.ivSnapshots}/20)`
+                        : `${formatNumber(d.decision.ivPercentile, 0)}%`,
+                    ],
+                  ] as [string, string][])),
             ]}
           />
           <KV
             title="Market"
             rows={[
-              [`${cfg.symbol} spot`, d.market.spot],
-              ['ATM strike', String(d.market.atm)],
+              [isFut ? `${contract} LTP` : `${cfg.symbol} spot`, d.market.spot],
+              ...(isFut ? [] : ([['ATM strike', String(d.market.atm)]] as [string, string][])),
               ['Trend', d.market.trend],
               ['VWAP', d.market.vwap],
               ['EMA20', d.market.ema20],
@@ -401,33 +428,51 @@ export default function DashboardScreen() {
               ['ATR', d.market.atr],
             ]}
           />
-          <KV
-            title={`Option chain · expiry ${d.expiry || '—'}`}
-            rows={[
-              ['CE LTP', d.chain.ceLtp],
-              ['PE LTP', d.chain.peLtp],
-              ['CE OI', formatNumber(d.chain.ceOi, 0)],
-              ['PE OI', formatNumber(d.chain.peOi, 0)],
-              ['Change in OI', formatNumber(d.chain.changeInOi, 0)],
-              ['PCR', formatNumber(d.chain.pcr, 3)],
-              ['Max pain', String(d.chain.maxPain)],
-              ['Support (max PE OI)', String(d.chain.support)],
-              ['Resistance (max CE OI)', String(d.chain.resistance)],
-              ['Price swing support', d.chain.swingSupport],
-              ['Price swing resistance', d.chain.swingResistance],
-            ]}
-          />
-          <KV
-            title={`Greeks · ${d.decision.direction} ${d.decision.selectedStrike}`}
-            rows={[
-              ['Delta', formatNumber(d.greeks.delta, 4)],
-              ['Gamma', formatNumber(d.greeks.gamma, 5)],
-              ['Theta', formatNumber(d.greeks.theta, 2)],
-              ['Vega', formatNumber(d.greeks.vega, 2)],
-              ['IV', formatNumber(d.greeks.iv, 2)],
-            ]}
-          />
-          <Breakdown b={d.breakdown} total={d.decision.confidence} />
+          {isFut && d.futures ? (
+            <KV
+              title={`Futures · ${d.futures.contract}`}
+              rows={[
+                ['Expiry', d.futures.expiry || '—'],
+                ['Day open', d.futures.dayOpen],
+                ['Open interest', d.futures.oi ? formatNumber(d.futures.oi, 0) : '—'],
+                ['OI change (~30 min)', d.futures.oi ? formatSigned(d.futures.oiChange, 0) : '—'],
+                ['OI reading', d.futures.buildup],
+                ['Momentum (EMA spread / ATR)', formatNumber(d.futures.momentum, 2)],
+                ['Price swing support', d.chain.swingSupport],
+                ['Price swing resistance', d.chain.swingResistance],
+              ]}
+            />
+          ) : (
+            <>
+              <KV
+                title={`Option chain · expiry ${d.expiry || '—'}`}
+                rows={[
+                  ['CE LTP', d.chain.ceLtp],
+                  ['PE LTP', d.chain.peLtp],
+                  ['CE OI', formatNumber(d.chain.ceOi, 0)],
+                  ['PE OI', formatNumber(d.chain.peOi, 0)],
+                  ['Change in OI', formatNumber(d.chain.changeInOi, 0)],
+                  ['PCR', formatNumber(d.chain.pcr, 3)],
+                  ['Max pain', String(d.chain.maxPain)],
+                  ['Support (max PE OI)', String(d.chain.support)],
+                  ['Resistance (max CE OI)', String(d.chain.resistance)],
+                  ['Price swing support', d.chain.swingSupport],
+                  ['Price swing resistance', d.chain.swingResistance],
+                ]}
+              />
+              <KV
+                title={`Greeks · ${d.decision.direction} ${d.decision.selectedStrike}`}
+                rows={[
+                  ['Delta', formatNumber(d.greeks.delta, 4)],
+                  ['Gamma', formatNumber(d.greeks.gamma, 5)],
+                  ['Theta', formatNumber(d.greeks.theta, 2)],
+                  ['Vega', formatNumber(d.greeks.vega, 2)],
+                  ['IV', formatNumber(d.greeks.iv, 2)],
+                ]}
+              />
+            </>
+          )}
+          <FactorBreakdown factors={d.factors ?? []} total={d.decision.confidence} />
         </>
       )}
 

@@ -87,6 +87,7 @@ export function mapOptionChain(
   json: any,
   expiry: string,
   width = 10,
+  underlying = 'NIFTY',
 ): { spot: number; rows: ChainRow[]; securityIds: Map<string, string> } {
   const data = json?.data ?? {};
   const spot = num(data.last_price);
@@ -106,7 +107,7 @@ export function mapOptionChain(
   const to = Math.min(strikes.length, atmIdx + width + 1);
 
   const leg = (raw: any, strike: number, type: 'CE' | 'PE') => {
-    const id = optionId({ underlying: 'NIFTY', expiry, strike, type });
+    const id = optionId({ underlying, expiry, strike, type });
     if (raw?.security_id != null) securityIds.set(id, String(raw.security_id));
     return {
       id,
@@ -227,22 +228,26 @@ export function dhanProductType(instrumentId: string, product: Product): string 
   return 'CNC';
 }
 
-export const roundToTick = (p: number) => Math.round(p * 20) / 20;
+/** Round to the instrument tick (0.05 for NSE options; MCX ticks vary, e.g. ₹1 for Gold Mini). */
+export const roundToTick = (p: number, tick = 0.05) => Number((Math.round(p / tick) * tick).toFixed(4));
 
-/** Build an app id from Dhan derivative fields, for NIFTY options only. */
+const OPTION_UNDERLYINGS = ['NIFTY', 'BANKNIFTY', 'FINNIFTY'];
+
+/** Build an app id from Dhan derivative fields, for NIFTY / BANKNIFTY / FINNIFTY options. */
 export function niftyOptionIdFromDerivative(rec: {
   tradingSymbol?: string;
   drvExpiryDate?: string;
   drvOptionType?: string;
   drvStrikePrice?: number | string;
 }): string | null {
-  if (!rec.tradingSymbol?.startsWith('NIFTY-') && !rec.tradingSymbol?.startsWith('NIFTY ')) return null;
+  const underlying = String(rec.tradingSymbol ?? '').split(/[- ]/)[0];
+  if (!OPTION_UNDERLYINGS.includes(underlying)) return null;
   const t = String(rec.drvOptionType ?? '').toUpperCase();
   const type = t === 'CALL' || t === 'CE' ? 'CE' : t === 'PUT' || t === 'PE' ? 'PE' : null;
   const expiry = String(rec.drvExpiryDate ?? '').slice(0, 10);
   const strike = Math.round(num(rec.drvStrikePrice));
   if (!type || !/^\d{4}-\d{2}-\d{2}$/.test(expiry) || !strike) return null;
-  const id = optionId({ underlying: 'NIFTY', expiry, strike, type });
+  const id = optionId({ underlying, expiry, strike, type });
   return parseOptionId(id) ? id : null;
 }
 
@@ -297,6 +302,8 @@ export function mapCandles(json: any): Candle[] {
       l: num(d.low?.[i]),
       c: num(close[i]),
       v: num(d.volume?.[i]),
+      // Futures/options requests with oi:true carry open interest per candle.
+      ...(d.open_interest ? { oi: num(d.open_interest[i]) } : {}),
     });
   }
   return out;

@@ -8,6 +8,7 @@ import { greeks, smileIV } from '../blackScholes.ts';
 import { mulberry32 } from '../simulator.ts';
 import { istToEpoch, yearsToExpiry, nextWeeklyExpiry } from '../time.ts';
 import type { EngineDataSource } from './runner.ts';
+import { catalogEntry } from './catalog.ts';
 import type { Candle, ChainSnapshot, ChainStrike, EngineConfig } from './types.ts';
 
 const FIVE_MIN = 5 * 60_000;
@@ -24,18 +25,37 @@ function nextSessionStart(t: number): number {
 
 export class SimEngineSource implements EngineDataSource {
   alwaysOpen = true;
-  private rand: () => number;
+  private rand: () => number = mulberry32(1);
   private candles: Candle[] = [];
   private drift = 0;
   private barInDay = 0;
   private nextT = 0;
   private anchor = 24200;
+  /** Price scale vs NIFTY, so every instrument gets proportional moves. */
+  private scale = 1;
+  private oi = 0;
+  private symbol = '';
+  private tick = 0.05;
+  private seed: number;
+  private startDay: string;
 
   constructor(seed = 7, startDay = '2026-08-24') {
-    this.rand = mulberry32(seed);
-    let t = istToEpoch(startDay, 9, 15);
-    let price = 24200;
-    // Seed three sessions of history (enough for EMA50 + backtest).
+    this.seed = seed;
+    this.startDay = startDay;
+    this.reseed('NIFTY', 24200);
+  }
+
+  /** (Re)build three sessions of history at this instrument's price level. */
+  private reseed(symbol: string, price: number) {
+    this.symbol = symbol;
+    this.rand = mulberry32(this.seed);
+    this.candles = [];
+    this.drift = 0;
+    this.barInDay = 0;
+    this.anchor = price;
+    this.scale = price / 24200;
+    this.oi = 50_000;
+    let t = istToEpoch(this.startDay, 9, 15);
     for (let i = 0; i < BARS_PER_DAY * 3; i++) {
       const c = this.makeCandle(t, price);
       this.candles.push(c);
@@ -64,13 +84,20 @@ export class SimEngineSource implements EngineDataSource {
     if (this.rand() < 0.05) this.drift = (this.rand() - 0.5) * 0.0008;
     // Gentle pull back toward the anchor keeps a week of demo inside a realistic band.
     const revert = ((this.anchor - prevClose) / this.anchor) * 0.01;
-    const o = prevClose + this.gauss() * 1.5;
+    const k = this.scale;
+    const o = prevClose + this.gauss() * 1.5 * k;
     const c = o * (1 + this.drift + revert + this.gauss() * 0.00035);
-    const h = Math.max(o, c) + Math.abs(this.gauss()) * 3;
-    const l = Math.min(o, c) - Math.abs(this.gauss()) * 3;
-    const v = Math.round(1_500_000 * (0.6 + this.rand()) * (1 + Math.abs(c - o) / 15));
-    const r2 = (x: number) => Math.round(x * 20) / 20;
-    return { t, o: r2(o), h: r2(h), l: r2(l), c: r2(c), v };
+    const h = Math.max(o, c) + Math.abs(this.gauss()) * 3 * k;
+    const l = Math.min(o, c) - Math.abs(this.gauss()) * 3 * k;
+    const v = Math.round(1_500_000 * (0.6 + this.rand()) * (1 + Math.abs(c - o) / (15 * k)));
+    // Open interest builds with trends and unwinds in chop (gives the futures OI factor something to read).
+    this.oi = Math.max(
+      1000,
+      Math.round(this.oi * (1 + Math.abs(this.drift) * 40 - 0.004 + (this.rand() - 0.5) * 0.01)),
+    );
+    // Prices on the instrument's tick (₹1 for Gold Mini, 0.05 for NIFTY / Lead Mini).
+    const r2 = (x: number) => Number((Math.round(x / this.tick) * this.tick).toFixed(4));
+    return { t, o: r2(o), h: r2(h), l: r2(l), c: r2(c), v, oi: this.oi };
   }
 
   now() {
@@ -112,6 +139,24 @@ export class SimEngineSource implements EngineDataSource {
   }
 
   async load(cfg: EngineConfig) {
+    if (cfg.symbol !== this.symbol) {
+      this.tick = cfg.instrumentKind === 'MCX_FUTURES' ? cfg.tickSize || 0.05 : 0.05;
+      this.reseed(cfg.symbol, catalogEntry(cfg.symbol)?.demoPrice ?? 24200);
+    }
+    if (cfg.instrumentKind === 'MCX_FUTURES') {
+      const last = this.candles[this.candles.length - 1];
+      this.candles.push(this.makeCandle(this.nextT, last.c));
+      this.nextT = this.advance(this.nextT);
+      if (this.candles.length > BARS_PER_DAY * 4) this.candles = this.candles.slice(-BARS_PER_DAY * 4);
+      const candles = this.candles.slice(-BARS_PER_DAY * 3);
+      const spot = candles[candles.length - 1].c;
+      const expiry = new Date(this.now() + 5.5 * 3600_000 + 20 * 86400_000).toISOString().slice(0, 10);
+      return {
+        candles,
+        chain: { spot, expiry, strikes: [] },
+        contract: { securityId: '0', expiry, tradingSymbol: `${cfg.symbol} (demo)` },
+      };
+    }
     const last = this.candles[this.candles.length - 1];
     this.candles.push(this.makeCandle(this.nextT, last.c));
     this.nextT = this.advance(this.nextT);

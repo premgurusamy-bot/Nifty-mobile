@@ -54,6 +54,31 @@ The workbook's decision engine was ported rule for rule to TypeScript. A golden 
 
 The engine runs on the **server**, as Excel's `OnTime` loop did, so stop losses and targets are tracked even while your phone is locked. Without a server, the app runs the same engine in **demo mode** on an accelerated NIFTY simulation (each refresh = one 5-minute candle).
 
+## Instruments
+
+Pick the instrument in ⚙ Settings → **Instrument**. All of its settings load together: Dhan ids/segments, lot size, tick, ₹ per point, strike step, market hours, and its own IV history. Switching is blocked while a trade or entry order is open.
+
+| Group | Instruments | How it trades |
+| --- | --- | --- |
+| Index options | NIFTY 50, BANK NIFTY, FIN NIFTY | The Excel option-buying system: buy CE/PE on the best strike near ATM. Quantity is in units (lots of 65 / 30 / 60, verify against NSE). Capped at 10 lots by default. |
+| MCX mini futures | Gold Mini, Silver Mini, Crude Oil Mini, Natural Gas Mini, Lead Mini, Zinc Mini, Aluminium Mini | Long or short the current-month future. Quantity is in **lots** (Dhan's MCX convention). P&L uses ₹ per 1.00 move per lot (e.g. Gold Mini ₹10, Lead Mini ₹1,000; verify against MCX). Capped at 1 lot by default. |
+
+**MCX details**
+
+- **Current contract:** looked up in Dhan's instrument list (`/v2/instrument/MCX_COMM`, with the compact scrip master as fallback). It rolls to the next month `rollDays` (default 3) before expiry. If lookup fails, enter the contract's security id by hand.
+- **Market hours:** 09:00–23:30 IST, or 23:55 while the US is on standard time.
+- **Futures score (100 points):** not from the workbook, because futures have no option chain. It keeps the workbook's EMA-trend, VWAP and price-action rules, and adds:
+  - momentum (EMA spread / ATR)
+  - volume confirmation
+  - position vs the day open
+  - breakout / room to the next level
+  - **OI buildup**: long buildup and short covering favour longs; short buildup and long unwinding favour shorts
+  - volatility fit
+
+  The same arm → confirm → trade flow, daily limits, T1 half-booking and breakeven trail apply. Shorts have their stop above the entry.
+- **Live orders:** a short opens with a SELL and is protected by a BUY STOP_LOSS above it. All prices are on the instrument's tick.
+- **Paper-test first:** the futures model is new, so trade it on PAPER before using real money.
+
 ## Phone-only setup (no server)
 
 1. ⚙ Settings → **Dhan account (this phone)**: enter your Dhan client id and access token and tap **Save & test**. They are checked with Dhan and stored only on the phone, encrypted by the Android Keystore.

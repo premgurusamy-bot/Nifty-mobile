@@ -13,9 +13,13 @@ import {
   runCycle,
 } from './decision.ts';
 import { findStrike, legOf } from './indicators.ts';
+import { catalogEntry, CATALOG } from './catalog.ts';
+import { buildFuturesPlan } from './futures.ts';
 import {
   DEFAULT_CONFIG,
-  INDEX_PRESETS,
+  sideOf,
+  type Direction,
+  type OptionSide,
   initialEngineState,
   type Candle,
   type ChainSnapshot,
@@ -27,9 +31,24 @@ import {
   type TradePlan,
 } from './types.ts';
 
+/** The MCX futures contract the engine is trading (current month, rolled before expiry). */
+export interface FuturesContract {
+  securityId: string;
+  expiry: string;
+  tradingSymbol: string;
+  tickSize?: number;
+}
+
 export interface EngineDataSource {
-  /** Fetch 5-min candles + the option chain for the configured underlying. */
-  load(cfg: EngineConfig, now: number): Promise<{ candles: Candle[]; chain: ChainSnapshot }>;
+  /**
+   * Fetch 5-min candles + the option chain for the configured underlying.
+   * For MCX futures the chain has no strikes (spot = the future's LTP) and
+   * the resolved contract is returned alongside.
+   */
+  load(
+    cfg: EngineConfig,
+    now: number,
+  ): Promise<{ candles: Candle[]; chain: ChainSnapshot; contract?: FuturesContract }>;
   /** Clock used for the cycle (demo mode runs on simulated time). */
   now?(): number;
   /** Demo sources ignore market hours. */
@@ -56,16 +75,42 @@ export interface EngineSnapshot {
   demo: boolean;
 }
 
-const roundTick = (p: number) => Math.round(p * 20) / 20;
+const roundTick = (p: number, tick = 0.05) => Number((Math.round(p / tick) * tick).toFixed(4));
 
-/** Limit prices must be positive and on the 0.05 tick. */
-export function validateLimit(limit: number) {
-  if (!Number.isFinite(limit) || limit <= 0) throw new Error('Enter a valid buy price');
-  if (Math.abs(roundTick(limit) - limit) > 1e-9) throw new Error('Price must be in steps of 0.05');
+/** Limit prices must be positive and on the instrument's tick (0.05 for options). */
+export function validateLimit(limit: number, tick = 0.05) {
+  if (!Number.isFinite(limit) || limit <= 0) throw new Error('Enter a valid price');
+  if (Math.abs(roundTick(limit, tick) - limit) > 1e-9) throw new Error(`Price must be in steps of ${tick}`);
 }
 
 export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig): EngineConfig {
   const next: EngineConfig = { ...base };
+  // Instrument first: its catalog values load, then any explicit values in the same patch win.
+  if (patch.symbol !== undefined) {
+    const sym = String(patch.symbol).trim().toUpperCase() || 'NIFTY';
+    const entry = catalogEntry(sym);
+    if (!entry) throw new Error(`Unknown instrument ${sym} (choose one of ${CATALOG.map((c) => c.symbol).join(', ')})`);
+    if (sym !== base.symbol) {
+      // Switching instrument loads that instrument's full settings (ApplyIndexPreset, extended).
+      Object.assign(next, {
+        symbol: entry.symbol,
+        instrumentKind: entry.kind,
+        underlyingSecurityId: entry.underlyingSecurityId,
+        underlyingSegment: entry.underlyingSegment,
+        tradeSegment: entry.tradeSegment,
+        strikeInterval: entry.strikeInterval,
+        lotSize: entry.lotSize,
+        pointValue: entry.pointValue,
+        tickSize: entry.tickSize,
+        session: entry.session,
+        maxLots: entry.maxLots,
+        expiry: '',
+        futSecurityId: '',
+        futExpiry: '',
+        futTradingSymbol: '',
+      });
+    }
+  }
   const num = (k: keyof EngineConfig, min: number, max: number) => {
     const v = (patch as Record<string, unknown>)[k];
     if (v === undefined) return;
@@ -81,8 +126,8 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   num('atrMult', 0.1, 20);
   num('maxTradesPerDay', 0, 100);
   num('maxDailyLoss', 0, 100_000_000);
-  num('strikeInterval', 1, 10_000);
-  num('underlyingSecurityId', 1, 1e9);
+  num('strikeInterval', 0, 10_000);
+  num('underlyingSecurityId', 0, 1e9);
   num('refreshSeconds', 15, 3600);
   if (patch.autoRefresh !== undefined) next.autoRefresh = !!patch.autoRefresh;
   if (patch.alertsEnabled !== undefined) next.alertsEnabled = !!patch.alertsEnabled;
@@ -102,22 +147,19 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   }
   if (patch.underlyingSegment !== undefined)
     next.underlyingSegment = String(patch.underlyingSegment).trim().toUpperCase();
-  if (patch.symbol !== undefined) {
-    const sym = String(patch.symbol).trim().toUpperCase() || 'NIFTY';
-    next.symbol = sym;
-    // ApplyIndexPreset: known indices get confirmed ids; changing symbol without a preset must set ids explicitly.
-    const preset = INDEX_PRESETS[sym];
-    if (preset && sym !== base.symbol)
-      Object.assign(next, preset, pickDefined(patch, ['strikeInterval', 'underlyingSecurityId', 'underlyingSegment']));
+  num('pointValue', 0.0001, 10_000_000);
+  num('tickSize', 0.0001, 1000);
+  num('maxLots', 0, 1000);
+  num('rollDays', 0, 30);
+  if (patch.futSecurityId !== undefined) {
+    const id = String(patch.futSecurityId).trim();
+    if (id && !/^\d+$/.test(id)) throw new Error('Futures security id must be a number');
+    next.futSecurityId = id;
   }
+  if (patch.futExpiry !== undefined) next.futExpiry = String(patch.futExpiry).trim();
+  if (patch.futTradingSymbol !== undefined) next.futTradingSymbol = String(patch.futTradingSymbol).trim();
   if (next.confWatch > next.confHigh) throw new Error('Watch threshold must not exceed the trade threshold');
   return next;
-}
-
-function pickDefined(o: Partial<EngineConfig>, keys: (keyof EngineConfig)[]) {
-  const out: Partial<EngineConfig> = {};
-  for (const k of keys) if (o[k] !== undefined) (out as Record<string, unknown>)[k] = o[k];
-  return out;
 }
 
 export class EngineRunner {
@@ -173,9 +215,20 @@ export class EngineRunner {
   private async doRefresh() {
     this.status = 'Refreshing...';
     const now = this.clock();
-    let data: { candles: Candle[]; chain: ChainSnapshot };
+    let data: { candles: Candle[]; chain: ChainSnapshot; contract?: FuturesContract };
     try {
       data = await this.source.load(this.config, now);
+      // MCX: remember the resolved current-month contract (and roll it when it changes).
+      const k = data.contract;
+      if (k && (k.securityId !== this.config.futSecurityId || k.expiry !== this.config.futExpiry)) {
+        this.config = {
+          ...this.config,
+          futSecurityId: k.securityId,
+          futExpiry: k.expiry,
+          futTradingSymbol: k.tradingSymbol,
+          ...(k.tickSize ? { tickSize: k.tickSize } : {}),
+        };
+      }
       this.banner = '';
     } catch (e) {
       const msg = (e as Error).message;
@@ -213,16 +266,38 @@ export class EngineRunner {
   }
 
   async updateConfig(patch: Partial<EngineConfig>) {
-    this.config = sanitizeConfig(patch, this.config);
+    const next = sanitizeConfig(patch, this.config);
+    if (next.symbol !== this.config.symbol) {
+      if (this.state.position) throw new Error('Exit the open position before switching instrument.');
+      if (this.state.pendingEntry) throw new Error('Cancel the pending entry order before switching instrument.');
+      // Each instrument keeps its own IV history; the pending setup belongs to the old one.
+      const bank = { ...(this.state.ivBank ?? {}), [this.config.symbol]: this.state.ivHistory };
+      const ivHistory = bank[next.symbol] ?? [];
+      delete bank[next.symbol];
+      this.state = { ...this.state, ivHistory, ivBank: bank, pending: null };
+      this.dashboard = null;
+      this.lastChain = null;
+      this.candles = [];
+    }
+    this.config = next;
     await this.store.save(this.state, this.config);
     this.syncTimer();
   }
 
-  /** Current premium of a strike from the latest chain. */
-  premium(direction: 'CE' | 'PE', strike: number): number | null {
+  /** Current price of what a direction trades: the option premium, or the future itself. */
+  premium(direction: Direction, strike: number): number | null {
     if (!this.lastChain) return null;
-    const ltp = legOf(findStrike(this.lastChain, strike), direction)?.ltp ?? 0;
+    if (direction === 'LONG' || direction === 'SHORT') return this.lastChain.spot > 0 ? this.lastChain.spot : null;
+    const ltp = legOf(findStrike(this.lastChain, strike), direction as OptionSide)?.ltp ?? 0;
     return ltp > 0 ? ltp : null;
+  }
+
+  /** Fresh plan for a direction/strike from the latest data (options or futures). */
+  private planFor(direction: Direction, strike: number, atr: number): TradePlan | null {
+    if (!this.lastChain) return null;
+    return direction === 'LONG' || direction === 'SHORT'
+      ? buildFuturesPlan(direction, this.lastChain.spot, atr, this.config)
+      : buildTradePlan(this.lastChain, direction, strike, atr, this.config);
   }
 
   /** Plan a manual ENTER would use now (the dashboard's leading direction + best strike). */
@@ -232,26 +307,28 @@ export class EngineRunner {
     if (!d || !this.lastChain) throw new Error('No market data yet — tap Refresh now first.');
     const gate = canTakeNewTrade(this.state, this.config);
     if (!gate.ok) throw new Error(gate.reason);
-    const plan =
-      d.candidatePlan ??
-      buildTradePlan(this.lastChain, d.decision.direction, d.decision.selectedStrike, d.market.atr, this.config);
+    const plan = d.candidatePlan ?? this.planFor(d.decision.direction, d.decision.selectedStrike, d.market.atr);
     if (!plan || plan.entry <= 0)
-      throw new Error(`No premium for ${d.decision.direction} ${d.decision.selectedStrike}`);
+      throw new Error(`No price for ${d.decision.direction} ${d.decision.selectedStrike || this.config.symbol}`);
     return plan;
   }
 
   /**
-   * Manual ENTER in paper mode. Without a limit (or with a limit at/above the
-   * premium) it fills now at the premium; below the premium it waits as a
-   * pending limit entry that fills on a later refresh.
+   * Manual ENTER in paper mode. Without a limit, or with a limit the market has
+   * already reached (buy: at/above the price; futures short: at/below), it
+   * fills now; otherwise it waits as a pending limit entry for a later refresh.
    */
   async placeEntry(limit?: number) {
     if (this.state.pendingEntry) throw new Error('An entry order is already pending — cancel it first.');
     const plan = this.entryPlan();
     const premium = this.premium(plan.direction, plan.strike) ?? plan.entry;
-    if (limit == null || limit >= premium) return this.manualEnter({ plan, entry: premium });
-    validateLimit(limit);
-    this.state = { ...this.state, pendingEntry: { plan, limit: roundTick(limit), placedAt: this.clock() } };
+    const side = sideOf(plan.direction);
+    if (limit == null || side * (limit - premium) >= 0) return this.manualEnter({ plan, entry: premium });
+    validateLimit(limit, this.config.tickSize);
+    this.state = {
+      ...this.state,
+      pendingEntry: { plan, limit: roundTick(limit, this.config.tickSize), placedAt: this.clock() },
+    };
     await this.store.save(this.state, this.config);
     return null;
   }
@@ -274,7 +351,8 @@ export class EngineRunner {
     if (!pe || pe.live) return;
     if (this.state.position) return this.setPendingEntry(null);
     const premium = this.premium(pe.plan.direction, pe.plan.strike);
-    if (premium != null && premium <= pe.limit) {
+    // Buy fills when the price comes down to the limit; a futures short when it rises to it.
+    if (premium != null && sideOf(pe.plan.direction) * (pe.limit - premium) >= 0) {
       await this.manualEnter({
         plan: pe.plan,
         entry: premium,
@@ -347,13 +425,7 @@ export class EngineRunner {
           signal: 'NO TRADE',
           decisionText: `POSITION CLOSED - ${opts.reason ?? 'MANUAL EXIT'} @ ${price.toFixed(2)}`,
         },
-        candidatePlan: buildTradePlan(
-          this.lastChain,
-          d.decision.direction,
-          d.decision.selectedStrike,
-          d.market.atr,
-          this.config,
-        ),
+        candidatePlan: this.planFor(d.decision.direction, d.decision.selectedStrike, d.market.atr),
         positionLtp: null,
       };
     }
@@ -400,7 +472,7 @@ export class EngineRunner {
   }
 
   marketOpen() {
-    return this.source.alwaysOpen || isWithinMarketHours(this.clock());
+    return this.source.alwaysOpen || isWithinMarketHours(this.clock(), this.config.session);
   }
 
   /** Auto refresh loop (StartAutoRefresh / AutoRefreshTick), gated to market hours. */

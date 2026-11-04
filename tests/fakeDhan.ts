@@ -41,6 +41,72 @@ function goldenIntraday() {
   };
 }
 
+// ---- MCX (commodity futures) --------------------------------------------------
+
+/** Gold Mini contracts the fake instrument list knows (detailed-format CSV, as /v2/instrument/MCX_COMM). */
+export const MCX_CONTRACTS = [
+  { id: '445566', symbol: 'GOLDM', trading: 'GOLDM-Nov2026-FUT', expiry: '2026-11-05', tick: 1 },
+  { id: '445577', symbol: 'GOLDM', trading: 'GOLDM-Dec2026-FUT', expiry: '2026-12-04', tick: 1 },
+  { id: '445588', symbol: 'GOLDM', trading: 'GOLDM-Jan2027-FUT', expiry: '2027-01-05', tick: 1 },
+  { id: '778899', symbol: 'LEADMINI', trading: 'LEADMINI-Nov2026-FUT', expiry: '2026-11-28', tick: 0.05 },
+];
+
+function mcxInstrumentCsv() {
+  const head =
+    'EXCH_ID,SEGMENT,SECURITY_ID,ISIN,INSTRUMENT,UNDERLYING_SECURITY_ID,UNDERLYING_SYMBOL,SYMBOL_NAME,DISPLAY_NAME,INSTRUMENT_TYPE,SERIES,LOT_SIZE,SM_EXPIRY_DATE,STRIKE_PRICE,OPTION_TYPE,TICK_SIZE,EXPIRY_FLAG';
+  const rows = MCX_CONTRACTS.map(
+    (c) =>
+      `MCX,M,${c.id},NA,FUTCOM,1,${c.symbol},${c.trading},${c.symbol} FUT,FUT,NA,1.0,${c.expiry} 23:59:00,0.00000,XX,${c.tick},M`,
+  );
+  // An option row and another exchange's row that must be ignored.
+  rows.push(
+    'MCX,M,999001,NA,OPTFUT,1,GOLDM,GOLDM-Dec2026-120000-CE,GOLDM CE,OP,NA,1.0,2026-11-25 23:59:00,120000.00000,CE,0.5,M',
+  );
+  rows.push(
+    'NSE,D,35000,NA,FUTIDX,13,NIFTY,NIFTY-Nov2026-FUT,NIFTY FUT,FUT,NA,65.0,2026-11-24 14:30:00,0.00000,XX,0.05,M',
+  );
+  return [head, ...rows].join('\n');
+}
+
+/**
+ * Gold Mini 5-min candles: three sessions trending DOWN with rising open interest
+ * (short buildup) — the futures model should favour SHORT.
+ */
+function mcxCandles(securityId: string) {
+  const base = securityId === '778899' ? 180 : 120000;
+  const step = base * 0.0004;
+  const out = {
+    open: [] as number[],
+    high: [] as number[],
+    low: [] as number[],
+    close: [] as number[],
+    volume: [] as number[],
+    open_interest: [] as number[],
+    timestamp: [] as number[],
+  };
+  let price = base;
+  let oi = 20000;
+  for (let day = 0; day < 3; day++) {
+    const start = Date.UTC(2026, 9, 28 + day, 3, 30) / 1000; // 09:00 IST
+    for (let i = 0; i < 75; i++) {
+      const o = price;
+      const wobble = ((i * 7919) % 13) / 13 - 0.35; // deterministic noise, net down
+      const c = o - step * (0.6 + wobble);
+      out.open.push(o);
+      out.close.push(c);
+      out.high.push(Math.max(o, c) + step * 0.3);
+      out.low.push(Math.min(o, c) - step * 0.3);
+      out.volume.push(1000 + ((i * 31) % 17) * 40 + (i === 74 ? 2500 : 0));
+      oi += 35;
+      out.open_interest.push(oi);
+      out.timestamp.push(start + i * 300);
+      price = c;
+    }
+  }
+  return out;
+}
+const mcxLast = (securityId: string) => mcxCandles(securityId).close.at(-1)!;
+
 /** Premium of a golden-chain option by the security id goldenChain() assigns. */
 function goldenLtp(securityId: string): number | null {
   const n = Number(securityId);
@@ -94,6 +160,7 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
   };
   const ltpOf = (seg: string, id: string) => {
     if (seg === 'IDX_I') return spot;
+    if (seg === 'MCX_COMM') return mcxLast(id);
     // Golden-chain option ids fill at that chain's own premium.
     const g = goldenLtp(id);
     if (seg === 'NSE_FNO' && g) return g;
@@ -171,6 +238,13 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
           }
         }
         return send(200, { data, status: 'success' });
+      }
+      if (req.method === 'GET' && path === '/instrument/MCX_COMM') {
+        res.writeHead(200, { 'Content-Type': 'text/csv', 'Access-Control-Allow-Origin': '*' });
+        return res.end(mcxInstrumentCsv());
+      }
+      if (req.method === 'POST' && path === '/charts/intraday' && body.exchangeSegment === 'MCX_COMM') {
+        return send(200, mcxCandles(String(body.securityId)));
       }
       if (req.method === 'POST' && path === '/charts/intraday' && Number(body.interval) === 5) {
         return send(200, goldenIntraday());

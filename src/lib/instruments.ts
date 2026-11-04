@@ -31,12 +31,15 @@ export const NIFTY_BASE = 26000;
  * verify against the latest NSE circular before relying on this.
  */
 export const NIFTY_LOT_SIZE = 65;
-let niftyLot = NIFTY_LOT_SIZE;
-/** Override the lot size at runtime (the Dhan server reports the current one from the scrip master). */
-export const setNiftyLotSize = (n: number) => {
-  if (Number.isInteger(n) && n > 0) niftyLot = n;
+/** Option lot sizes per underlying (NSE revises these; the engine settings override them). */
+const optionLots: Record<string, number> = { NIFTY: NIFTY_LOT_SIZE, BANKNIFTY: 30, FINNIFTY: 60 };
+/** Override a lot size at runtime (scrip master / engine settings). */
+export const setOptionLotSize = (underlying: string, n: number) => {
+  if (Number.isInteger(n) && n > 0) optionLots[underlying] = n;
 };
-export const niftyLotSize = () => niftyLot;
+export const setNiftyLotSize = (n: number) => setOptionLotSize('NIFTY', n);
+export const niftyLotSize = () => optionLots.NIFTY;
+export const optionLotSize = (underlying: string) => optionLots[underlying] ?? optionLots.NIFTY;
 
 /** Dhan identifiers for the NIFTY 50 index (segment IDX_I). */
 export const NIFTY_DHAN_ID = '13';
@@ -65,7 +68,8 @@ export const EQUITIES: EquityDef[] = [
 export const equityId = (symbol: string) => `NSE:${symbol}`;
 
 export interface OptionContract {
-  underlying: 'NIFTY';
+  /** NIFTY, BANKNIFTY, FINNIFTY … */
+  underlying: string;
   /** Expiry date, YYYY-MM-DD (IST). */
   expiry: string;
   strike: number;
@@ -76,12 +80,12 @@ export const optionId = (c: OptionContract) => `NFO:${c.underlying}:${c.expiry}:
 
 export function parseOptionId(id: string): OptionContract | null {
   const parts = id.split(':');
-  if (parts.length !== 5 || parts[0] !== 'NFO' || parts[1] !== 'NIFTY') return null;
+  if (parts.length !== 5 || parts[0] !== 'NFO' || !/^[A-Z]+$/.test(parts[1])) return null;
   const strike = Number(parts[3]);
   const type = parts[4];
   if (!Number.isFinite(strike) || (type !== 'CE' && type !== 'PE')) return null;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(parts[2])) return null;
-  return { underlying: 'NIFTY', expiry: parts[2], strike, type };
+  return { underlying: parts[1], expiry: parts[2], strike, type };
 }
 
 export interface ExternalRef {
@@ -111,7 +115,7 @@ export function displayName(id: string): string {
   const opt = parseOptionId(id);
   if (opt) {
     const [, m, d] = opt.expiry.split('-').map(Number);
-    return `NIFTY ${d} ${MONTHS[m - 1]} ${opt.strike} ${opt.type}`;
+    return `${opt.underlying} ${d} ${MONTHS[m - 1]} ${opt.strike} ${opt.type}`;
   }
   const ext = parseExternalId(id);
   if (ext) return ext.symbol;
@@ -120,7 +124,8 @@ export function displayName(id: string): string {
 
 /** Units per 1 quantity step. Options trade in lots. */
 export function lotSize(id: string): number {
-  return kindOf(id) === 'OPTION' ? niftyLot : 1;
+  const opt = parseOptionId(id);
+  return opt ? optionLotSize(opt.underlying) : 1;
 }
 
 export const isTradeable = (id: string) => kindOf(id) !== 'INDEX';

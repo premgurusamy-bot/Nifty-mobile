@@ -82,8 +82,15 @@ export default function JournalScreen() {
           [...journal].reverse().map((j) => (
             <Card key={j.id} style={{ gap: 6 }}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Text style={[ui.title, { color: j.direction === 'CE' ? colors.up : colors.down }]}>
-                  BUY {j.direction} {j.strike}
+                <Text
+                  style={[
+                    ui.title,
+                    { color: j.direction === 'CE' || j.direction === 'LONG' ? colors.up : colors.down },
+                  ]}
+                >
+                  {j.direction === 'LONG' || j.direction === 'SHORT'
+                    ? `${j.direction === 'LONG' ? 'BUY' : 'SELL'} ${j.symbol ?? ''}`
+                    : `${j.symbol && j.symbol !== 'NIFTY' ? `${j.symbol} ` : ''}BUY ${j.direction} ${j.strike}`}
                 </Text>
                 <Text
                   style={{

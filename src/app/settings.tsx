@@ -1,8 +1,19 @@
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { isIPv4 } from '../../server/preflight.ts';
 import { isLocalApi } from '../api/localApi';
 import { PreflightList, type PreflightView } from '../components/engine';
+import { CATALOG, catalogEntry, sessionLabel } from '../lib/engine/catalog';
 import { Button, Card, Segmented, styles as ui } from '../components/ui';
 import type { EngineConfig } from '../lib/engine/types';
 import { useEngine } from '../state/EngineContext';
@@ -20,21 +31,54 @@ type NumKey =
   | 'maxDailyLoss'
   | 'refreshSeconds'
   | 'strikeInterval'
-  | 'underlyingSecurityId';
+  | 'underlyingSecurityId'
+  | 'pointValue'
+  | 'tickSize'
+  | 'maxLots'
+  | 'rollDays';
 
-const FIELDS: [NumKey, string][] = [
+/** Strategy / discipline settings — shared by every instrument. */
+const ENGINE_FIELDS: [NumKey, string][] = [
   ['confHigh', 'High confidence threshold (trade)'],
   ['confWatch', 'Watch threshold (wait for confirmation)'],
   ['rrTarget', 'Risk:Reward target'],
   ['maxRisk', 'Max risk per trade (₹)'],
-  ['lotSize', 'Lot size'],
   ['atrMult', 'ATR multiplier for stop loss'],
   ['maxTradesPerDay', 'Daily trade limit'],
   ['maxDailyLoss', 'Daily max loss (₹, 0 = no limit)'],
   ['refreshSeconds', 'Auto-refresh interval (sec, min 15)'],
-  ['strikeInterval', 'Strike interval (points)'],
-  ['underlyingSecurityId', 'Underlying security id'],
 ];
+
+/** Contract settings — loaded from the catalog when you pick an instrument, editable. */
+const OPTION_FIELDS: [NumKey, string][] = [
+  ['lotSize', 'Lot size (units per lot)'],
+  ['strikeInterval', 'Strike interval (points)'],
+  ['maxLots', 'Max lots per trade (0 = no cap)'],
+  ['underlyingSecurityId', 'Index security id (Dhan)'],
+];
+const FUTURES_FIELDS: [NumKey, string][] = [
+  ['pointValue', '₹ per 1.00 price move, per lot'],
+  ['tickSize', 'Tick size'],
+  ['maxLots', 'Max lots per trade (0 = no cap)'],
+  ['rollDays', 'Roll to next month this many days before expiry'],
+];
+const FIELDS: [NumKey, string][] = [...ENGINE_FIELDS, ...OPTION_FIELDS, ...FUTURES_FIELDS];
+
+const INDEXES = CATALOG.filter((c) => c.kind === 'INDEX_OPTIONS');
+const MCX = CATALOG.filter((c) => c.kind === 'MCX_FUTURES');
+
+function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      style={[s.chip, active && s.chipActive]}
+    >
+      <Text style={[s.chipText, active && { color: colors.text }]}>{label}</Text>
+    </Pressable>
+  );
+}
 
 function Field({
   label,
@@ -97,12 +141,14 @@ export default function SettingsScreen() {
 
   // Reload the form only when the saved settings change — the server sends a fresh
   // config object every poll, which must not wipe edits in progress.
+  const [futId, setFutId] = useState('');
   const cfgKey = cfg ? JSON.stringify(cfg) : '';
   const [loadedKey, setLoadedKey] = useState('');
   if (cfg && cfgKey !== loadedKey) {
     setLoadedKey(cfgKey);
     setDraft(Object.fromEntries(FIELDS.map(([k]) => [k, String(cfg[k])])));
     setExpiry(cfg.expiry);
+    setFutId(cfg.futSecurityId);
   }
 
   const [ip, setIp] = useState(settings.staticIp);
@@ -149,20 +195,39 @@ export default function SettingsScreen() {
     }
   };
 
-  const save = async (extra: Partial<EngineConfig> = {}) => {
-    setCfgMsg(null);
+  const save = async (extra: Partial<EngineConfig> = {}, report: (m: string | null) => void = setCfgMsg) => {
+    report(null);
     const patch: Partial<EngineConfig> = { expiry, ...extra };
+    if (cfg && futId.trim() !== cfg.futSecurityId) {
+      // Manual contract override: the engine uses this id until you clear it (then it auto-resolves again).
+      Object.assign(patch, {
+        futSecurityId: futId.trim(),
+        futExpiry: '',
+        futTradingSymbol: futId.trim() ? `${cfg.symbol} (id ${futId.trim()})` : '',
+      });
+    }
     for (const [k] of FIELDS) {
       const n = Number(draft[k]);
-      if (!Number.isFinite(n)) return setCfgMsg(`Invalid number for ${k}`);
+      if (!Number.isFinite(n)) return report(`Invalid number for ${k}`);
       (patch as Record<string, number>)[k] = n;
     }
     try {
       await updateConfig(patch);
-      setCfgMsg('Saved');
+      report('Saved');
     } catch (e) {
-      setCfgMsg((e as Error).message);
+      report((e as Error).message);
     }
+  };
+
+  const [instMsg, setInstMsg] = useState<string | null>(null);
+  const cur = cfg ? catalogEntry(cfg.symbol) : null;
+  const isFut = cfg?.instrumentKind === 'MCX_FUTURES';
+  const pick = (symbol: string) => {
+    if (!cfg || symbol === cfg.symbol) return;
+    setInstMsg(null);
+    updateConfig({ symbol })
+      .then(() => setInstMsg(null))
+      .catch((e) => setInstMsg((e as Error).message));
   };
 
   return (
@@ -210,6 +275,74 @@ export default function SettingsScreen() {
             />
           ) : null}
         </Card>
+
+        {cfg ? (
+          <Card style={{ gap: 12 }}>
+            <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Instrument</Text>
+            <Text style={s.label}>Index options (the Excel option-buying system)</Text>
+            <View style={s.chips}>
+              {INDEXES.map((c) => (
+                <Chip key={c.symbol} label={c.label} active={cfg.symbol === c.symbol} onPress={() => pick(c.symbol)} />
+              ))}
+            </View>
+            <Text style={s.label}>MCX futures — mini contracts (long / short)</Text>
+            <View style={s.chips}>
+              {MCX.map((c) => (
+                <Chip key={c.symbol} label={c.label} active={cfg.symbol === c.symbol} onPress={() => pick(c.symbol)} />
+              ))}
+            </View>
+            {cur ? (
+              <Text style={ui.muted}>
+                {cur.label} · {cur.kind === 'MCX_FUTURES' ? 'futures' : 'options'} · {cur.unit} ·{' '}
+                {sessionLabel(cur.session)}
+              </Text>
+            ) : null}
+            {isFut ? (
+              <View style={{ gap: 4 }}>
+                <Text style={s.label}>Current contract</Text>
+                <Text style={ui.title}>
+                  {cfg.futTradingSymbol || 'Resolved on the next refresh from Dhan’s instrument list'}
+                </Text>
+                {cfg.futSecurityId ? (
+                  <Text style={ui.muted}>
+                    Security id {cfg.futSecurityId}
+                    {cfg.futExpiry ? ` · expiry ${cfg.futExpiry}` : ''} · quantity is sent in lots
+                  </Text>
+                ) : null}
+              </View>
+            ) : (
+              <Field
+                label="Expiry (YYYY-MM-DD, blank = nearest)"
+                value={expiry}
+                onChange={setExpiry}
+                keyboard="default"
+              />
+            )}
+            {(isFut ? FUTURES_FIELDS : OPTION_FIELDS).map(([k, label]) => (
+              <Field
+                key={k}
+                label={label}
+                value={draft[k] ?? ''}
+                onChange={(v) => setDraft((d) => ({ ...d, [k]: v }))}
+              />
+            ))}
+            {isFut ? (
+              <Field
+                label="Contract security id (optional — only if auto-resolve fails)"
+                value={futId}
+                onChange={setFutId}
+                keyboard="decimal-pad"
+              />
+            ) : null}
+            <Text style={[ui.muted, { fontSize: 12 }]}>
+              Values come from the instrument list above when you pick it; check them against the exchange
+              {isFut ? ' (MCX contract specs)' : ' (NSE lot sizes change)'} and edit if needed. Switching is blocked
+              while a trade or entry order is open; each instrument keeps its own IV history.
+            </Text>
+            {instMsg ? <Text style={{ color: instMsg === 'Saved' ? colors.up : colors.down }}>{instMsg}</Text> : null}
+            <Button label="Save instrument settings" onPress={() => void save({}, setInstMsg)} />
+          </Card>
+        ) : null}
 
         <Card style={{ gap: 12 }}>
           <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Static IP (for LIVE orders)</Text>
@@ -268,23 +401,7 @@ export default function SettingsScreen() {
             <Text style={[ui.sectionTitle, { marginTop: 0 }]}>
               Engine settings {snap?.demo ? '(demo)' : settings.connection === 'DIRECT' ? '(this phone)' : '(server)'}
             </Text>
-            <Text style={s.label}>Underlying</Text>
-            <Segmented
-              options={['NIFTY', 'BANKNIFTY', 'FINNIFTY'].map((v) => ({ label: v, value: v }))}
-              value={cfg.symbol}
-              onChange={(v) => void updateConfig({ symbol: v }).catch((e) => setCfgMsg(e.message))}
-            />
-            <Text style={ui.muted}>
-              Presets fill security id / segment / strike interval (13·IDX_I·50, 25·IDX_I·100, 27·IDX_I·50). Set the lot
-              size for the index you choose.
-            </Text>
-            <Field
-              label="Expiry (YYYY-MM-DD, blank = nearest)"
-              value={expiry}
-              onChange={setExpiry}
-              keyboard="default"
-            />
-            {FIELDS.map(([k, label]) => (
+            {ENGINE_FIELDS.map(([k, label]) => (
               <Field
                 key={k}
                 label={label}
@@ -318,4 +435,15 @@ const s = StyleSheet.create({
     paddingVertical: 10,
   },
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: colors.cardAlt,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  chipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  chipText: { color: colors.muted, fontWeight: '600', fontSize: 13 },
 });

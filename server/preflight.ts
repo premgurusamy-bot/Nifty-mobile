@@ -2,6 +2,7 @@
  * Pre-flight check before live trading from the phone.
  * No Node-only imports: runs inside the app.
  */
+import { catalogEntry, sessionLabel } from '../src/lib/engine/catalog.ts';
 import { isWithinMarketHours } from '../src/lib/engine/decision.ts';
 import type { EngineConfig } from '../src/lib/engine/types.ts';
 import { NIFTY_DHAN_ID } from '../src/lib/instruments.ts';
@@ -78,35 +79,57 @@ export async function runPreflight(d: PreflightDeps): Promise<PreflightResult> {
     'Access token',
   );
 
-  await safe(
-    async () => {
-      const q = await d.dhan.quote({ IDX_I: [Number(NIFTY_DHAN_ID)] });
-      const lp = q?.data?.IDX_I?.[NIFTY_DHAN_ID]?.last_price;
-      if (!lp) throw new Error('No NIFTY price returned (check your Dhan data plan)');
-      add('data', 'Live market data', 'pass', `NIFTY ${lp}`);
-    },
-    'data',
-    'Live market data',
-  );
+  const cfg = d.config;
+  const futures = cfg.instrumentKind === 'MCX_FUTURES';
+  const entry = catalogEntry(cfg.symbol);
 
-  await safe(
-    async () => {
-      const today = new Date(now + 5.5 * 3600_000).toISOString().slice(0, 10);
-      const exp = mapExpiries(await d.dhan.expiryList(Number(NIFTY_DHAN_ID), 'IDX_I')).filter((e) => e >= today)[0];
-      if (!exp) throw new Error('No upcoming expiry returned');
-      const chain = mapEngineChain(await d.dhan.optionChain(Number(NIFTY_DHAN_ID), 'IDX_I', exp), exp);
-      const greeks = chain.strikes.some((s) => s.ce?.delta || s.pe?.delta);
-      if (!chain.strikes.length) throw new Error(`Empty option chain for ${exp}`);
-      add(
-        'chain',
-        'Option chain + Greeks',
-        greeks ? 'pass' : 'warn',
-        `${exp}: ${chain.strikes.length} strikes${greeks ? '' : ', no Greeks'}`,
-      );
-    },
-    'chain',
-    'Option chain + Greeks',
-  );
+  if (futures) {
+    await safe(
+      async () => {
+        if (!cfg.futSecurityId) throw new Error(`No ${cfg.symbol} contract yet — tap Refresh now on the Dashboard`);
+        const q = await d.dhan.quote({ MCX_COMM: [Number(cfg.futSecurityId)] });
+        const lp = q?.data?.MCX_COMM?.[cfg.futSecurityId]?.last_price;
+        if (!lp) throw new Error(`No price for ${cfg.futTradingSymbol || cfg.symbol} (check your MCX data plan / segment activation)`);
+        add('data', 'Live futures price', 'pass', `${cfg.futTradingSymbol || cfg.symbol} ${lp} · expiry ${cfg.futExpiry || '—'}`);
+      },
+      'data',
+      'Live futures price',
+    );
+  } else {
+    await safe(
+      async () => {
+        const id = String(cfg.underlyingSecurityId || NIFTY_DHAN_ID);
+        const seg = cfg.underlyingSegment || 'IDX_I';
+        const q = await d.dhan.quote({ [seg]: [Number(id)] });
+        const lp = q?.data?.[seg]?.[id]?.last_price;
+        if (!lp) throw new Error(`No ${cfg.symbol} price returned (check your Dhan data plan)`);
+        add('data', 'Live market data', 'pass', `${cfg.symbol} ${lp}`);
+      },
+      'data',
+      'Live market data',
+    );
+
+    await safe(
+      async () => {
+        const today = new Date(now + 5.5 * 3600_000).toISOString().slice(0, 10);
+        const sid = cfg.underlyingSecurityId || Number(NIFTY_DHAN_ID);
+        const seg = cfg.underlyingSegment || 'IDX_I';
+        const exp = cfg.expiry || mapExpiries(await d.dhan.expiryList(sid, seg)).filter((e) => e >= today)[0];
+        if (!exp) throw new Error('No upcoming expiry returned');
+        const chain = mapEngineChain(await d.dhan.optionChain(sid, seg, exp), exp);
+        const greeks = chain.strikes.some((s) => s.ce?.delta || s.pe?.delta);
+        if (!chain.strikes.length) throw new Error(`Empty option chain for ${exp}`);
+        add(
+          'chain',
+          'Option chain + Greeks',
+          greeks ? 'pass' : 'warn',
+          `${cfg.symbol} ${exp}: ${chain.strikes.length} strikes${greeks ? '' : ', no Greeks'}`,
+        );
+      },
+      'chain',
+      'Option chain + Greeks',
+    );
+  }
 
   await safe(
     async () => {
@@ -166,9 +189,13 @@ export async function runPreflight(d: PreflightDeps): Promise<PreflightResult> {
 
   add(
     'symbol',
-    'Underlying',
-    d.config.symbol === 'NIFTY' ? 'pass' : 'fail',
-    d.config.symbol === 'NIFTY' ? `NIFTY, lot ${d.config.lotSize}` : 'Live trading supports NIFTY options only',
+    'Instrument',
+    entry ? 'pass' : 'fail',
+    entry
+      ? futures
+        ? `${entry.label} futures · qty in lots · ₹${cfg.pointValue} per point per lot · tick ${cfg.tickSize}${cfg.maxLots ? ` · max ${cfg.maxLots} lot(s)` : ''}`
+        : `${entry.label} options · lot ${cfg.lotSize} · strike step ${cfg.strikeInterval}`
+      : `${cfg.symbol} isn't a supported instrument`,
   );
   add(
     'product',
@@ -176,12 +203,8 @@ export async function runPreflight(d: PreflightDeps): Promise<PreflightResult> {
     'pass',
     d.config.liveProduct === 'INTRADAY' ? 'Intraday (Dhan squares off before close)' : 'Carry forward (NRML)',
   );
-  add(
-    'hours',
-    'Market hours',
-    isWithinMarketHours(now) ? 'pass' : 'warn',
-    isWithinMarketHours(now) ? 'Open' : 'Market closed — orders will be rejected until 09:15 IST',
-  );
+  const open = isWithinMarketHours(now, cfg.session);
+  add('hours', 'Market hours', open ? 'pass' : 'warn', open ? `Open · ${sessionLabel(cfg.session, now)}` : `Closed — ${sessionLabel(cfg.session, now)}`);
 
   return { at: now, ok: !items.some((i) => i.status === 'fail'), items, publicIp, whitelisted };
 }

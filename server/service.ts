@@ -13,6 +13,7 @@ import {
   NIFTY_LOT_SIZE,
   equityId,
   kindOf,
+  lotSize,
   parseExternalId,
   parseOptionId,
 } from '../src/lib/instruments.ts';
@@ -37,6 +38,21 @@ import {
   type Resolver,
 } from './mapping.ts';
 import type { ScripMaster } from './scripMaster.ts';
+
+/** An option underlying (index) as Dhan identifies it. */
+export interface Underlying {
+  symbol: string;
+  securityId: number;
+  segment: string;
+}
+
+export const NIFTY_UNDERLYING: Underlying = { symbol: 'NIFTY', securityId: Number(NIFTY_DHAN_ID), segment: 'IDX_I' };
+const INDEX_UNDERLYINGS: Record<string, Underlying> = {
+  NIFTY: NIFTY_UNDERLYING,
+  BANKNIFTY: { symbol: 'BANKNIFTY', securityId: 25, segment: 'IDX_I' },
+  FINNIFTY: { symbol: 'FINNIFTY', securityId: 27, segment: 'IDX_I' },
+};
+export const underlyingFor = (symbol: string): Underlying => INDEX_UNDERLYINGS[symbol] ?? NIFTY_UNDERLYING;
 
 export class HttpError extends Error {
   status: number;
@@ -236,19 +252,21 @@ export class DhanService implements Resolver {
   }
 
   // ---- Options -------------------------------------------------------------------
-  expiries(): Promise<string[]> {
-    return this.cached('expiries', 30 * 60_000, async () => {
+  expiries(u: Underlying = NIFTY_UNDERLYING): Promise<string[]> {
+    return this.cached(`expiries:${u.symbol}`, 30 * 60_000, async () => {
       const today = istDateString(Date.now());
-      return mapExpiries(await this.dhan.expiryList(Number(NIFTY_DHAN_ID), 'IDX_I')).filter((e) => e >= today);
+      return mapExpiries(await this.dhan.expiryList(u.securityId, u.segment)).filter((e) => e >= today);
     });
   }
 
-  optionChain(expiry: string): Promise<OptionChainResponse> {
+  optionChain(expiry: string, u: Underlying = NIFTY_UNDERLYING): Promise<OptionChainResponse> {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(expiry)) throw new HttpError(400, 'expiry must be YYYY-MM-DD');
-    return this.cached(`chain:${expiry}`, 3000, async () => {
+    return this.cached(`chain:${u.symbol}:${expiry}`, 3000, async () => {
       const { spot, rows, securityIds } = mapOptionChain(
-        await this.dhan.optionChain(Number(NIFTY_DHAN_ID), 'IDX_I', expiry),
+        await this.dhan.optionChain(u.securityId, u.segment, expiry),
         expiry,
+        10,
+        u.symbol,
       );
       for (const [id, sid] of securityIds) this.remember(id, { segment: 'NSE_FNO', securityId: sid });
       // Seed quotes so option prices are available immediately to position/order screens.
@@ -302,7 +320,7 @@ export class DhanService implements Resolver {
     if (kindOf(instrumentId) === 'INDEX') throw new HttpError(400, 'The index is not tradeable');
     const opt = parseOptionId(instrumentId);
     if (opt) {
-      const lot = this.scrip?.niftyLotSize ?? NIFTY_LOT_SIZE;
+      const lot = opt.underlying === 'NIFTY' ? (this.scrip?.niftyLotSize ?? lotSize(instrumentId)) : lotSize(instrumentId);
       if (qty % lot !== 0) throw new HttpError(400, `Quantity must be a multiple of lot size ${lot}`);
     }
     let price = 0;
@@ -354,7 +372,7 @@ export class DhanService implements Resolver {
   private async learnOption(id: string): Promise<InstrumentRef | null> {
     const opt = parseOptionId(id);
     if (!opt) return null;
-    await this.optionChain(opt.expiry);
+    await this.optionChain(opt.expiry, underlyingFor(opt.underlying));
     return this.learned.get(id) ?? null;
   }
 

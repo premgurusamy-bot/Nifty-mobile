@@ -16,7 +16,7 @@ import { DhanClient } from '../../server/dhan.ts';
 import { DhanEngineSource } from '../../server/engineSource.ts';
 import { LiveTrader } from '../../server/liveTrader.ts';
 import { extractIps, isIPv4, runPreflight, type PreflightResult } from '../../server/preflight.ts';
-import { DhanService } from '../../server/service.ts';
+import { DhanService, underlyingFor } from '../../server/service.ts';
 import { TokenKeeper } from '../../server/tokenKeeper.ts';
 import type { StatusResponse } from '../lib/apiTypes';
 import { EngineRunner, type EngineSnapshot, type EngineStore } from '../lib/engine/runner.ts';
@@ -97,8 +97,19 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
       return { quotes };
     },
     intraday: async (id) => ({ points: await service.intraday(id) }),
-    expiries: async () => ({ expiries: await service.expiries() }),
-    optionChain: (expiry) => service.optionChain(expiry),
+    // The Option Chain tab follows the selected index; MCX futures have no option chain here.
+    expiries: async () => {
+      if (engine.config.instrumentKind === 'MCX_FUTURES') return { expiries: [] };
+      return { expiries: await service.expiries(underlyingFor(engine.config.symbol)) };
+    },
+    optionChain: async (expiry) => {
+      if (engine.config.instrumentKind === 'MCX_FUTURES') {
+        throw new Error(
+          `${engine.config.symbol} is traded as a future — no option chain. Pick an index in Settings to view one.`,
+        );
+      }
+      return service.optionChain(expiry, underlyingFor(engine.config.symbol));
+    },
     portfolio: () => service.portfolio(),
     orders: () => service.orders(),
     placeOrder: async (body) => {

@@ -24,10 +24,14 @@ import type {
   Leg,
   LiveLegs,
   OpenPosition,
+  OptionSide,
   ScoreBreakdown,
   Signal,
   TradePlan,
 } from './types.ts';
+import { FACTOR_LABELS, sideOf } from './types.ts';
+import { sessionOpen, type Session } from './catalog.ts';
+import { evaluateFutures, buildFuturesPlan } from './futures.ts';
 
 const IV_HISTORY_MAX = 20000;
 const EVENTS_MAX = 100;
@@ -41,13 +45,9 @@ export const istTime = (ms: number) => {
 };
 const fmt2 = (n: number) => n.toFixed(2);
 
-/** Mon-Fri 09:15-15:30 IST (IsWithinMarketHours; holidays not modelled). */
-export function isWithinMarketHours(ms: number): boolean {
-  const d = ist(ms);
-  const wd = d.getUTCDay();
-  if (wd === 0 || wd === 6) return false;
-  const mins = d.getUTCHours() * 60 + d.getUTCMinutes();
-  return mins >= 9 * 60 + 15 && mins <= 15 * 60 + 30;
+/** Is the session open? NSE Mon-Fri 09:15-15:30 IST; MCX 09:00-23:30/23:55 (holidays not modelled). */
+export function isWithinMarketHours(ms: number, session: Session = 'NSE'): boolean {
+  return sessionOpen(ms, session);
 }
 
 // ---------------------------------------------------------------- state helpers
@@ -121,7 +121,7 @@ function scoreIV(history: number[], iv: number): number {
 // ---------------------------------------------------------------- scoring
 
 /** SelectBestStrike: ATM and the next 2 OTM strikes, best delta-fit / IV / liquidity. */
-export function selectBestStrike(chain: ChainSnapshot, dir: Direction, atm: number, interval: number): number {
+export function selectBestStrike(chain: ChainSnapshot, dir: OptionSide, atm: number, interval: number): number {
   if (!chain.strikes.length) return atm;
   const sign = dir === 'CE' ? 1 : -1;
   let best = atm;
@@ -158,7 +158,7 @@ export interface ScoreInputs {
 }
 
 /** ScoreDirection: 10 factors, total 0-105. */
-export function scoreDirection(dir: Direction, x: ScoreInputs): { total: number; breakdown: ScoreBreakdown } {
+export function scoreDirection(dir: OptionSide, x: ScoreInputs): { total: number; breakdown: ScoreBreakdown } {
   const bull = dir === 'CE';
   const emaState =
     x.ema20 > x.ema50 && x.spot > x.ema20 ? 'BULLISH' : x.ema20 < x.ema50 && x.spot < x.ema20 ? 'BEARISH' : 'SIDEWAYS';
@@ -210,6 +210,7 @@ export function buildTradePlan(
   atr: number,
   cfg: EngineConfig,
 ): TradePlan | null {
+  if (dir === 'LONG' || dir === 'SHORT') return null;
   const leg = legOf(findStrike(chain, strike), dir);
   if (!leg) return null;
   const entry = leg.ltp;
@@ -219,7 +220,8 @@ export function buildTradePlan(
   const sl = Math.max(entry - riskPts, 0.05);
   const target1 = entry + riskPts * cfg.rrTarget;
   const target2 = entry + riskPts * cfg.rrTarget * 1.5;
-  const lots = Math.max(1, Math.floor(cfg.maxRisk / (riskPts * cfg.lotSize)));
+  let lots = Math.max(1, Math.floor(cfg.maxRisk / (riskPts * cfg.lotSize)));
+  if (cfg.maxLots > 0) lots = Math.min(lots, cfg.maxLots);
   const qty = lots * cfg.lotSize;
   return {
     strike,
@@ -239,6 +241,16 @@ export function buildTradePlan(
 
 // ---------------------------------------------------------------- position management
 
+const sideP = (p: OpenPosition) => p.side ?? 1;
+const pvP = (p: OpenPosition) => p.pointValue ?? 1;
+
+/** "PE 24200" for options, "SHORT GOLDM" for futures. */
+export function positionLabel(p: { direction: Direction; strike: number; symbol?: string }) {
+  return p.direction === 'LONG' || p.direction === 'SHORT'
+    ? `${p.direction} ${p.symbol ?? ''}`.trim()
+    : `${p.direction} ${p.strike}`;
+}
+
 function journalRow(s: EngineState, id: string) {
   return s.journal.find((j) => j.id === id);
 }
@@ -252,7 +264,7 @@ function finalize(
   reason: string,
   now: number,
 ) {
-  const legPnl = (exitPrice - p.entry) * legQty;
+  const legPnl = sideP(p) * (exitPrice - p.entry) * legQty * pvP(p);
   const total = legPnl + booked;
   const j = journalRow(s, p.journalId);
   if (j) {
@@ -266,7 +278,7 @@ function finalize(
     s,
     {
       kind: 'EXIT',
-      message: `${p.direction} ${p.strike} closed - ${reason} at ${fmt2(exitPrice)}, P&L Rs ${fmt2(total)}`,
+      message: `${positionLabel(p)} closed - ${reason} at ${fmt2(exitPrice)}, P&L Rs ${fmt2(total)}`,
     },
     now,
   );
@@ -280,19 +292,23 @@ function finalize(
 export function checkAndCloseIfHit(s: EngineState, ltp: number, cfg: EngineConfig, now: number): boolean {
   const p = s.position;
   if (!p || ltp <= 0) return false;
+  const side = sideP(p);
+  // "reached" in the trade's favourable / adverse direction (works for shorts too)
+  const atOrBeyond = (level: number) => side * (ltp - level) >= 0;
+  const stopped = () => side * (ltp - p.currentSl) <= 0;
   if (!p.partialBooked) {
-    if (ltp <= p.currentSl) {
+    if (stopped()) {
       finalize(s, p, p.currentSl, p.totalQty, 0, 'SL HIT (full)', now);
       return true;
     }
-    if (ltp >= p.target1) {
+    if (atOrBeyond(p.target1)) {
       const lotsTotal = cfg.lotSize > 0 ? Math.floor(p.totalQty / cfg.lotSize) : 0;
       if (cfg.lotSize <= 0 || lotsTotal < 2) {
         finalize(s, p, p.target1, p.totalQty, 0, "TARGET 1 HIT (full - only 1 lot, can't split)", now);
         return true;
       }
       const halfQty = Math.floor(lotsTotal / 2) * cfg.lotSize;
-      const booked = (p.target1 - p.entry) * halfQty;
+      const booked = side * (p.target1 - p.entry) * halfQty * pvP(p);
       p.partialBooked = true;
       p.partialQty = halfQty;
       p.partialPnl = booked;
@@ -307,7 +323,7 @@ export function checkAndCloseIfHit(s: EngineState, ltp: number, cfg: EngineConfi
         s,
         {
           kind: 'PARTIAL',
-          message: `${p.direction} ${p.strike} - booked ${halfQty} @ ${fmt2(p.target1)}, rest trailing to breakeven`,
+          message: `${positionLabel(p)} - booked ${halfQty} @ ${fmt2(p.target1)}, rest trailing to breakeven`,
         },
         now,
       );
@@ -315,11 +331,11 @@ export function checkAndCloseIfHit(s: EngineState, ltp: number, cfg: EngineConfi
     }
     return false;
   }
-  if (ltp <= p.currentSl) {
+  if (stopped()) {
     finalize(s, p, p.currentSl, p.remainingQty, p.partialPnl, 'TRAIL SL HIT (remainder)', now);
     return true;
   }
-  if (ltp >= p.target2) {
+  if (atOrBeyond(p.target2)) {
     finalize(s, p, p.target2, p.remainingQty, p.partialPnl, 'TARGET 2 HIT (remainder)', now);
     return true;
   }
@@ -352,12 +368,16 @@ export interface OpenTradeArgs {
  */
 export function openTrade(s: EngineState, cfg: EngineConfig, a: OpenTradeArgs): OpenPosition {
   const shift = a.entry - a.plan.entry;
-  const sl = Math.max(0.05, a.plan.sl + shift);
+  const side = sideOf(a.direction);
+  const futures = a.direction === 'LONG' || a.direction === 'SHORT';
+  // A bought option can't go below 0.05; a futures stop can sit anywhere.
+  const sl = futures ? a.plan.sl + shift : Math.max(0.05, a.plan.sl + shift);
   const target1 = a.plan.target1 + shift;
   const target2 = a.plan.target2 + shift;
   const id = `J${++s.seq}`;
   const row: JournalRow = {
     id,
+    symbol: cfg.symbol,
     date: istDate(a.now),
     time: istTime(a.now),
     spot: a.spot,
@@ -393,13 +413,18 @@ export function openTrade(s: EngineState, cfg: EngineConfig, a: OpenTradeArgs): 
     partialPnl: 0,
     remainingQty: a.qty,
     currentSl: sl,
+    side,
+    pointValue: cfg.pointValue || 1,
+    symbol: cfg.symbol,
     live: a.live,
   };
   pushEvent(
     s,
     {
       kind: 'TRADE',
-      message: `${cfg.symbol} ${a.live ? 'LIVE' : 'signal'}: BUY ${a.direction} ${a.plan.strike} @ ${fmt2(a.entry)}`,
+      message: futures
+        ? `${cfg.symbol} ${a.live ? 'LIVE' : 'signal'}: ${a.direction === 'LONG' ? 'BUY' : 'SELL'} ${cfg.futTradingSymbol || cfg.symbol} × ${a.qty} @ ${fmt2(a.entry)}`
+        : `${cfg.symbol} ${a.live ? 'LIVE' : 'signal'}: BUY ${a.direction} ${a.plan.strike} @ ${fmt2(a.entry)}`,
     },
     a.now,
   );
@@ -428,10 +453,234 @@ export interface RefreshInput {
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x));
 
 /**
+ * The workbook's staged decision (HandleStagedDecision), shared by both models:
+ * below watch → NO TRADE; watch..high → WAIT; ≥ high → discipline gate → arm a
+ * setup on the latest candle → confirm on a break of it → trade (paper) or
+ * offer it to ENTER (live).
+ */
+interface StagedInput {
+  direction: Direction;
+  confidence: number;
+  selectedStrike: number;
+  label: string;
+  candles: Candle[];
+  now: number;
+  spot: number;
+  buySignal: Signal;
+  buildPlan: () => TradePlan | null;
+  journal: { trend: string; pcr: number; oiBias: string; iv: number; delta: number };
+}
+
+function stagedDecision(
+  s: EngineState,
+  cfg: EngineConfig,
+  x: StagedInput,
+): { signal: Signal; decisionText: string; plan: TradePlan | null; opened: boolean } {
+  const { direction, confidence, selectedStrike, label, candles, now, spot } = x;
+  // Setups trigger on a break in the market's direction (CE/LONG up, PE/SHORT down).
+  const bullish = direction === 'CE' || direction === 'LONG';
+  let signal: Signal;
+  let decisionText: string;
+  let plan: TradePlan | null = null;
+  let opened = false;
+
+  if (s.position) {
+    signal = 'IN POSITION';
+    decisionText = 'POSITION OPEN - monitoring for SL/Target';
+    s.pending = null;
+  } else if (confidence < cfg.confWatch) {
+    s.pending = null;
+    signal = 'NO TRADE';
+    decisionText = `NO TRADE (${label})`;
+  } else if (confidence < cfg.confHigh) {
+    signal = 'WAIT';
+    decisionText = `WATCH - CONFIRMATION BUILDING (${label})`;
+  } else {
+    const gate = canTakeNewTrade(s, cfg);
+    if (!gate.ok) {
+      s.blockedReason = gate.reason;
+      signal = 'NO TRADE';
+      decisionText = `BLOCKED - ${gate.reason}`;
+    } else {
+      const last = candles[candles.length - 1];
+      const same = s.pending && s.pending.direction === direction && Math.abs(s.pending.strike - selectedStrike) < 0.01;
+      if (!same) {
+        const trigger = bullish ? last.h : last.l;
+        s.pending = { direction, trigger, strike: selectedStrike, setAt: now };
+        signal = 'WAIT';
+        decisionText = `SETUP ARMED - waiting for break of ${fmt2(trigger)} (${label})`;
+      } else {
+        const trig = s.pending!.trigger;
+        const confirmed = bullish ? last.h > trig : last.l < trig;
+        const key = `${istDate(now)}|${direction}|${selectedStrike}`;
+        if (!confirmed) {
+          signal = 'WAIT';
+          decisionText = `SETUP PENDING - waiting for break of ${fmt2(trig)} (${label})`;
+        } else if (key === s.lastFiredKey) {
+          signal = 'NO TRADE';
+          decisionText = `ALREADY TAKEN TODAY (${positionLabel({ direction, strike: selectedStrike, symbol: cfg.symbol })})`;
+        } else {
+          const tp = x.buildPlan();
+          if (!tp) {
+            signal = 'WAIT';
+            decisionText = `SETUP PENDING - no price for ${positionLabel({ direction, strike: selectedStrike, symbol: cfg.symbol })}`;
+          } else {
+            plan = tp;
+            signal = x.buySignal;
+            decisionText = `TRADE - CONFIRMED BREAK (${label})`;
+            if (cfg.tradeMode === 'LIVE') {
+              // Live mode never trades by itself: the confirmed signal waits for ENTER.
+              decisionText = `SIGNAL CONFIRMED - tap ENTER to trade live (${label})`;
+            } else if (s.pendingEntry) {
+              // Your own limit entry is waiting — don't stack an automatic one on top.
+              decisionText = `SIGNAL CONFIRMED - your limit entry @ ${fmt2(s.pendingEntry.limit)} is pending (${label})`;
+            } else {
+              openTrade(s, cfg, {
+                direction,
+                plan: tp,
+                entry: tp.entry,
+                qty: tp.qty,
+                now,
+                spot,
+                confidence,
+                ...x.journal,
+                // LogSignal runs before the dashboard's decision cell is rewritten, so the
+                // workbook journals the previous cycle's setup text — kept as-is.
+                reason: `Auto-signal: ${s.lastDecisionText || decisionText} | Confidence ${confidence.toFixed(2)}/100`,
+              });
+              opened = true;
+            }
+          }
+        }
+      }
+    }
+  }
+  return { signal, decisionText, plan, opened };
+}
+
+/** One refresh cycle for the selected instrument (options or MCX futures). */
+export function runCycle(
+  prev: EngineState,
+  cfg: EngineConfig,
+  input: RefreshInput,
+): { state: EngineState; dashboard: Dashboard } {
+  return cfg.instrumentKind === 'MCX_FUTURES' ? runFuturesCycle(prev, cfg, input) : runOptionsCycle(prev, cfg, input);
+}
+
+const ZERO_BREAKDOWN: ScoreBreakdown = {
+  emaTrend: 0,
+  vwapPosition: 0,
+  priceAction: 0,
+  oiBias: 0,
+  pcr: 0,
+  deltaFit: 0,
+  ivLevel: 0,
+  gamma: 0,
+  thetaDrag: 0,
+  volume: 0,
+};
+
+/** MCX mini futures: futures model + the shared staged decision; trades the future itself. */
+function runFuturesCycle(
+  prev: EngineState,
+  cfg: EngineConfig,
+  input: RefreshInput,
+): { state: EngineState; dashboard: Dashboard } {
+  const s = clone(prev);
+  const { candles, chain, now } = input;
+  resetIfNewDay(s, now);
+  const tech = computeTechnical(candles);
+  if (!tech) throw new Error('No candle data');
+  const spot = chain.spot || tech.last.close;
+  const ev = evaluateFutures(candles, tech, spot);
+
+  let positionLtp: number | null = null;
+  if (s.position) {
+    positionLtp = spot;
+    checkAndCloseIfHit(s, spot, cfg, now);
+  }
+  const makePlan = () => buildFuturesPlan(ev.direction, spot, tech.last.atr, cfg);
+  const decided = stagedDecision(s, cfg, {
+    direction: ev.direction,
+    confidence: ev.confidence,
+    selectedStrike: 0,
+    label: ev.label,
+    candles,
+    now,
+    spot,
+    buySignal: ev.direction === 'LONG' ? 'BUY' : 'SELL',
+    buildPlan: makePlan,
+    journal: { trend: tech.trend, pcr: 0, oiBias: ev.buildup, iv: 0, delta: 0 },
+  });
+  if (decided.opened) positionLtp = spot;
+  s.lastDecisionText = decided.decisionText;
+  const candidatePlan = s.position ? null : (decided.plan ?? makePlan());
+
+  const dashboard: Dashboard = {
+    at: now,
+    status: 'Ready',
+    expiry: cfg.futExpiry,
+    market: {
+      spot,
+      atm: 0,
+      trend: tech.trend,
+      vwap: tech.last.vwap,
+      ema20: tech.last.ema20,
+      ema50: tech.last.ema50,
+      atr: tech.last.atr,
+    },
+    chain: {
+      ceLtp: 0,
+      peLtp: 0,
+      ceOi: 0,
+      peOi: 0,
+      changeInOi: 0,
+      pcr: 0,
+      maxPain: 0,
+      support: 0,
+      resistance: 0,
+      swingSupport: ev.swingSupport,
+      swingResistance: ev.swingResistance,
+      distanceFromMaxPain: 0,
+    },
+    greeks: { delta: 0, gamma: 0, theta: 0, vega: 0, iv: 0 },
+    decision: {
+      sentiment: ev.buildup,
+      trend: tech.trend,
+      oiStrength: ev.buildup,
+      confidence: ev.confidence,
+      decisionText: decided.decisionText,
+      signal: decided.signal,
+      direction: ev.direction,
+      selectedStrike: 0,
+      pattern: ev.label,
+      ivPercentile: -1,
+      scoreCE: ev.scoreLong,
+      scorePE: ev.scoreShort,
+    },
+    breakdown: ZERO_BREAKDOWN,
+    factors: ev.factors,
+    futures: {
+      contract: cfg.futTradingSymbol || cfg.symbol,
+      expiry: cfg.futExpiry,
+      dayOpen: ev.dayOpen,
+      oi: ev.oi,
+      oiChange: ev.oiChange,
+      buildup: ev.buildup,
+      momentum: ev.momentum,
+    },
+    plan: decided.plan,
+    candidatePlan,
+    positionLtp,
+  };
+  return { state: s, dashboard };
+}
+
+/**
  * One full RefreshAll cycle (after data fetch): ComputeTechnical,
  * ComputeOptionChainMetrics, RunDecisionEngine. Returns a new state.
  */
-export function runCycle(
+function runOptionsCycle(
   prev: EngineState,
   cfg: EngineConfig,
   input: RefreshInput,
@@ -462,7 +711,7 @@ export function runCycle(
   const ce = scoreDirection('CE', { ...base, priceAction: pa.bull, leg: legOf(findStrike(chain, bestCE), 'CE') });
   const pe = scoreDirection('PE', { ...base, priceAction: pa.bear, leg: legOf(findStrike(chain, bestPE), 'PE') });
 
-  const direction: Direction = ce.total >= pe.total ? 'CE' : 'PE';
+  const direction: OptionSide = ce.total >= pe.total ? 'CE' : 'PE';
   const confidence = direction === 'CE' ? ce.total : pe.total;
   const selectedStrike = direction === 'CE' ? bestCE : bestPE;
   const breakdown = direction === 'CE' ? ce.breakdown : pe.breakdown;
@@ -489,90 +738,25 @@ export function runCycle(
   // Open position check first (uses this cycle's chain LTP for its strike).
   let positionLtp: number | null = null;
   if (s.position) {
-    positionLtp = legOf(findStrike(chain, s.position.strike), s.position.direction)?.ltp ?? 0;
+    positionLtp = legOf(findStrike(chain, s.position.strike), s.position.direction as OptionSide)?.ltp ?? 0;
     checkAndCloseIfHit(s, positionLtp, cfg, now);
   }
 
-  let signal: Signal;
-  let decisionText: string;
-  let plan: TradePlan | null = null;
+  const decided = stagedDecision(s, cfg, {
+    direction,
+    confidence,
+    selectedStrike,
+    label: pa.label,
+    candles,
+    now,
+    spot,
+    buySignal: direction === 'CE' ? 'BUY CE' : 'BUY PE',
+    buildPlan: () => buildTradePlan(chain, direction, selectedStrike, tech.last.atr, cfg),
+    journal: { trend: tech.trend, pcr: metrics.pcr, oiBias: oiStrength, iv: greeks.iv, delta: greeks.delta },
+  });
+  const { signal, decisionText, plan } = decided;
+  if (decided.opened) positionLtp = plan!.entry;
   const label = pa.label;
-
-  if (s.position) {
-    signal = 'IN POSITION';
-    decisionText = 'POSITION OPEN - monitoring for SL/Target';
-    s.pending = null;
-  } else if (confidence < cfg.confWatch) {
-    s.pending = null;
-    signal = 'NO TRADE';
-    decisionText = `NO TRADE (${label})`;
-  } else if (confidence < cfg.confHigh) {
-    signal = 'WAIT';
-    decisionText = `WATCH - CONFIRMATION BUILDING (${label})`;
-  } else {
-    const gate = canTakeNewTrade(s, cfg);
-    if (!gate.ok) {
-      s.blockedReason = gate.reason;
-      signal = 'NO TRADE';
-      decisionText = `BLOCKED - ${gate.reason}`;
-    } else {
-      const last = candles[candles.length - 1];
-      const same = s.pending && s.pending.direction === direction && Math.abs(s.pending.strike - selectedStrike) < 0.01;
-      if (!same) {
-        const trigger = direction === 'CE' ? last.h : last.l;
-        s.pending = { direction, trigger, strike: selectedStrike, setAt: now };
-        signal = 'WAIT';
-        decisionText = `SETUP ARMED - waiting for break of ${fmt2(trigger)} (${label})`;
-      } else {
-        const trig = s.pending!.trigger;
-        const confirmed = direction === 'CE' ? last.h > trig : last.l < trig;
-        const key = `${istDate(now)}|${direction}|${selectedStrike}`;
-        if (!confirmed) {
-          signal = 'WAIT';
-          decisionText = `SETUP PENDING - waiting for break of ${fmt2(trig)} (${label})`;
-        } else if (key === s.lastFiredKey) {
-          signal = 'NO TRADE';
-          decisionText = `ALREADY TAKEN TODAY (${direction} ${selectedStrike})`;
-        } else {
-          const tp = buildTradePlan(chain, direction, selectedStrike, tech.last.atr, cfg);
-          if (!tp) {
-            signal = 'WAIT';
-            decisionText = `SETUP PENDING - strike ${selectedStrike} missing from chain`;
-          } else {
-            plan = tp;
-            signal = direction === 'CE' ? 'BUY CE' : 'BUY PE';
-            decisionText = `TRADE - CONFIRMED BREAK (${label})`;
-            if (cfg.tradeMode === 'LIVE') {
-              // Live mode never trades by itself: the confirmed signal waits for ENTER.
-              decisionText = `SIGNAL CONFIRMED - tap ENTER to trade live (${label})`;
-            } else if (s.pendingEntry) {
-              // Your own limit entry is waiting — don't stack an automatic one on top.
-              decisionText = `SIGNAL CONFIRMED - your limit entry @ ${fmt2(s.pendingEntry.limit)} is pending (${label})`;
-            } else {
-              openTrade(s, cfg, {
-                direction,
-                plan: tp,
-                entry: tp.entry,
-                qty: tp.qty,
-                now,
-                spot,
-                confidence,
-                trend: tech.trend,
-                pcr: metrics.pcr,
-                oiBias: oiStrength,
-                iv: greeks.iv,
-                delta: greeks.delta,
-                // LogSignal runs before the dashboard's decision cell is rewritten, so the
-                // workbook journals the previous cycle's setup text — kept as-is.
-                reason: `Auto-signal: ${s.lastDecisionText || decisionText} | Confidence ${confidence.toFixed(2)}/100`,
-              });
-              positionLtp = tp.entry;
-            }
-          }
-        }
-      }
-    }
-  }
 
   s.lastDecisionText = decisionText;
 
@@ -625,6 +809,12 @@ export function runCycle(
       scorePE: pe.total,
     },
     breakdown,
+    factors: (Object.keys(FACTOR_LABELS) as (keyof ScoreBreakdown)[]).map((k) => ({
+      key: k,
+      label: FACTOR_LABELS[k][0],
+      max: FACTOR_LABELS[k][1],
+      value: breakdown[k],
+    })),
     plan,
     candidatePlan,
     positionLtp,

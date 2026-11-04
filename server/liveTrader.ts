@@ -12,11 +12,12 @@
  * No Node-only imports: runs inside the app (phone talks to Dhan directly).
  */
 import { validateLimit, type EngineRunner } from '../src/lib/engine/runner.ts';
-import type { EngineState, LiveLegs, OpenPosition, TradePlan } from '../src/lib/engine/types.ts';
+import { catalogEntry } from '../src/lib/engine/catalog.ts';
+import { sideOf, type EngineConfig, type EngineState, type LiveLegs, type OpenPosition, type TradePlan } from '../src/lib/engine/types.ts';
 import { optionId } from '../src/lib/instruments.ts';
 import type { DhanClient } from './dhan.ts';
 import { roundToTick } from './mapping.ts';
-import type { DhanService } from './service.ts';
+import { underlyingFor, type DhanService } from './service.ts';
 
 const FILL_TIMEOUT_MS = 15_000;
 const FILL_POLL_MS = 1000;
@@ -31,10 +32,34 @@ export interface Fill {
 const upper = (s: unknown) => String(s ?? '').toUpperCase();
 const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-/** Sell-stop limit a little below the trigger so it still fills on a fast move. */
-export function stopLimitPrice(trigger: number) {
-  return Math.max(0.05, roundToTick(trigger - Math.max(0.5, trigger * 0.05)));
+/**
+ * Stop-loss limit price beyond the trigger, so it still fills on a fast move.
+ * Options (sell stop): 5% / min 0.50 below. Futures: 0.1% / min 5 ticks beyond
+ * the trigger, below for a long's sell stop, above for a short's buy stop.
+ */
+export function stopLimitPrice(trigger: number, o: { side?: 1 | -1; tick?: number; futures?: boolean } = {}) {
+  const tick = o.tick ?? 0.05;
+  const side = o.side ?? 1;
+  const buffer = o.futures ? Math.max(5 * tick, trigger * 0.001) : Math.max(0.5, trigger * 0.05);
+  return Math.max(tick, roundToTick(trigger - side * buffer, tick));
 }
+
+/** Order routing for the selected instrument. */
+interface OrderCtx {
+  segment: string;
+  product: string;
+  tick: number;
+  futures: boolean;
+}
+const ctxOf = (cfg: EngineConfig): OrderCtx => ({
+  segment: cfg.tradeSegment || 'NSE_FNO',
+  product: cfg.liveProduct,
+  tick: cfg.tickSize || 0.05,
+  futures: cfg.instrumentKind === 'MCX_FUTURES',
+});
+/** Opening order side: options are always bought; futures shorts are sold. */
+const openSide = (side: 1 | -1) => (side > 0 ? 'BUY' : 'SELL') as 'BUY' | 'SELL';
+const closeSide = (side: 1 | -1) => (side > 0 ? 'SELL' : 'BUY') as 'BUY' | 'SELL';
 
 export class LiveTrader {
   private dhan: DhanClient;
@@ -77,40 +102,51 @@ export class LiveTrader {
     }
   }
 
-  private async securityIdFor(direction: 'CE' | 'PE', strike: number, expiry: string): Promise<string> {
-    const id = optionId({ underlying: 'NIFTY', expiry, strike, type: direction });
+  /** Dhan security id of what the plan trades: the option strike, or the current MCX contract. */
+  private async securityIdFor(cfg: EngineConfig, plan: TradePlan, expiry: string): Promise<string> {
+    if (cfg.instrumentKind === 'MCX_FUTURES') {
+      if (!cfg.futSecurityId) throw new Error(`No ${cfg.symbol} contract resolved yet — tap Refresh now first`);
+      return cfg.futSecurityId;
+    }
+    if (plan.direction !== 'CE' && plan.direction !== 'PE') throw new Error('Option plan expected');
+    const id = optionId({ underlying: cfg.symbol, expiry, strike: plan.strike, type: plan.direction });
     let ref = this.service.toDhan(id);
     if (!ref) {
-      await this.service.optionChain(expiry); // learns security ids from Dhan's chain
+      await this.service.optionChain(expiry, underlyingFor(cfg.symbol)); // learns security ids from Dhan's chain
       ref = this.service.toDhan(id);
     }
-    if (!ref) throw new Error(`No Dhan security id for NIFTY ${expiry} ${strike} ${direction}`);
+    if (!ref) throw new Error(`No Dhan security id for ${cfg.symbol} ${expiry} ${plan.strike} ${plan.direction}`);
     return ref.securityId;
   }
 
-  private async marketOrder(securityId: string, side: 'BUY' | 'SELL', qty: number, product: string): Promise<Fill> {
+  /**
+   * Quantity: NSE options in units (multiples of the lot); MCX in lots — Dhan's
+   * SDK example orders MCX Gold with quantity=1. The engine's MCX quantities are lots.
+   */
+  private async marketOrder(securityId: string, side: 'BUY' | 'SELL', qty: number, c: OrderCtx): Promise<Fill> {
     const res = await this.dhan.placeOrder({
       securityId,
-      exchangeSegment: 'NSE_FNO',
+      exchangeSegment: c.segment,
       transactionType: side,
       quantity: qty,
       orderType: 'MARKET',
-      productType: product,
+      productType: c.product,
       price: 0,
     });
     return this.waitFill(String(res.orderId));
   }
 
-  private async placeStop(securityId: string, qty: number, trigger: number, product: string): Promise<string> {
-    const t = roundToTick(trigger);
+  /** Protective stop for a position of `posSide` (+1 long → SELL stop below; -1 short → BUY stop above). */
+  private async placeStop(securityId: string, qty: number, trigger: number, posSide: 1 | -1, c: OrderCtx): Promise<string> {
+    const t = roundToTick(trigger, c.tick);
     const res = await this.dhan.placeOrder({
       securityId,
-      exchangeSegment: 'NSE_FNO',
-      transactionType: 'SELL',
+      exchangeSegment: c.segment,
+      transactionType: closeSide(posSide),
       quantity: qty,
       orderType: 'STOP_LOSS',
-      productType: product,
-      price: stopLimitPrice(t),
+      productType: c.product,
+      price: stopLimitPrice(t, { side: posSide, tick: c.tick, futures: c.futures }),
       triggerPrice: t,
     });
     return String(res.orderId);
@@ -136,29 +172,31 @@ export class LiveTrader {
     this.busy = true;
     try {
       const cfg = runner.config;
-      if (cfg.symbol !== 'NIFTY') throw new Error('Live trading supports NIFTY options only');
+      if (!catalogEntry(cfg.symbol)) throw new Error(`Live trading isn't set up for ${cfg.symbol}`);
+      const c = ctxOf(cfg);
       const plan = runner.entryPlan();
-      const expiry = runner.dashboard?.expiry;
-      if (!expiry) throw new Error('No expiry — tap Refresh now first');
-      const securityId = await this.securityIdFor(plan.direction, plan.strike, expiry);
+      const expiry = runner.dashboard?.expiry || cfg.futExpiry;
+      if (!expiry && !c.futures) throw new Error('No expiry — tap Refresh now first');
+      const securityId = await this.securityIdFor(cfg, plan, expiry);
+      const side = sideOf(plan.direction);
       if (limit == null) {
-        const buy = await this.marketOrder(securityId, 'BUY', plan.qty, cfg.liveProduct);
-        return await this.opened(runner, plan, securityId, buy);
+        const fill = await this.marketOrder(securityId, openSide(side), plan.qty, c);
+        return await this.opened(runner, plan, securityId, fill);
       }
-      validateLimit(limit);
+      validateLimit(limit, c.tick);
       const res = await this.dhan.placeOrder({
         securityId,
-        exchangeSegment: 'NSE_FNO',
-        transactionType: 'BUY',
+        exchangeSegment: c.segment,
+        transactionType: openSide(side),
         quantity: plan.qty,
         orderType: 'LIMIT',
-        productType: cfg.liveProduct,
-        price: roundToTick(limit),
+        productType: c.product,
+        price: roundToTick(limit, c.tick),
       });
       const orderId = String(res.orderId);
       await runner.setPendingEntry({
         plan,
-        limit: roundToTick(limit),
+        limit: roundToTick(limit, c.tick),
         placedAt: Date.now(),
         live: { securityId, orderId },
       });
@@ -191,10 +229,10 @@ export class LiveTrader {
       : undefined;
     const pos = await runner.manualEnter({ plan, entry: buy.avgPrice, qty: buy.filledQty, live, reason: limitNote });
     try {
-      const sl = await this.placeStop(securityId, pos.remainingQty, pos.currentSl, runner.config.liveProduct);
+      const sl = await this.placeStop(securityId, pos.remainingQty, pos.currentSl, pos.side ?? 1, ctxOf(runner.config));
       await runner.patchPosition({ live: { ...live, slOrderId: sl } });
     } catch (e) {
-      runner.status = `Bought, but the stop-loss order failed: ${(e as Error).message} — place one in Dhan now`;
+      runner.status = `Entered, but the stop-loss order failed: ${(e as Error).message} — place one in Dhan now`;
     }
     return runner.state.position!;
   }
@@ -251,8 +289,8 @@ export class LiveTrader {
       const stopFill = await this.stopFilled(p.live.slOrderId);
       if (stopFill) return runner.manualExit({ price: stopFill.avgPrice, reason: 'SL HIT (exchange stop order)' });
       await this.cancelQuietly(p.live.slOrderId);
-      const sell = await this.marketOrder(p.live.securityId, 'SELL', p.remainingQty, runner.config.liveProduct);
-      await runner.manualExit({ price: sell.avgPrice, reason: `${reason} (live fill)` });
+      const fill = await this.marketOrder(p.live.securityId, closeSide(p.side ?? 1), p.remainingQty, ctxOf(runner.config));
+      await runner.manualExit({ price: fill.avgPrice, reason: `${reason} (live fill)` });
     } finally {
       this.busy = false;
     }
@@ -291,7 +329,8 @@ export class LiveTrader {
     }
     const prev = before.position;
     if (!prev?.live) return;
-    const product = runner.config.liveProduct;
+    const c = ctxOf(runner.config);
+    const side = prev.side ?? 1;
     const live = prev.live;
     this.busy = true;
     try {
@@ -303,16 +342,16 @@ export class LiveTrader {
           return;
         }
         await this.cancelQuietly(live.slOrderId);
-        const sell = await this.marketOrder(live.securityId, 'SELL', prev.remainingQty, product);
-        await runner.amendExit(prev, sell.avgPrice, 'live fill');
+        const fill = await this.marketOrder(live.securityId, closeSide(side), prev.remainingQty, c);
+        await runner.amendExit(prev, fill.avgPrice, 'live fill');
         return;
       }
       const cur = after.position;
       if (!prev.partialBooked && cur.partialBooked) {
         // T1: book half at market, re-protect the rest at breakeven.
         await this.cancelQuietly(live.slOrderId);
-        await this.marketOrder(live.securityId, 'SELL', cur.partialQty, product);
-        const sl = await this.placeStop(live.securityId, cur.remainingQty, cur.currentSl, product);
+        await this.marketOrder(live.securityId, closeSide(side), cur.partialQty, c);
+        const sl = await this.placeStop(live.securityId, cur.remainingQty, cur.currentSl, side, c);
         await runner.patchPosition({ live: { ...live, slOrderId: sl } });
         return;
       }
@@ -328,7 +367,7 @@ export class LiveTrader {
         const st = upper(o?.orderStatus);
         if ((st === 'CANCELLED' || st === 'EXPIRED' || st === 'REJECTED') && runner.marketOpen()) {
           // e.g. a DAY stop expired overnight on a carried position — put it back.
-          const sl = await this.placeStop(live.securityId, cur.remainingQty, cur.currentSl, product);
+          const sl = await this.placeStop(live.securityId, cur.remainingQty, cur.currentSl, side, c);
           await runner.patchPosition({ live: { ...live, slOrderId: sl } });
         }
       }
