@@ -393,6 +393,7 @@ test('direct mode: verify credentials, live quotes, engine reproduces the workbo
   let saved: unknown = null;
   const persisted: string[] = [];
   const api = await createLocalApi({
+    positionTickMs: 0,
     clientId: FAKE_CLIENT,
     accessToken: FAKE_TOKEN,
     baseUrl: fake.url,

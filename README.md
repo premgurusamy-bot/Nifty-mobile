@@ -109,6 +109,14 @@ Turning it on also turns auto-refresh on. Leave the app with Home / the app swit
 closes it, and the service then posts a "stopped watching" alert and stops. Use **Allow unrestricted
 battery use**, and on Xiaomi / Oppo / Vivo / Realme / OnePlus also allow Autostart.
 
+## Live P&L (Dashboard)
+
+The Dashboard's top card shows the running P&L: the open trade in ₹ (including the half booked at Target 1),
+its % on the capital put in, the price and move from entry, profit-lock status, today's booked P&L and today's
+total including the open trade. Connected to Dhan, the phone quotes the open position about every 2 seconds
+between engine refreshes (green dot = live price); stops, targets and the profit lock still act on each refresh
+(and in LIVE the exchange stop at Dhan acts on its own).
+
 ## Profit lock (trailing ₹)
 
 Settings → **Profit lock** (off by default) trails the stop on the trade's total ₹ profit, including the half

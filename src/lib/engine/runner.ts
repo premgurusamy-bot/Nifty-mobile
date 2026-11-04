@@ -80,6 +80,30 @@ export interface EngineExport {
   tradesToday: number;
 }
 
+export interface LivePnl {
+  /** Latest price of the open position (fast ticker, else the last refresh). */
+  ltp: number | null;
+  /** When that price was taken (ms). */
+  at: number | null;
+  /** 'TICK' = live quote between refreshes; 'REFRESH' = from the last engine cycle. */
+  source: 'TICK' | 'REFRESH' | null;
+  /** Open trade P&L incl. the half booked at T1 (null without a position). */
+  tradePnl: number | null;
+  /** Unbooked part only (what realizedToday doesn't include yet). */
+  openPnl: number | null;
+  realizedToday: number;
+  /** realizedToday + openPnl. */
+  dayPnl: number;
+  /** Capital in the open trade at entry (entry × qty × ₹/point), for a % figure. */
+  invested: number | null;
+}
+
+/** P&L of an open position at `ltp`: the unbooked part and the whole trade (incl. booked half). */
+export function positionPnl(p: OpenPosition, ltp: number): { open: number; trade: number } {
+  const open = (p.side ?? 1) * (ltp - p.entry) * p.remainingQty * (p.pointValue ?? 1);
+  return { open, trade: open + p.partialPnl };
+}
+
 export interface EngineSnapshot {
   config: EngineConfig;
   state: Omit<EngineState, 'ivHistory'> & { ivSnapshots: number };
@@ -92,6 +116,8 @@ export interface EngineSnapshot {
   closes: number[];
   marketOpen: boolean;
   demo: boolean;
+  /** Running P&L: today's realized, the open trade at the latest price, and their total. */
+  live: LivePnl;
   /** Capital-based sizing: the capital a trade may use now (CAPITAL mode only). */
   capital?: { capital: number; base: number; source: string; funds: number | null };
 }
@@ -215,6 +241,8 @@ export class EngineRunner {
   afterCycle: ((before: EngineState, after: EngineState) => Promise<void>) | null = null;
   /** Dhan available balance (₹), used by CAPITAL sizing in LIVE when live capital is 0. */
   funds: number | null = null;
+  /** Latest quote of the open position between refreshes (fast P&L ticker). */
+  mark: { ltp: number; at: number; key: string } | null = null;
   private lastLoggedCandle = 0;
   /** Fetches the live account balance (phone / server with Dhan); null in demo. */
   fundsSource: (() => Promise<number>) | null = null;
@@ -238,6 +266,46 @@ export class EngineRunner {
     const saved = await this.store.load().catch(() => null);
     if (saved?.state) this.state = { ...initialEngineState(), ...saved.state };
     if (saved?.config) this.config = { ...DEFAULT_CONFIG, ...saved.config };
+  }
+
+  /** Identifies the open position, so a quote for an old one is never shown. */
+  positionKey(): string | null {
+    const p = this.state.position;
+    return p ? `${p.journalId}|${p.direction}|${p.strike}` : null;
+  }
+
+  /** Record a live quote of the open position (display only; stops / targets run on refresh). */
+  setMark(ltp: number, at = Date.now(), key = this.positionKey()) {
+    if (!(ltp > 0) || !key || key !== this.positionKey()) return;
+    this.mark = { ltp, at, key };
+  }
+
+  livePnl(): LivePnl {
+    const p = this.state.position;
+    const realizedToday = this.state.realizedToday;
+    if (!p) {
+      return { ltp: null, at: null, source: null, tradePnl: null, openPnl: null, realizedToday, dayPnl: realizedToday, invested: null };
+    }
+    const key = this.positionKey();
+    const refreshLtp = this.dashboard?.positionLtp ?? null;
+    const tick = this.mark && this.mark.key === key && this.mark.at >= (this.lastRefresh ?? 0) ? this.mark : null;
+    const ltp = tick?.ltp ?? (refreshLtp && refreshLtp > 0 ? refreshLtp : null);
+    const at = tick?.at ?? this.lastRefresh;
+    const invested = p.entry * p.totalQty * (p.pointValue ?? 1);
+    if (ltp == null) {
+      return { ltp: null, at: null, source: null, tradePnl: null, openPnl: null, realizedToday, dayPnl: realizedToday, invested };
+    }
+    const { open, trade } = positionPnl(p, ltp);
+    return {
+      ltp,
+      at,
+      source: tick ? 'TICK' : 'REFRESH',
+      tradePnl: trade,
+      openPnl: open,
+      realizedToday,
+      dayPnl: realizedToday + open,
+      invested,
+    };
   }
 
   /** Config the plan builders size with (adds the fetched account balance). */
@@ -648,6 +716,7 @@ export class EngineRunner {
       closes: this.candles.slice(-150).map((c) => c.c),
       marketOpen: this.marketOpen(),
       demo,
+      live: this.livePnl(),
       ...(this.config.sizingMode === 'CAPITAL'
         ? { capital: { ...sizingCapital(this.sizingConfig()), funds: this.funds } }
         : {}),

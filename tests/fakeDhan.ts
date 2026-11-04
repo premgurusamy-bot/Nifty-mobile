@@ -157,8 +157,12 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
     ips: { primary: '', secondary: '' },
     /** What the test public-IP endpoint reports as this device's IP. */
     publicIp: '198.51.100.20',
+    /** Tests: override a security's last price ("SEG|id" → price). */
+    ltp: new Map<string, number>(),
   };
   const ltpOf = (seg: string, id: string) => {
+    const forced = state.ltp.get(`${seg}|${id}`);
+    if (forced != null) return forced;
     if (seg === 'IDX_I') return spot;
     if (seg === 'MCX_COMM') return mcxLast(id);
     // Golden-chain option ids fill at that chain's own premium.

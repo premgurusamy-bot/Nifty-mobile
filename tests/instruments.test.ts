@@ -232,6 +232,7 @@ before(async () => {
   fake = await startFakeDhan();
   fake.state.ips.primary = '203.0.113.7';
   api = await createLocalApi({
+    positionTickMs: 0,
     clientId: FAKE_CLIENT,
     accessToken: FAKE_TOKEN,
     baseUrl: fake.url,

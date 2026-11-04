@@ -39,6 +39,7 @@ interface EngineValue {
 const Ctx = createContext<EngineValue | null>(null);
 const DEMO_KEY = 'nifty/engine-demo/v1';
 const POLL_MS = 5000;
+const FAST_POLL_MS = 1500;
 const DEMO_TICK_MS = 3000;
 
 const demoStore: EngineStore = {
@@ -98,20 +99,26 @@ export function EngineProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (mode !== 'DHAN' || !api) return;
     let alive = true;
+    let t: ReturnType<typeof setTimeout> | null = null;
+    // While a trade is open on this phone, pull often so the running P&L ticks.
+    let fast = false;
     const pull = () =>
       api
         .engine()
         .then((s) => {
           if (!alive) return;
+          fast = !!s.state.position && isLocalApi(api);
           setSnap(s);
           setError(null);
         })
-        .catch((e) => alive && setError(e.message));
+        .catch((e) => alive && setError(e.message))
+        .finally(() => {
+          if (alive) t = setTimeout(pull, fast ? FAST_POLL_MS : POLL_MS);
+        });
     pull();
-    const t = setInterval(pull, POLL_MS);
     return () => {
       alive = false;
-      clearInterval(t);
+      if (t) clearTimeout(t);
     };
   }, [mode, api]);
 

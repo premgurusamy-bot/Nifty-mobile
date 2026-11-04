@@ -23,6 +23,7 @@ import { LineChart } from '../../components/LineChart';
 import { Button, Card, Empty, Segmented, styles as ui } from '../../components/ui';
 import type { TradeMode } from '../../lib/engine/types';
 import { formatINR, formatNumber, formatSigned } from '../../lib/format';
+import { LivePnlCard } from '../../components/LivePnl';
 import { useEngine } from '../../state/EngineContext';
 import { colors, pnlColor } from '../../theme';
 
@@ -162,8 +163,11 @@ export default function DashboardScreen() {
       confirmDialog('Exit LIVE position?', `${what}\nThe stop-loss order at Dhan is cancelled first.`, 'Exit now', go);
     else confirmDialog('Exit paper position?', what, 'Exit', go);
   };
+  // Running P&L uses the fast quote when there is one (falls back to the last refresh).
+  const liveLtp = snap?.live?.ltp ?? ltp;
   const openPnl =
-    p && ltp ? (p.side ?? 1) * (ltp - p.entry) * p.remainingQty * (p.pointValue ?? 1) + p.partialPnl : null;
+    snap?.live?.tradePnl ??
+    (p && ltp ? (p.side ?? 1) * (ltp - p.entry) * p.remainingQty * (p.pointValue ?? 1) + p.partialPnl : null);
 
   return (
     <ScrollView
@@ -193,6 +197,15 @@ export default function DashboardScreen() {
           <Switch value={cfg.autoRefresh} disabled={toggling} onValueChange={toggleAuto} />
         </View>
       </View>
+      {snap.live ? (
+        <LivePnlCard
+          live={snap.live}
+          position={p ?? null}
+          demo={snap.demo}
+          profitLock={cfg.profitLock}
+          label={p ? (p.direction === 'LONG' || p.direction === 'SHORT' ? `${p.direction} ${contract}` : `${p.direction} ${p.strike}`) : ''}
+        />
+      ) : null}
       {/* Trade mode: PAPER (engine paper-trades) / LIVE (real Dhan orders via ENTER/EXIT) */}
       <Card
         style={{
@@ -365,7 +378,7 @@ export default function DashboardScreen() {
               title={`Open position · ${p.direction === 'LONG' || p.direction === 'SHORT' ? `${p.direction} ${contract}` : `${p.direction} ${p.strike}`}`}
               rows={[
                 ['Entry', p.entry],
-                [isFut ? 'Live price' : 'Live premium', ltp ?? '—'],
+                [isFut ? 'Live price' : 'Live premium', liveLtp ?? '—'],
                 ['Current (trailing) SL', p.currentSl, colors.down],
                 ['Target 1', p.target1, colors.up],
                 ['Target 2', cfg.profitLock ? 'off (profit lock)' : p.target2, colors.up],

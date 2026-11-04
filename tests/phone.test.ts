@@ -28,6 +28,7 @@ const order = (id: string) => fake.state.orders.find((o: any) => o.orderId === i
 before(async () => {
   fake = await startFakeDhan();
   api = await createLocalApi({
+    positionTickMs: 0,
     clientId: FAKE_CLIENT,
     accessToken: FAKE_TOKEN,
     baseUrl: fake.url,

@@ -37,6 +37,10 @@ export interface LocalApiOptions {
   baseUrl?: string;
   publicIp?: () => Promise<string>;
   sleep?: (ms: number) => Promise<void>;
+  /** Live P&L: quote the open position this often between refreshes (ms; 0 = off). */
+  positionTickMs?: number;
+  /** Tests only: tick even outside market hours. */
+  tickAlways?: boolean;
 }
 
 export const DIRECT_ORDERS_MESSAGE =
@@ -72,6 +76,35 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
   const trader = new LiveTrader(dhan, service, { sleep: o.sleep });
   engine.afterCycle = (before, after) => trader.afterCycle(engine, before, after);
   engine.fundsSource = async () => mapFunds(await dhan.fundLimit());
+
+  // Live P&L: quote the open position every couple of seconds between engine refreshes.
+  const idCache = new Map<string, string>();
+  let ticking = false;
+  const tickPosition = async () => {
+    const p = engine.state.position;
+    if (ticking || !p || (!o.tickAlways && !engine.marketOpen())) return;
+    ticking = true;
+    try {
+      const key = engine.positionKey()!;
+      const cfg = engine.config;
+      let id = p.live?.securityId ?? idCache.get(key);
+      if (!id) {
+        const expiry = engine.dashboard?.expiry || cfg.futExpiry;
+        id = await trader.securityIdFor(cfg, { direction: p.direction, strike: p.strike }, expiry);
+        idCache.set(key, id);
+      }
+      const seg = cfg.tradeSegment;
+      const q = await dhan.quote({ [seg]: [Number(id)] });
+      const ltp = Number(q?.data?.[seg]?.[id]?.last_price);
+      if (ltp > 0) engine.setMark(ltp, Date.now(), key);
+    } catch {
+      /* the next refresh still prices the position */
+    } finally {
+      ticking = false;
+    }
+  };
+  const tickMs = o.positionTickMs ?? 2000;
+  const ticker = tickMs > 0 ? setInterval(() => void tickPosition(), tickMs) : null;
   service.setLiveOrders(engine.config.tradeMode === 'LIVE');
   engine.syncTimer();
   const token = new TokenKeeper(dhan, { autoRenew: true, persist: o.persistToken });
@@ -184,6 +217,7 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
     },
     dhanIps: async () => extractIps(await dhan.getIP()),
     dispose: () => {
+      if (ticker) clearInterval(ticker);
       engine.stop();
       token.stop();
       service.stop();

@@ -103,7 +103,11 @@ export class LiveTrader {
   }
 
   /** Dhan security id of what the plan trades: the option strike, or the current MCX contract. */
-  private async securityIdFor(cfg: EngineConfig, plan: TradePlan, expiry: string): Promise<string> {
+  async securityIdFor(
+    cfg: EngineConfig,
+    plan: Pick<TradePlan, 'direction' | 'strike'>,
+    expiry: string,
+  ): Promise<string> {
     if (cfg.instrumentKind === 'MCX_FUTURES') {
       if (!cfg.futSecurityId) throw new Error(`No ${cfg.symbol} contract resolved yet — tap Refresh now first`);
       return cfg.futSecurityId;
