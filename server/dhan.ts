@@ -44,6 +44,50 @@ export interface DhanOptions {
 export type Securities = Record<string, number[]>;
 
 export const DHAN_API_URL = 'https://api.dhan.co/v2';
+export const DHAN_AUTH_URL = 'https://auth.dhan.co';
+
+/**
+ * Log in with Dhan client ID + PIN + TOTP (the 6-digit code from an authenticator app) and get a
+ * 24-hour access token. Same call as Dhan's own SDK (DhanLogin.generate_token):
+ * POST https://auth.dhan.co/app/generateAccessToken?dhanClientId=…&pin=…&totp=…
+ * TOTP must be enabled on the Dhan account (web.dhan.co → DhanHQ Trading APIs → Setup TOTP).
+ */
+export async function dhanPinLogin(o: {
+  clientId: string;
+  pin: string;
+  totp: string;
+  authUrl?: string;
+}): Promise<{ accessToken: string; expiry: string | null }> {
+  const clientId = o.clientId.trim();
+  const pin = o.pin.trim();
+  const totp = o.totp.replace(/\s/g, '');
+  if (!/^\d{5,}$/.test(clientId)) throw new Error('Dhan client ID is the number shown on your Dhan profile.');
+  if (!/^\d{4,6}$/.test(pin)) throw new Error('Enter your Dhan PIN (digits only).');
+  if (!/^\d{6}$/.test(totp)) throw new Error('Enter the current 6-digit TOTP code from your authenticator app.');
+  const q = new URLSearchParams({ dhanClientId: clientId, pin, totp });
+  let res: Response;
+  try {
+    res = await fetch(`${o.authUrl || DHAN_AUTH_URL}/app/generateAccessToken?${q}`, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    });
+  } catch (e) {
+    throw new Error(`Cannot reach Dhan login: ${(e as Error).message}`);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let j: any = null;
+  try {
+    j = await res.json();
+  } catch {
+    /* non-JSON error page */
+  }
+  const token = j?.accessToken ?? j?.access_token ?? j?.data?.accessToken;
+  if (!res.ok || !token) {
+    const why = j?.message ?? j?.errorMessage ?? j?.remarks ?? j?.error ?? `HTTP ${res.status}`;
+    throw new Error(`Dhan login failed: ${typeof why === 'string' ? why : JSON.stringify(why)}`);
+  }
+  return { accessToken: String(token), expiry: j?.expiryTime ?? j?.data?.expiryTime ?? null };
+}
 
 export class DhanClient {
   private opts: Required<DhanOptions>;

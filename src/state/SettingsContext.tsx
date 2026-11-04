@@ -4,6 +4,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { Platform } from 'react-native';
 import { createApi, type Api } from '../api/client';
 import { fetchPublicIp } from '../../server/preflight.ts';
+import { dhanPinLogin } from '../../server/dhan.ts';
+import { loginSafety, logoutSafety, type SessionSnapshot } from '../lib/session';
 import { createLocalApi, verifyDhanCredentials, type LocalApi } from '../api/localApi';
 import type { EngineStore } from '../lib/engine/runner';
 import type { StatusResponse } from '../lib/apiTypes';
@@ -19,6 +21,9 @@ const DIRECT_ENGINE_KEY = 'nifty/engine-direct/v1';
 const DHAN_BASE_URL = process.env.EXPO_PUBLIC_DHAN_BASE_URL || undefined;
 const PUBLIC_IP_URL = process.env.EXPO_PUBLIC_PUBLIC_IP_URL || undefined;
 const STATIC_IP_KEY = 'nifty/static-ip';
+/** The Dhan client ID last logged in on this phone (not secret; used to spot an account change). */
+const LAST_CLIENT_KEY = 'nifty/dhan-last-client';
+const DHAN_AUTH_URL = process.env.EXPO_PUBLIC_DHAN_AUTH_URL || undefined;
 
 const directEngineStore: EngineStore = {
   load: async () => {
@@ -53,6 +58,12 @@ interface SettingsValue {
   connection: Connection;
   /** Saved direct-mode client id (shown masked), or '' when none is saved. */
   directClientId: string;
+  /** Log in with Dhan client ID + PIN + TOTP: gets a 24-hour token and uses it. */
+  login: (clientId: string, pin: string, totp: string) => Promise<number>;
+  /** Log out: drop the token, switch to PAPER, automatic LIVE entries off (refused with an open LIVE position). */
+  logout: () => Promise<void>;
+  /** Client ID last used on this phone (to prefill the login form). */
+  lastClientId: string;
   /** Verifies with Dhan, then saves the client id + token on this phone. */
   saveDirect: (clientId: string, accessToken: string) => Promise<number>;
   clearDirect: () => Promise<void>;
@@ -73,6 +84,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [direct, setDirect] = useState<{ clientId: string; token: string } | null>(null);
   const [localApi, setLocalApi] = useState<LocalApi | null>(null);
   const [staticIp, setStaticIp] = useState('');
+  const [lastClientId, setLastClientId] = useState('');
   const staticIpRef = useRef('');
 
   useEffect(() => {
@@ -85,6 +97,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
           secret.get(DHAN_TOKEN_KEY),
         ]);
         const ip = (await AsyncStorage.getItem(STATIC_IP_KEY)) ?? '';
+        setLastClientId((await AsyncStorage.getItem(LAST_CLIENT_KEY)) ?? cid ?? '');
         staticIpRef.current = ip;
         setStaticIp(ip);
         if (u && k) {
@@ -162,24 +175,84 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setServer(null);
   }, []);
 
-  const saveDirect = useCallback(async (clientId: string, accessToken: string) => {
-    const cid = clientId.trim();
-    const tok = accessToken.trim();
-    if (!/^\d{5,}$/.test(cid)) throw new Error('Dhan client id is the number shown on your Dhan profile.');
-    if (tok.length < 20) throw new Error('That does not look like a Dhan access token.');
-    const nifty = await verifyDhanCredentials(cid, tok, DHAN_BASE_URL);
-    await secret.set(DHAN_CLIENT_KEY, cid);
-    await secret.set(DHAN_TOKEN_KEY, tok);
-    setDirect({ clientId: cid, token: tok });
-    return nifty;
-  }, []);
+  // ---- Login safety: read / patch the engine's saved settings (running engine if any, else storage).
+  const readSession = useCallback(async (): Promise<SessionSnapshot | null> => {
+    if (localApi) {
+      const s = await localApi.engine();
+      return { config: s.config, position: s.state.position };
+    }
+    const raw = await AsyncStorage.getItem(DIRECT_ENGINE_KEY);
+    if (!raw) return null;
+    const j = JSON.parse(raw);
+    return j?.config ? { config: j.config, position: j.state?.position ?? null } : null;
+  }, [localApi]);
 
-  const clearDirect = useCallback(async () => {
-    await secret.del(DHAN_CLIENT_KEY);
+  const applySession = useCallback(
+    async (r: { patch: Record<string, unknown>; toPaper: boolean }) => {
+      if (localApi) {
+        await localApi.engineConfig(r.patch);
+        if (r.toPaper) await localApi.setTradeMode('PAPER');
+        return;
+      }
+      const raw = await AsyncStorage.getItem(DIRECT_ENGINE_KEY);
+      if (!raw) return;
+      const j = JSON.parse(raw);
+      j.config = { ...j.config, ...r.patch, ...(r.toPaper ? { tradeMode: 'PAPER' } : {}) };
+      await AsyncStorage.setItem(DIRECT_ENGINE_KEY, JSON.stringify(j));
+    },
+    [localApi],
+  );
+
+  /** Verify a client ID + token with Dhan, apply the login safety rules, then use them. */
+  const adoptCredentials = useCallback(
+    async (cid: string, tok: string) => {
+      const nifty = await verifyDhanCredentials(cid, tok, DHAN_BASE_URL);
+      const last = (await AsyncStorage.getItem(LAST_CLIENT_KEY)) ?? direct?.clientId ?? null;
+      await applySession(loginSafety(await readSession(), last, cid));
+      await secret.set(DHAN_CLIENT_KEY, cid);
+      await secret.set(DHAN_TOKEN_KEY, tok);
+      await AsyncStorage.setItem(LAST_CLIENT_KEY, cid);
+      setLastClientId(cid);
+      setDirect({ clientId: cid, token: tok });
+      return nifty;
+    },
+    [applySession, readSession, direct],
+  );
+
+  const saveDirect = useCallback(
+    async (clientId: string, accessToken: string) => {
+      const cid = clientId.trim();
+      const tok = accessToken.trim();
+      if (!/^\d{5,}$/.test(cid)) throw new Error('Dhan client id is the number shown on your Dhan profile.');
+      if (tok.length < 20) throw new Error('That does not look like a Dhan access token.');
+      return adoptCredentials(cid, tok);
+    },
+    [adoptCredentials],
+  );
+
+  const login = useCallback(
+    async (clientId: string, pin: string, totp: string) => {
+      const cid = clientId.trim();
+      const { accessToken } = await dhanPinLogin({ clientId: cid, pin, totp, authUrl: DHAN_AUTH_URL });
+      return adoptCredentials(cid, accessToken);
+    },
+    [adoptCredentials],
+  );
+
+  const logout = useCallback(async () => {
+    await applySession(logoutSafety(await readSession()));
     await secret.del(DHAN_TOKEN_KEY);
     setDirect(null);
     setServer(null);
-  }, []);
+  }, [applySession, readSession]);
+
+  /** Log out and forget the client ID too. */
+  const clearDirect = useCallback(async () => {
+    await logout();
+    await secret.del(DHAN_CLIENT_KEY);
+    await AsyncStorage.removeItem(LAST_CLIENT_KEY);
+    setLastClientId('');
+  }, [logout]);
 
   const saveStaticIp = useCallback(async (ip: string) => {
     const clean = ip.trim();
@@ -207,6 +280,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       connection,
       directClientId,
       saveDirect,
+      login,
+      logout,
+      lastClientId,
       clearDirect,
       staticIp,
       saveStaticIp,
@@ -222,6 +298,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       connection,
       directClientId,
       saveDirect,
+      login,
+      logout,
+      lastClientId,
       clearDirect,
       staticIp,
       saveStaticIp,

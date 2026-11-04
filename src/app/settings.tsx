@@ -153,17 +153,45 @@ export default function SettingsScreen() {
 
   const [clientId, setClientId] = useState('');
   const [token, setToken] = useState('');
+  const [pin, setPin] = useState('');
+  const [totp, setTotp] = useState('');
+  const [method, setMethod] = useState<'PIN' | 'TOKEN'>('PIN');
   const [directMsg, setDirectMsg] = useState<string | null>(null);
   const [directBusy, setDirectBusy] = useState(false);
+  // Prefill the client ID of the last account used on this phone.
+  const [prefilled, setPrefilled] = useState(false);
+  if (!prefilled && settings.loaded) {
+    setPrefilled(true);
+    if (settings.lastClientId) setClientId(settings.lastClientId);
+  }
+  const [relogin, setRelogin] = useState(false);
+  const loggedIn = !!settings.directClientId;
 
-  const saveDirect = async () => {
+  const doLogin = async () => {
     setDirectBusy(true);
     setDirectMsg(null);
     try {
-      const nifty = await settings.saveDirect(clientId, token);
-      setDirectMsg(`Saved on this phone · Dhan connected · NIFTY ${nifty}`);
+      const nifty =
+        method === 'PIN' ? await settings.login(clientId, pin, totp) : await settings.saveDirect(clientId, token);
+      setDirectMsg(`Logged in · Dhan connected · NIFTY ${nifty}`);
+      setRelogin(false);
       setToken('');
-      setClientId('');
+      setPin('');
+      setTotp('');
+    } catch (e) {
+      setDirectMsg(`Failed: ${(e as Error).message}`);
+    } finally {
+      setDirectBusy(false);
+    }
+  };
+
+  const doLogout = async (forget = false) => {
+    setDirectBusy(true);
+    setDirectMsg(null);
+    try {
+      await (forget ? settings.clearDirect() : settings.logout());
+      setDirectMsg(forget ? 'Logged out and removed from this phone' : 'Logged out · switched to PAPER');
+      if (forget) setClientId('');
     } catch (e) {
       setDirectMsg(`Failed: ${(e as Error).message}`);
     } finally {
@@ -295,41 +323,91 @@ export default function SettingsScreen() {
       <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }} keyboardShouldPersistTaps="handled">
         <Card style={{ gap: 12 }}>
           <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Dhan account (this phone)</Text>
-          <Text style={ui.muted}>
-            {settings.directClientId
-              ? `Saved · client ${settings.directClientId.replace(/.(?=.{3})/g, '•')}${
-                  settings.connection === 'DIRECT'
-                    ? ' · in use (live data on this phone)'
-                    : settings.connection === 'SERVER'
-                      ? ' · not in use while a server is connected'
-                      : ' · connecting…'
-                }`
-              : 'Enter your Dhan client id and access token to get live data straight from Dhan — no server needed.'}
-          </Text>
-          <Text style={ui.muted}>
-            Stored only on this phone{Platform.OS === 'web' ? '' : ', encrypted in the Android Keystore'}. The engine,
-            live data, journal and trading run on the phone while the app is open. LIVE orders also need your static IP
-            (below) and a passing pre-flight check.
-          </Text>
-          <Field label="Dhan client id" value={clientId} onChange={setClientId} keyboard="default" />
-          <Field label="Dhan access token" value={token} onChange={setToken} keyboard="default" secure />
+          {loggedIn && !relogin ? (
+            <>
+              <Text style={{ color: colors.up, fontWeight: '700' }}>
+                Logged in · client {settings.directClientId.replace(/.(?=.{3})/g, '•')}
+              </Text>
+              <Text style={ui.muted}>
+                {settings.connection === 'DIRECT'
+                  ? 'In use — live data and trading on this phone.'
+                  : settings.connection === 'SERVER'
+                    ? 'Not in use while a server is connected.'
+                    : 'Connecting…'}{' '}
+                Dhan tokens last 24 hours; the app renews it while it can, otherwise log in again.
+              </Text>
+              <Button
+                label="Log in again (new token)"
+                onPress={() => {
+                  setDirectMsg(null);
+                  setClientId(settings.directClientId);
+                  setRelogin(true);
+                }}
+                disabled={directBusy}
+              />
+              <Button
+                label={directBusy ? 'Logging out…' : 'Log out'}
+                color={colors.down}
+                onPress={() => void doLogout()}
+                disabled={directBusy}
+              />
+              <Button
+                label="Log out and remove from this phone"
+                color={colors.cardAlt}
+                onPress={() => void doLogout(true)}
+                disabled={directBusy}
+              />
+              <Text style={[ui.muted, { fontSize: 12 }]}>
+                Log out switches the app to PAPER and turns automatic LIVE entries off. It is refused while a LIVE
+                position is open — exit it first.
+              </Text>
+            </>
+          ) : (
+            <>
+              <Segmented
+                options={[
+                  { label: 'Client ID + PIN + TOTP', value: 'PIN' as const },
+                  { label: 'Access token', value: 'TOKEN' as const },
+                ]}
+                value={method}
+                onChange={setMethod}
+              />
+              <Field label="Dhan client ID" value={clientId} onChange={setClientId} keyboard="decimal-pad" />
+              {method === 'PIN' ? (
+                <>
+                  <Field label="Dhan PIN" value={pin} onChange={setPin} keyboard="decimal-pad" secure />
+                  <Field label="TOTP code (6 digits from your authenticator app)" value={totp} onChange={setTotp} keyboard="decimal-pad" />
+                  <Text style={[ui.muted, { fontSize: 12 }]}>
+                    One-time setup: web.dhan.co → Profile → DhanHQ Trading APIs → set up TOTP, and scan the QR code
+                    with Google Authenticator (or similar). Then log in here each day with your PIN and the current
+                    code. Your PIN is used only for this login and is not stored.
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Field label="Dhan access token" value={token} onChange={setToken} keyboard="default" secure />
+                  <Text style={[ui.muted, { fontSize: 12 }]}>
+                    Generate it at web.dhan.co → Profile → DhanHQ Trading APIs (valid 24 hours).
+                  </Text>
+                </>
+              )}
+              <Button
+                label={directBusy ? 'Logging in…' : 'Log in'}
+                onPress={() => void doLogin()}
+                disabled={directBusy || !clientId || (method === 'PIN' ? !pin || !totp : !token)}
+              />
+              {relogin ? (
+                <Button label="Cancel" color={colors.cardAlt} onPress={() => setRelogin(false)} disabled={directBusy} />
+              ) : null}
+              <Text style={[ui.muted, { fontSize: 12 }]}>
+                Stored only on this phone{Platform.OS === 'web' ? '' : ', encrypted in the Android Keystore'}. Every
+                login turns automatic LIVE entries off; logging in with a different Dhan account also switches to
+                PAPER.
+              </Text>
+            </>
+          )}
           {directMsg ? (
             <Text style={{ color: directMsg.startsWith('Failed') ? colors.down : colors.up }}>{directMsg}</Text>
-          ) : null}
-          <Button
-            label={directBusy ? 'Checking with Dhan…' : settings.directClientId ? 'Update & test' : 'Save & test'}
-            onPress={saveDirect}
-            disabled={directBusy || !clientId || !token}
-          />
-          {settings.directClientId ? (
-            <Button
-              label="Remove from this phone"
-              color={colors.cardAlt}
-              onPress={() => {
-                setDirectMsg(null);
-                void settings.clearDirect();
-              }}
-            />
           ) : null}
         </Card>
 

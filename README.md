@@ -109,6 +109,22 @@ Turning it on also turns auto-refresh on. Leave the app with Home / the app swit
 closes it, and the service then posts a "stopped watching" alert and stops. Use **Allow unrestricted
 battery use**, and on Xiaomi / Oppo / Vivo / Realme / OnePlus also allow Autostart.
 
+## Log in / log out (Dhan)
+
+Settings → **Dhan account**:
+
+- **Log in with Client ID + PIN + TOTP** — the same login Dhan's own SDK uses
+  (`POST auth.dhan.co/app/generateAccessToken`). One-time setup: web.dhan.co → Profile → DhanHQ Trading APIs →
+  set up TOTP and scan the QR code with an authenticator app. The PIN is used only for the login and is not
+  stored; the resulting 24-hour token is kept in the Android Keystore. Dhan does not offer an API login with
+  your Dhan web password.
+- **Or paste an access token** generated on web.dhan.co.
+- **Log in again (new token)** — for the daily token: same account, stays in LIVE.
+- **Log out** — drops the token and switches to PAPER; refused while a LIVE position is open.
+  **Log out and remove from this phone** also forgets the client ID.
+- Safety: every login turns **automatic LIVE entries off**; logging in with a **different** client ID also
+  switches to **PAPER**, and is refused while the old account still has an open position.
+
 ## Entries: Manual / Automatic
 
 Dashboard → Trading mode → **Entries**, set separately for PAPER and LIVE:

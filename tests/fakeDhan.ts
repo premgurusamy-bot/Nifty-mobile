@@ -18,6 +18,8 @@ export interface Recorded {
 }
 
 export const FAKE_TOKEN = 'fake-access-token';
+export const FAKE_PIN = '1234';
+export const FAKE_TOTP = '246810';
 export const FAKE_CLIENT = '1100000001';
 /** Realistic-length token for app UI tests (real Dhan tokens are long JWTs). */
 export const FAKE_LONG_TOKEN = `eyJfake.${'x'.repeat(60)}.sig`;
@@ -145,6 +147,8 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
   const requests: Recorded[] = [];
   let spot = 25850.5;
   const state = {
+    /** Dhan logins (PIN + TOTP) received. */
+    logins: 0,
     orders: [] as any[],
     nextId: 5000,
     cash: 250000.5,
@@ -202,6 +206,14 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
       if (path === '/__test/ip') {
         if (req.method === 'POST') state.publicIp = body.ip;
         return send(200, { ip: state.publicIp });
+      }
+      // Dhan login (auth.dhan.co/app/generateAccessToken): client ID + PIN + TOTP → 24-hour token.
+      if (req.method === 'POST' && path.startsWith('/app/generateAccessToken')) {
+        const q = new URL(req.url ?? '', 'http://x').searchParams;
+        state.logins += 1;
+        if (q.get('dhanClientId') !== FAKE_CLIENT || q.get('pin') !== FAKE_PIN || q.get('totp') !== FAKE_TOTP)
+          return send(400, { status: 'error', message: 'Invalid PIN or TOTP' });
+        return send(200, { dhanClientId: FAKE_CLIENT, accessToken: FAKE_TOKEN, expiryTime: '2099-12-31T09:00:00' });
       }
       if (!state.tokens.has(String(req.headers['access-token']))) {
         return send(401, {
