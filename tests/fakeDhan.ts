@@ -6,6 +6,7 @@
  *
  *   node tests/fakeDhan.ts 9900     (standalone)
  */
+import { totpNow } from '../src/lib/totp.ts';
 import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { pathToFileURL } from 'node:url';
@@ -18,8 +19,9 @@ export interface Recorded {
 }
 
 export const FAKE_TOKEN = 'fake-access-token';
-export const FAKE_PIN = '1234';
-export const FAKE_TOTP = '246810';
+export const FAKE_PIN = '123456';
+/** TOTP key of the fake account; the login accepts its code for now ±30 s. */
+export const FAKE_TOTP_KEY = 'JBSWY3DPEHPK3PXP';
 export const FAKE_CLIENT = '1100000001';
 /** Realistic-length token for app UI tests (real Dhan tokens are long JWTs). */
 export const FAKE_LONG_TOKEN = `eyJfake.${'x'.repeat(60)}.sig`;
@@ -211,7 +213,9 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
       if (req.method === 'POST' && path.startsWith('/app/generateAccessToken')) {
         const q = new URL(req.url ?? '', 'http://x').searchParams;
         state.logins += 1;
-        if (q.get('dhanClientId') !== FAKE_CLIENT || q.get('pin') !== FAKE_PIN || q.get('totp') !== FAKE_TOTP)
+        const t = Date.now();
+        const codes = [t - 30_000, t, t + 30_000].map((ms) => totpNow(FAKE_TOTP_KEY, ms));
+        if (q.get('dhanClientId') !== FAKE_CLIENT || q.get('pin') !== FAKE_PIN || !codes.includes(q.get('totp') ?? ''))
           return send(400, { status: 'error', message: 'Invalid PIN or TOTP' });
         return send(200, { dhanClientId: FAKE_CLIENT, accessToken: FAKE_TOKEN, expiryTime: '2099-12-31T09:00:00' });
       }

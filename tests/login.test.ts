@@ -1,11 +1,35 @@
 /// <reference types="node" />
-/** Dhan login (client ID + PIN + TOTP), logout, and the safety rules when the login changes. */
+/** Dhan login (client ID + 6-digit PIN, TOTP made from the saved key), logout, and the login safety rules. */
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { dhanPinLogin } from '../server/dhan.ts';
 import { verifyDhanCredentials } from '../src/api/localApi.ts';
 import { loginSafety, logoutSafety } from '../src/lib/session.ts';
-import { FAKE_CLIENT, FAKE_PIN, FAKE_TOKEN, FAKE_TOTP, startFakeDhan } from './fakeDhan.ts';
+import { base32Decode, parseTotpKey, totpFromBytes, totpNow } from '../src/lib/totp.ts';
+import { FAKE_CLIENT, FAKE_PIN, FAKE_TOKEN, FAKE_TOTP_KEY, startFakeDhan } from './fakeDhan.ts';
+
+test('TOTP matches the RFC 6238 test vectors (SHA-1)', () => {
+  const key = new TextEncoder().encode('12345678901234567890');
+  const v: [number, string][] = [
+    [59, '94287082'],
+    [1111111109, '07081804'],
+    [1111111111, '14050471'],
+    [1234567890, '89005924'],
+    [2000000000, '69279037'],
+    [20000000000, '65353130'],
+  ];
+  for (const [t, want] of v) assert.equal(totpFromBytes(key, t * 1000, 8), want);
+  // same key as base32, 6 digits
+  assert.equal(totpNow('GEZD GNBV GY3T QOJQ GEZD GNBV GY3T QOJQ', 59_000), '287082');
+  assert.deepEqual([...base32Decode('MZXW6===')].map((b) => String.fromCharCode(b)).join(''), 'foo');
+});
+
+test('TOTP key input: spaces, lowercase and otpauth:// links accepted; junk refused', () => {
+  assert.equal(parseTotpKey(' jbsw y3dp ehpk 3pxp '), 'JBSWY3DPEHPK3PXP');
+  assert.equal(parseTotpKey('otpauth://totp/Dhan:1100000001?secret=JBSWY3DPEHPK3PXP&issuer=Dhan'), 'JBSWY3DPEHPK3PXP');
+  assert.throws(() => parseTotpKey('123456'), /TOTP key/);
+  assert.throws(() => parseTotpKey('otpauth://totp/x?issuer=Dhan'), /no secret/);
+});
 
 let fake: Awaited<ReturnType<typeof startFakeDhan>>;
 let authUrl = '';
@@ -15,25 +39,34 @@ before(async () => {
 });
 after(() => fake.server.close());
 
-test('PIN + TOTP login returns a working 24-hour token', async () => {
-  const r = await dhanPinLogin({ clientId: FAKE_CLIENT, pin: FAKE_PIN, totp: '246 810', authUrl });
+test('client ID + PIN + the code made from the saved key → a working 24-hour token', async () => {
+  const totp = totpNow(FAKE_TOTP_KEY);
+  const r = await dhanPinLogin({ clientId: FAKE_CLIENT, pin: FAKE_PIN, totp, authUrl });
   assert.equal(r.accessToken, FAKE_TOKEN);
   assert.equal(r.expiry, '2099-12-31T09:00:00');
   const req = fake.requests.at(-1)!;
   assert.equal(req.method, 'POST');
-  assert.match(req.path, /^\/app\/generateAccessToken\?dhanClientId=1100000001&pin=1234&totp=246810$/);
-  // the token is accepted by the data API
+  assert.equal(req.path, `/app/generateAccessToken?dhanClientId=1100000001&pin=123456&totp=${totp}`);
   assert.ok((await verifyDhanCredentials(FAKE_CLIENT, r.accessToken, fake.url)) > 0);
 });
 
-test('wrong PIN / TOTP shows Dhan’s reason; bad input is caught before calling Dhan', async () => {
-  await assert.rejects(dhanPinLogin({ clientId: FAKE_CLIENT, pin: '9999', totp: FAKE_TOTP, authUrl }), /^Error: Dhan login failed: Invalid PIN or TOTP$/);
+test('wrong PIN or wrong key is refused by Dhan; bad input is caught before calling Dhan', async () => {
+  await assert.rejects(
+    dhanPinLogin({ clientId: FAKE_CLIENT, pin: '999999', totp: totpNow(FAKE_TOTP_KEY), authUrl }),
+    /Dhan login failed: Invalid PIN or TOTP/,
+  );
+  await assert.rejects(
+    dhanPinLogin({ clientId: FAKE_CLIENT, pin: FAKE_PIN, totp: totpNow('GEZDGNBVGY3TQOJQGEZDGNBV'), authUrl }),
+    /Dhan login failed/,
+  );
   const n = fake.state.logins;
-  await assert.rejects(dhanPinLogin({ clientId: 'abc', pin: FAKE_PIN, totp: FAKE_TOTP, authUrl }), /client ID/);
-  await assert.rejects(dhanPinLogin({ clientId: FAKE_CLIENT, pin: '12', totp: FAKE_TOTP, authUrl }), /PIN/);
-  await assert.rejects(dhanPinLogin({ clientId: FAKE_CLIENT, pin: FAKE_PIN, totp: '12345', authUrl }), /6-digit TOTP/);
+  await assert.rejects(dhanPinLogin({ clientId: 'abc', pin: FAKE_PIN, totp: '000000', authUrl }), /client ID/);
+  await assert.rejects(dhanPinLogin({ clientId: FAKE_CLIENT, pin: '1234', totp: '000000', authUrl }), /6-digit Dhan PIN/);
   assert.equal(fake.state.logins, n);
-  await assert.rejects(dhanPinLogin({ clientId: FAKE_CLIENT, pin: FAKE_PIN, totp: FAKE_TOTP, authUrl: 'http://127.0.0.1:9' }), /Cannot reach Dhan login/);
+  await assert.rejects(
+    dhanPinLogin({ clientId: FAKE_CLIENT, pin: FAKE_PIN, totp: '000000', authUrl: 'http://127.0.0.1:9' }),
+    /Cannot reach Dhan login/,
+  );
 });
 
 const live = { config: { tradeMode: 'LIVE' as const, autoEntryLive: true }, position: null };

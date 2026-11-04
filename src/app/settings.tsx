@@ -154,7 +154,8 @@ export default function SettingsScreen() {
   const [clientId, setClientId] = useState('');
   const [token, setToken] = useState('');
   const [pin, setPin] = useState('');
-  const [totp, setTotp] = useState('');
+  const [totpKey, setTotpKey] = useState('');
+  const [changeKey, setChangeKey] = useState(false);
   const [method, setMethod] = useState<'PIN' | 'TOKEN'>('PIN');
   const [directMsg, setDirectMsg] = useState<string | null>(null);
   const [directBusy, setDirectBusy] = useState(false);
@@ -171,13 +172,14 @@ export default function SettingsScreen() {
     setDirectBusy(true);
     setDirectMsg(null);
     try {
-      const nifty =
-        method === 'PIN' ? await settings.login(clientId, pin, totp) : await settings.saveDirect(clientId, token);
+      if (method === 'PIN' && totpKey.trim()) await settings.saveTotpKey(totpKey);
+      const nifty = method === 'PIN' ? await settings.login(clientId, pin) : await settings.saveDirect(clientId, token);
+      setTotpKey('');
+      setChangeKey(false);
       setDirectMsg(`Logged in · Dhan connected · NIFTY ${nifty}`);
       setRelogin(false);
       setToken('');
       setPin('');
-      setTotp('');
     } catch (e) {
       setDirectMsg(`Failed: ${(e as Error).message}`);
     } finally {
@@ -366,7 +368,7 @@ export default function SettingsScreen() {
             <>
               <Segmented
                 options={[
-                  { label: 'Client ID + PIN + TOTP', value: 'PIN' as const },
+                  { label: 'Client ID + PIN', value: 'PIN' as const },
                   { label: 'Access token', value: 'TOKEN' as const },
                 ]}
                 value={method}
@@ -375,13 +377,31 @@ export default function SettingsScreen() {
               <Field label="Dhan client ID" value={clientId} onChange={setClientId} keyboard="decimal-pad" />
               {method === 'PIN' ? (
                 <>
-                  <Field label="Dhan PIN" value={pin} onChange={setPin} keyboard="decimal-pad" secure />
-                  <Field label="TOTP code (6 digits from your authenticator app)" value={totp} onChange={setTotp} keyboard="decimal-pad" />
-                  <Text style={[ui.muted, { fontSize: 12 }]}>
-                    One-time setup: web.dhan.co → Profile → DhanHQ Trading APIs → set up TOTP, and scan the QR code
-                    with Google Authenticator (or similar). Then log in here each day with your PIN and the current
-                    code. Your PIN is used only for this login and is not stored.
-                  </Text>
+                  <Field label="Dhan PIN (6 digits)" value={pin} onChange={setPin} keyboard="decimal-pad" secure />
+                  {settings.hasTotpKey && !changeKey ? (
+                    <Text style={[ui.muted, { fontSize: 12 }]}>
+                      TOTP key saved on this phone — the app makes the login code itself.{' '}
+                      <Text style={{ color: colors.accent, fontWeight: '700' }} onPress={() => setChangeKey(true)}>
+                        Change key
+                      </Text>
+                    </Text>
+                  ) : (
+                    <>
+                      <Field
+                        label="Dhan TOTP key (one-time setup)"
+                        value={totpKey}
+                        onChange={setTotpKey}
+                        keyboard="default"
+                        secure
+                      />
+                      <Text style={[ui.muted, { fontSize: 12 }]}>
+                        Once only: web.dhan.co → Profile → DhanHQ Trading APIs → Set up TOTP. Copy the key Dhan shows
+                        (letters A–Z and digits 2–7) — or the otpauth:// link from its QR code — and paste it here.
+                        After that you log in with just your client ID and PIN. The key is kept encrypted on this
+                        phone; your PIN is not stored.
+                      </Text>
+                    </>
+                  )}
                 </>
               ) : (
                 <>
@@ -394,7 +414,11 @@ export default function SettingsScreen() {
               <Button
                 label={directBusy ? 'Logging in…' : 'Log in'}
                 onPress={() => void doLogin()}
-                disabled={directBusy || !clientId || (method === 'PIN' ? !pin || !totp : !token)}
+                disabled={
+                  directBusy ||
+                  !clientId ||
+                  (method === 'PIN' ? !pin || (!settings.hasTotpKey && !totpKey.trim()) : !token)
+                }
               />
               {relogin ? (
                 <Button label="Cancel" color={colors.cardAlt} onPress={() => setRelogin(false)} disabled={directBusy} />

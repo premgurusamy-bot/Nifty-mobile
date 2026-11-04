@@ -50,7 +50,8 @@ export const DHAN_AUTH_URL = 'https://auth.dhan.co';
  * Log in with Dhan client ID + PIN + TOTP (the 6-digit code from an authenticator app) and get a
  * 24-hour access token. Same call as Dhan's own SDK (DhanLogin.generate_token):
  * POST https://auth.dhan.co/app/generateAccessToken?dhanClientId=…&pin=…&totp=…
- * TOTP must be enabled on the Dhan account (web.dhan.co → DhanHQ Trading APIs → Setup TOTP).
+ * TOTP must be enabled on the Dhan account (web.dhan.co → DhanHQ Trading APIs → Setup TOTP); the app
+ * makes the code itself from the saved TOTP key (src/lib/totp.ts), so you only type the PIN.
  */
 export async function dhanPinLogin(o: {
   clientId: string;
@@ -62,7 +63,7 @@ export async function dhanPinLogin(o: {
   const pin = o.pin.trim();
   const totp = o.totp.replace(/\s/g, '');
   if (!/^\d{5,}$/.test(clientId)) throw new Error('Dhan client ID is the number shown on your Dhan profile.');
-  if (!/^\d{4,6}$/.test(pin)) throw new Error('Enter your Dhan PIN (digits only).');
+  if (!/^\d{6}$/.test(pin)) throw new Error('Enter your 6-digit Dhan PIN.');
   if (!/^\d{6}$/.test(totp)) throw new Error('Enter the current 6-digit TOTP code from your authenticator app.');
   const q = new URLSearchParams({ dhanClientId: clientId, pin, totp });
   let res: Response;

@@ -6,6 +6,7 @@ import { createApi, type Api } from '../api/client';
 import { fetchPublicIp } from '../../server/preflight.ts';
 import { dhanPinLogin } from '../../server/dhan.ts';
 import { loginSafety, logoutSafety, type SessionSnapshot } from '../lib/session';
+import { parseTotpKey, totpNow } from '../lib/totp';
 import { createLocalApi, verifyDhanCredentials, type LocalApi } from '../api/localApi';
 import type { EngineStore } from '../lib/engine/runner';
 import type { StatusResponse } from '../lib/apiTypes';
@@ -16,6 +17,8 @@ const API_KEY = 'nifty.server-key';
 // Direct-to-Dhan credentials, kept only on this phone (Android Keystore-backed secure storage).
 const DHAN_CLIENT_KEY = 'nifty.dhan-client-id';
 const DHAN_TOKEN_KEY = 'nifty.dhan-access-token';
+/** Dhan TOTP key (saved once), so login needs only client ID + PIN. */
+const DHAN_TOTP_KEY = 'nifty.dhan-totp-key';
 const DIRECT_ENGINE_KEY = 'nifty/engine-direct/v1';
 /** Test builds only (fake Dhan). Unset in real builds → api.dhan.co. */
 const DHAN_BASE_URL = process.env.EXPO_PUBLIC_DHAN_BASE_URL || undefined;
@@ -58,8 +61,12 @@ interface SettingsValue {
   connection: Connection;
   /** Saved direct-mode client id (shown masked), or '' when none is saved. */
   directClientId: string;
-  /** Log in with Dhan client ID + PIN + TOTP: gets a 24-hour token and uses it. */
-  login: (clientId: string, pin: string, totp: string) => Promise<number>;
+  /** Log in with Dhan client ID + 6-digit PIN (the TOTP code is made from the saved TOTP key). */
+  login: (clientId: string, pin: string) => Promise<number>;
+  /** Save (or replace) the Dhan TOTP key on this phone. */
+  saveTotpKey: (key: string) => Promise<void>;
+  /** True once a TOTP key is saved. */
+  hasTotpKey: boolean;
   /** Log out: drop the token, switch to PAPER, automatic LIVE entries off (refused with an open LIVE position). */
   logout: () => Promise<void>;
   /** Client ID last used on this phone (to prefill the login form). */
@@ -85,6 +92,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [localApi, setLocalApi] = useState<LocalApi | null>(null);
   const [staticIp, setStaticIp] = useState('');
   const [lastClientId, setLastClientId] = useState('');
+  const [hasTotpKey, setHasTotpKey] = useState(false);
   const staticIpRef = useRef('');
 
   useEffect(() => {
@@ -98,6 +106,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         ]);
         const ip = (await AsyncStorage.getItem(STATIC_IP_KEY)) ?? '';
         setLastClientId((await AsyncStorage.getItem(LAST_CLIENT_KEY)) ?? cid ?? '');
+        setHasTotpKey(!!(await secret.get(DHAN_TOTP_KEY)));
         staticIpRef.current = ip;
         setStaticIp(ip);
         if (u && k) {
@@ -230,10 +239,23 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     [adoptCredentials],
   );
 
+  const saveTotpKey = useCallback(async (key: string) => {
+    const clean = parseTotpKey(key); // throws a readable message for a wrong key
+    await secret.set(DHAN_TOTP_KEY, clean);
+    setHasTotpKey(true);
+  }, []);
+
   const login = useCallback(
-    async (clientId: string, pin: string, totp: string) => {
+    async (clientId: string, pin: string) => {
       const cid = clientId.trim();
-      const { accessToken } = await dhanPinLogin({ clientId: cid, pin, totp, authUrl: DHAN_AUTH_URL });
+      const key = await secret.get(DHAN_TOTP_KEY);
+      if (!key) throw new Error('Save your Dhan TOTP key first (one-time setup below).');
+      const totp = totpNow(key);
+      const { accessToken } = await dhanPinLogin({ clientId: cid, pin, totp, authUrl: DHAN_AUTH_URL }).catch((e) => {
+        throw new Error(
+          `${(e as Error).message}. Check the PIN, that the TOTP key is the one Dhan showed, and that the phone's time is set automatically.`,
+        );
+      });
       return adoptCredentials(cid, accessToken);
     },
     [adoptCredentials],
@@ -250,8 +272,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const clearDirect = useCallback(async () => {
     await logout();
     await secret.del(DHAN_CLIENT_KEY);
+    await secret.del(DHAN_TOTP_KEY);
     await AsyncStorage.removeItem(LAST_CLIENT_KEY);
     setLastClientId('');
+    setHasTotpKey(false);
   }, [logout]);
 
   const saveStaticIp = useCallback(async (ip: string) => {
@@ -281,6 +305,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       directClientId,
       saveDirect,
       login,
+      saveTotpKey,
+      hasTotpKey,
       logout,
       lastClientId,
       clearDirect,
@@ -299,6 +325,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       directClientId,
       saveDirect,
       login,
+      saveTotpKey,
+      hasTotpKey,
       logout,
       lastClientId,
       clearDirect,

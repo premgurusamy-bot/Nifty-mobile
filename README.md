@@ -113,15 +113,15 @@ battery use**, and on Xiaomi / Oppo / Vivo / Realme / OnePlus also allow Autosta
 
 Settings → **Dhan account**:
 
-- **Log in with Client ID + PIN + TOTP** — the same login Dhan's own SDK uses
-  (`POST auth.dhan.co/app/generateAccessToken`). One-time setup: web.dhan.co → Profile → DhanHQ Trading APIs →
-  set up TOTP and scan the QR code with an authenticator app. The PIN is used only for the login and is not
-  stored; the resulting 24-hour token is kept in the Android Keystore. Dhan does not offer an API login with
-  your Dhan web password.
+- **Log in with Client ID + 6-digit PIN.** Dhan's login (`POST auth.dhan.co/app/generateAccessToken`, as in
+  their SDK) needs a TOTP code too; the app makes it itself from your **TOTP key**, saved once: web.dhan.co →
+  Profile → DhanHQ Trading APIs → Set up TOTP, copy the key (or the otpauth:// link from the QR code) and paste
+  it in the one-time field. The key is kept in the Android Keystore; the PIN is not stored; the 24-hour token
+  is. The phone's clock must be set automatically. Dhan does not offer an API login with your web password.
 - **Or paste an access token** generated on web.dhan.co.
 - **Log in again (new token)** — for the daily token: same account, stays in LIVE.
 - **Log out** — drops the token and switches to PAPER; refused while a LIVE position is open.
-  **Log out and remove from this phone** also forgets the client ID.
+  **Log out and remove from this phone** also forgets the client ID and the TOTP key.
 - Safety: every login turns **automatic LIVE entries off**; logging in with a **different** client ID also
   switches to **PAPER**, and is refused while the old account still has an open position.
 
