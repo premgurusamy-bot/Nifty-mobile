@@ -109,6 +109,13 @@ Turning it on also turns auto-refresh on. Leave the app with Home / the app swit
 closes it, and the service then posts a "stopped watching" alert and stops. Use **Allow unrestricted
 battery use**, and on Xiaomi / Oppo / Vivo / Realme / OnePlus also allow Autostart.
 
+## Entry cutoff
+
+Settings → Engine settings → **No new trades after** (IST, default **14:35** for NIFTY / BANK NIFTY /
+FIN NIFTY; a separate field for MCX, blank by default). From that time the engine arms no new setups,
+drops any armed one, and refuses ENTER; an open trade keeps its stop, targets and profit lock until it exits.
+Blank = no cutoff.
+
 ## Live P&L (Dashboard)
 
 The Dashboard's top card shows the running P&L: the open trade in ₹ (including the half booked at Target 1),

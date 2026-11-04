@@ -94,6 +94,10 @@ export interface EngineConfig {
   tradeMode: TradeMode;
   /** Product for live option orders: INTRADAY (auto square-off) or MARGIN (carry forward / NRML). */
   liveProduct: 'INTRADAY' | 'MARGIN';
+  /** No new entries after this IST time on NSE instruments ("HH:MM", blank = no cutoff). */
+  lastEntryTime: string;
+  /** Same for MCX futures (they trade until late evening). */
+  lastEntryTimeMcx: string;
   /** Seconds between automatic refreshes (floor 15, like the workbook). */
   refreshSeconds: number;
   alertsEnabled: boolean;
@@ -151,6 +155,8 @@ export const DEFAULT_CONFIG: EngineConfig = {
   autoRefresh: false,
   tradeMode: 'PAPER',
   liveProduct: 'INTRADAY',
+  lastEntryTime: '14:35',
+  lastEntryTimeMcx: '',
   refreshSeconds: 15,
   alertsEnabled: true,
   sizingMode: 'RISK',

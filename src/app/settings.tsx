@@ -167,6 +167,8 @@ export default function SettingsScreen() {
   const cfg = snap?.config;
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [expiry, setExpiry] = useState('');
+  const [cutoff, setCutoff] = useState('');
+  const [cutoffMcx, setCutoffMcx] = useState('');
   const [cfgMsg, setCfgMsg] = useState<string | null>(null);
 
   // Reload the form only when the saved settings change — the server sends a fresh
@@ -178,6 +180,8 @@ export default function SettingsScreen() {
     setLoadedKey(cfgKey);
     setDraft(Object.fromEntries(FIELDS.map(([k]) => [k, String(cfg[k])])));
     setExpiry(cfg.expiry);
+    setCutoff(cfg.lastEntryTime ?? '');
+    setCutoffMcx(cfg.lastEntryTimeMcx ?? '');
     setFutId(cfg.futSecurityId);
   }
 
@@ -227,7 +231,7 @@ export default function SettingsScreen() {
 
   const save = async (extra: Partial<EngineConfig> = {}, report: (m: string | null) => void = setCfgMsg) => {
     report(null);
-    const patch: Partial<EngineConfig> = { expiry, ...extra };
+    const patch: Partial<EngineConfig> = { expiry, lastEntryTime: cutoff, lastEntryTimeMcx: cutoffMcx, ...extra };
     if (cfg && futId.trim() !== cfg.futSecurityId) {
       // Manual contract override: the engine uses this id until you clear it (then it auto-resolves again).
       Object.assign(patch, {
@@ -537,6 +541,22 @@ export default function SettingsScreen() {
           <Card style={{ gap: 12 }}>
             <Text style={[ui.sectionTitle, { marginTop: 0 }]}>
               Engine settings {snap?.demo ? '(demo)' : settings.connection === 'DIRECT' ? '(this phone)' : '(server)'}
+            </Text>
+            <Field
+              label="No new trades after (IST, HH:MM · NIFTY / BANK NIFTY / FIN NIFTY · blank = no limit)"
+              value={cutoff}
+              onChange={setCutoff}
+              keyboard="default"
+            />
+            <Field
+              label="No new trades after — MCX (IST, HH:MM · blank = no limit)"
+              value={cutoffMcx}
+              onChange={setCutoffMcx}
+              keyboard="default"
+            />
+            <Text style={[ui.muted, { fontSize: 12 }]}>
+              After this time the engine arms no new setups and ENTER is refused; an open trade keeps its stop, target
+              and profit lock until it exits.
             </Text>
             {ENGINE_FIELDS.map(([k, label]) => (
               <Field

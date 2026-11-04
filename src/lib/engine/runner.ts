@@ -187,6 +187,13 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
       throw new Error('liveProduct must be INTRADAY or MARGIN');
     next.liveProduct = patch.liveProduct;
   }
+  for (const k of ['lastEntryTime', 'lastEntryTimeMcx'] as const) {
+    if (patch[k] === undefined) continue;
+    const v = String(patch[k]).trim();
+    const m = /^(\d{1,2}):(\d{2})$/.exec(v);
+    if (v && (!m || Number(m[1]) > 23 || Number(m[2]) > 59)) throw new Error('Entry cutoff must be HH:MM (24-hour, IST) or blank');
+    next[k] = m ? `${m[1].padStart(2, '0')}:${m[2]}` : '';
+  }
   if (patch.expiry !== undefined) {
     const e = String(patch.expiry).trim();
     if (e && !/^\d{4}-\d{2}-\d{2}$/.test(e)) throw new Error('expiry must be YYYY-MM-DD or blank');
@@ -507,7 +514,7 @@ export class EngineRunner {
     if (this.state.position) throw new Error('A position is already open — exit it first.');
     const d = this.dashboard;
     if (!d || !this.lastChain) throw new Error('No market data yet — tap Refresh now first.');
-    const gate = canTakeNewTrade(this.state, this.config);
+    const gate = canTakeNewTrade(this.state, this.config, this.clock());
     if (!gate.ok) throw new Error(gate.reason);
     const plan = d.candidatePlan ?? this.planFor(d.decision.direction, d.decision.selectedStrike, d.market.atr);
     if (!plan || plan.entry <= 0)

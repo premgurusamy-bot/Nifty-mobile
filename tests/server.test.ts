@@ -277,7 +277,7 @@ test('engine: refresh via Dhan reproduces the workbook score end-to-end and pers
   const dhan = new DhanClient({ clientId: FAKE_CLIENT, accessToken: FAKE_TOKEN, baseUrl: fake.url });
   const engine = new EngineRunner(new DhanEngineSource(dhan), new FileStore(join(dir, 'engine.json')));
   await engine.init();
-  await engine.updateConfig({ expiry: GOLDEN_EXPIRY });
+  await engine.updateConfig({ expiry: GOLDEN_EXPIRY, lastEntryTime: '' }); // tests run at any hour
   const app = createApp(cfg({}), service, engine);
   const b = await listen(app);
 
@@ -406,7 +406,7 @@ test('direct mode: verify credentials, live quotes, engine reproduces the workbo
     const q = await api.quotes(['NSE:NIFTY 50', 'NSE:RELIANCE']);
     assert.equal(q.quotes.length, 2);
 
-    await api.engineConfig({ expiry: GOLDEN_EXPIRY });
+    await api.engineConfig({ expiry: GOLDEN_EXPIRY, lastEntryTime: '', lastEntryTimeMcx: '' }); // tests run at any hour
     const snap = await api.engineRefresh();
     assert.equal(snap.status, 'Ready');
     assert.ok(Math.abs(snap.dashboard!.decision.confidence - 88.89840619701363) < 1e-6);

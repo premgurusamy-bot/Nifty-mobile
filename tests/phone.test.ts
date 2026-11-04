@@ -37,7 +37,7 @@ before(async () => {
     publicIp: async () => phoneIp,
     sleep: async () => {},
   });
-  await api.engineConfig({ expiry: GOLDEN_EXPIRY });
+  await api.engineConfig({ expiry: GOLDEN_EXPIRY, lastEntryTime: '', lastEntryTimeMcx: '' }); // tests run at any hour
   await api.engineRefresh();
 });
 

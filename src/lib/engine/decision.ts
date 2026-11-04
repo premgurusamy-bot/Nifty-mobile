@@ -77,8 +77,29 @@ function todayHasLoggedLoss(s: EngineState): boolean {
   return s.journal.some((j) => j.date === s.day && j.pnl != null && j.pnl < 0);
 }
 
-/** CanTakeNewTrade: max trades/day, no-revenge-trade, rupee daily max loss. */
-export function canTakeNewTrade(s: EngineState, cfg: EngineConfig): { ok: boolean; reason: string } {
+/** Minutes since midnight IST. */
+const istMinutes = (ms: number) => {
+  const d = ist(ms);
+  return d.getUTCHours() * 60 + d.getUTCMinutes();
+};
+
+/** The entry cutoff that applies to the selected instrument ("HH:MM" or ''). */
+export function entryCutoff(cfg: EngineConfig): string {
+  return (cfg.session === 'MCX' ? cfg.lastEntryTimeMcx : cfg.lastEntryTime) ?? '';
+}
+
+/** True when `now` is at or after the cutoff (new entries closed for the day). */
+export function pastEntryCutoff(cfg: EngineConfig, now: number): boolean {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(entryCutoff(cfg).trim());
+  if (!m) return false;
+  return istMinutes(now) >= Number(m[1]) * 60 + Number(m[2]);
+}
+
+/** CanTakeNewTrade: entry cutoff time, max trades/day, no-revenge-trade, rupee daily max loss. */
+export function canTakeNewTrade(s: EngineState, cfg: EngineConfig, now?: number): { ok: boolean; reason: string } {
+  if (now != null && pastEntryCutoff(cfg, now)) {
+    return { ok: false, reason: `No new trades after ${entryCutoff(cfg).trim()} IST` };
+  }
   if (s.tradesToday >= cfg.maxTradesPerDay) {
     return { ok: false, reason: `Daily trade limit reached (${s.tradesToday}/${cfg.maxTradesPerDay})` };
   }
@@ -544,9 +565,10 @@ function stagedDecision(
     signal = 'WAIT';
     decisionText = `WATCH - CONFIRMATION BUILDING (${label})`;
   } else {
-    const gate = canTakeNewTrade(s, cfg);
+    const gate = canTakeNewTrade(s, cfg, now);
     if (!gate.ok) {
       s.blockedReason = gate.reason;
+      if (pastEntryCutoff(cfg, now)) s.pending = null; // an armed setup doesn't survive the entry cutoff
       signal = 'NO TRADE';
       decisionText = `BLOCKED - ${gate.reason}`;
     } else {
