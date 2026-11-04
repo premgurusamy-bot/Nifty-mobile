@@ -263,6 +263,14 @@ export interface JournalRow {
   delta: number;
   entryReason: string;
   exitReason: string;
+  /** Quantity traded (units for options, lots for MCX); absent in older rows. */
+  qty?: number;
+  /** PAPER or LIVE; absent in older rows (then read from the entry reason). */
+  mode?: TradeMode;
+  /** IST exit time HH:MM:SS; absent in older rows. */
+  exitTime?: string;
+  /** ₹ per point per unit (MCX); absent = 1. */
+  pointValue?: number;
 }
 
 export interface EngineEvent {

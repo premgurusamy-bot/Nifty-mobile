@@ -1,5 +1,6 @@
 import { Link, router } from 'expo-router';
 import { Alert, FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { StrategyResultsCard } from '../../components/StrategyResults';
 import { Card, Empty, Stat, styles as ui } from '../../components/ui';
 import { formatINR, formatNumber, formatPct, formatSigned } from '../../lib/format';
 import { displayName } from '../../lib/instruments';
@@ -30,11 +31,13 @@ export default function PortfolioScreen() {
   const header = (
     <View style={{ padding: 16, gap: 12 }}>
       {p.error ? <Text style={s.error}>{p.error}</Text> : null}
+      <StrategyResultsCard />
+      <Text style={ui.sectionTitle}>{live ? 'Dhan account' : 'Manual paper account (stocks & options)'}</Text>
       <Card>
         <Text style={ui.muted}>
           {live
             ? 'Dhan account · LIVE'
-            : `Paper account · ${source === 'DHAN' ? 'Dhan live prices' : 'simulated prices'}`}
+            : `Manual buys from Markets / Option Chain · ${source === 'DHAN' ? 'Dhan live prices' : 'simulated prices'}`}
         </Text>
         <Text style={ui.h1}>{formatINR(p.summary.equity)}</Text>
         {live ? null : (

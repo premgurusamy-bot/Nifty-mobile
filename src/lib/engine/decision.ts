@@ -305,6 +305,7 @@ function finalize(
     j.exit = exitPrice;
     j.pnl = total;
     j.exitReason = `${reason} (auto-closed, total P&L Rs ${Math.round(total)})`;
+    j.exitTime = istTime(now);
   }
   s.realizedToday += legPnl;
   s.position = null;
@@ -475,6 +476,9 @@ export function openTrade(s: EngineState, cfg: EngineConfig, a: OpenTradeArgs): 
     delta: a.delta,
     entryReason: a.reason,
     exitReason: '',
+    qty: a.qty,
+    mode: a.live ? 'LIVE' : 'PAPER',
+    ...(futures ? { pointValue: cfg.pointValue || 1 } : {}),
   };
   s.journal.push(row);
   s.position = {

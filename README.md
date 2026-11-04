@@ -109,6 +109,16 @@ Turning it on also turns auto-refresh on. Leave the app with Home / the app swit
 closes it, and the service then posts a "stopped watching" alert and stops. Use **Allow unrestricted
 battery use**, and on Xiaomi / Oppo / Vivo / Realme / OnePlus also allow Autostart.
 
+## Portfolio: strategy results
+
+The Portfolio tab opens with **Strategy results** from the trade journal, separately for PAPER and LIVE:
+equity on the configured capital (paper capital; live capital when set), all-time and today's P&L including
+the open trade, closed trades, win rate, wins/losses, profit factor, max drawdown, average win/loss,
+best/worst, gross profit/loss, the open trade and the latest closed trades. PAPER also shows estimated NSE
+option charges (₹20/order brokerage, STT, exchange, SEBI, stamp, GST) and the net after them; slippage is
+not included. The older manual paper account (stocks and options bought from Markets / Option Chain) follows
+below it. New journal rows record quantity, PAPER/LIVE and exit time.
+
 ## Log in / log out (Dhan)
 
 Settings → **Dhan account**:

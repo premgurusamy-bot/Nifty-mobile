@@ -670,8 +670,10 @@ export class EngineRunner {
     const next: EngineState = JSON.parse(JSON.stringify(this.state));
     const j = next.journal.find((x) => x.id === leg.journalId);
     if (!j || j.exit == null) return;
-    const oldLeg = (j.exit - leg.entry) * leg.remainingQty;
-    const newLeg = (fillPrice - leg.entry) * leg.remainingQty;
+    // Direction- and ₹/point-aware (MCX shorts), like the engine's own P&L.
+    const k = (leg.side ?? 1) * leg.remainingQty * (leg.pointValue ?? 1);
+    const oldLeg = (j.exit - leg.entry) * k;
+    const newLeg = (fillPrice - leg.entry) * k;
     j.exit = fillPrice;
     j.pnl = leg.partialPnl + newLeg;
     j.exitReason = `${j.exitReason} · ${note} @ ${fillPrice.toFixed(2)}`;
