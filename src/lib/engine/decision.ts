@@ -244,7 +244,17 @@ export function buildTradePlan(
   const target1 = entry + riskPts * cfg.rrTarget;
   const target2 = entry + riskPts * cfg.rrTarget * 1.5;
   const size = sizeLots(cfg, riskPts * cfg.lotSize, entry * cfg.lotSize, 'premium per lot');
-  const qty = size.lots * cfg.lotSize;
+  // Cheap-premium filters: a stop that is a large share of a cheap option is hit by noise,
+  // and cheap options mean more lots, wider spreads and fast decay.
+  const stopPct = entry > 0 ? ((entry - sl) / entry) * 100 : 0;
+  const cheap =
+    cfg.minPremium > 0 && entry < cfg.minPremium
+      ? `Premium ${fmt2(entry)} is below the minimum ${fmt2(cfg.minPremium)}`
+      : cfg.maxStopPct > 0 && stopPct > cfg.maxStopPct
+        ? `Stop-loss is ${stopPct.toFixed(1)}% of the premium (max ${cfg.maxStopPct}%)`
+        : null;
+  if (cheap) size.blocked = size.blocked ?? cheap;
+  const qty = size.blocked ? 0 : size.lots * cfg.lotSize;
   return {
     strike,
     direction: dir,

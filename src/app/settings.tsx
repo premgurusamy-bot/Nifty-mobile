@@ -46,7 +46,9 @@ type NumKey =
   | 'lockStart'
   | 'lockStep'
   | 'lockRideFrom'
-  | 'lockRideAmount';
+  | 'lockRideAmount'
+  | 'minPremium'
+  | 'maxStopPct';
 
 /** Strategy / discipline settings — shared by every instrument. */
 const ENGINE_FIELDS: [NumKey, string][] = [
@@ -85,7 +87,12 @@ const LOCK_FIELDS: [NumKey, string][] = [
   ['lockRideFrom', 'Stop stepping at secured profit (₹, 0 = keep stepping)'],
   ['lockRideAmount', 'Above that, let this much ride from the peak (₹)'],
 ];
+const CHEAP_FIELDS: [NumKey, string][] = [
+  ['minPremium', 'Minimum option premium (₹, 0 = off)'],
+  ['maxStopPct', 'Maximum stop-loss as % of premium (0 = off)'],
+];
 const FIELDS: [NumKey, string][] = [
+  ...CHEAP_FIELDS,
   ...ENGINE_FIELDS,
   ...OPTION_FIELDS,
   ...FUTURES_FIELDS,
@@ -558,6 +565,24 @@ export default function SettingsScreen() {
               After this time the engine arms no new setups and ENTER is refused; an open trade keeps its stop, target
               and profit lock until it exits.
             </Text>
+            {!isFut ? (
+              <>
+                <Text style={s.label}>Cheap premium filter (options)</Text>
+                {CHEAP_FIELDS.map(([k, label]) => (
+                  <Field
+                    key={k}
+                    label={label}
+                    value={draft[k] ?? ''}
+                    onChange={(v) => setDraft((d) => ({ ...d, [k]: v }))}
+                  />
+                ))}
+                <Text style={[ui.muted, { fontSize: 12 }]}>
+                  A setup whose option is cheaper than the minimum, or whose stop-loss is a bigger share of the
+                  premium than the maximum, is skipped (signal shows BLOCKED, ENTER is refused). Set either to 0 to
+                  switch it off.
+                </Text>
+              </>
+            ) : null}
             {ENGINE_FIELDS.map(([k, label]) => (
               <Field
                 key={k}

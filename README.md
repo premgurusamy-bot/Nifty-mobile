@@ -109,6 +109,12 @@ Turning it on also turns auto-refresh on. Leave the app with Home / the app swit
 closes it, and the service then posts a "stopped watching" alert and stops. Use **Allow unrestricted
 battery use**, and on Xiaomi / Oppo / Vivo / Realme / OnePlus also allow Autostart.
 
+## Cheap premium filter (options)
+
+Settings → Engine settings → **Cheap premium filter**: **Minimum option premium** (default ₹40) and
+**Maximum stop-loss as % of premium** (default 25%). A setup that fails either is skipped: the signal shows
+`BLOCKED - …` with the reason and ENTER is refused. 0 switches a rule off. MCX futures are not affected.
+
 ## Entry cutoff
 
 Settings → Engine settings → **No new trades after** (IST, default **14:35** for NIFTY / BANK NIFTY /

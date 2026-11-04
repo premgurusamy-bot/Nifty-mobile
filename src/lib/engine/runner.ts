@@ -212,6 +212,8 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   num('capitalLive', 0, 1e11);
   num('capitalPct', 1, 100);
   num('marginPerLot', 0, 1e9);
+  num('minPremium', 0, 100_000);
+  num('maxStopPct', 0, 100);
   if (patch.profitLock !== undefined) next.profitLock = !!patch.profitLock;
   num('lockStart', 1, 1e10);
   num('lockStep', 1, 1e10);

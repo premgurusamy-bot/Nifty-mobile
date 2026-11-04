@@ -94,6 +94,10 @@ export interface EngineConfig {
   tradeMode: TradeMode;
   /** Product for live option orders: INTRADAY (auto square-off) or MARGIN (carry forward / NRML). */
   liveProduct: 'INTRADAY' | 'MARGIN';
+  /** Options: skip trades whose premium is below this (₹; 0 = off). */
+  minPremium: number;
+  /** Options: skip trades whose stop-loss is more than this % of the premium (0 = off). */
+  maxStopPct: number;
   /** No new entries after this IST time on NSE instruments ("HH:MM", blank = no cutoff). */
   lastEntryTime: string;
   /** Same for MCX futures (they trade until late evening). */
@@ -155,6 +159,8 @@ export const DEFAULT_CONFIG: EngineConfig = {
   autoRefresh: false,
   tradeMode: 'PAPER',
   liveProduct: 'INTRADAY',
+  minPremium: 40,
+  maxStopPct: 25,
   lastEntryTime: '14:35',
   lastEntryTimeMcx: '',
   refreshSeconds: 15,
