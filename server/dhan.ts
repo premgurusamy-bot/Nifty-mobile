@@ -43,6 +43,8 @@ export interface DhanOptions {
 
 export type Securities = Record<string, number[]>;
 
+export const DHAN_API_URL = 'https://api.dhan.co/v2';
+
 export class DhanClient {
   private opts: Required<DhanOptions>;
   // Dhan limits: quote APIs 1 req/s, option chain 1 req/3s, data APIs a few per second.
@@ -52,7 +54,12 @@ export class DhanClient {
   private tradeThrottle = new Throttle(100);
 
   constructor(opts: DhanOptions) {
-    this.opts = { baseUrl: 'https://api.dhan.co/v2', timeoutMs: 15000, ...opts };
+    // An explicit `undefined` (no test URL configured) must not wipe the defaults.
+    this.opts = {
+      ...opts,
+      baseUrl: opts.baseUrl || DHAN_API_URL,
+      timeoutMs: opts.timeoutMs ?? 15000,
+    };
   }
 
   get clientId() {
