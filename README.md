@@ -99,6 +99,16 @@ Each event type can be switched off. Volume Low / Medium / High (30 / 60 / 100 %
 built-in Chime / Beep / Bell / Alarm, or **Pick custom sound** to use any audio file on the phone (copied
 into the app). Alerts work while the app is open.
 
+### Run in background (Android)
+
+Settings → **Run in background** starts a foreground service (a permanent "Nifty Trader is watching the
+market" notification showing instrument, mode, signal and last refresh). It keeps the engine refreshing,
+live orders followed up and alerts sounding while you use other apps or the screen is off; alerts then pop up
+as high-priority notifications over any app and on the lock screen, with the chosen sound and volume.
+Turning it on also turns auto-refresh on. Leave the app with Home / the app switcher — swiping it away
+closes it, and the service then posts a "stopped watching" alert and stops. Use **Allow unrestricted
+battery use**, and on Xiaomi / Oppo / Vivo / Realme / OnePlus also allow Autostart.
+
 ## Phone-only setup (no server)
 
 1. ⚙ Settings → **Dhan account (this phone)**: enter your Dhan client id and access token and tap **Save & test**. They are checked with Dhan and stored only on the phone, encrypted by the Android Keystore.

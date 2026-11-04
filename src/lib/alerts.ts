@@ -21,6 +21,8 @@ export interface AlertPrefs {
   customName: string;
   vibrate: boolean;
   categories: Record<AlertCategory, boolean>;
+  /** Android: keep running in the background (foreground service + pop-up notifications). */
+  background: boolean;
 }
 
 export const VOLUME: Record<VolumeLevel, number> = { LOW: 0.3, MEDIUM: 0.6, HIGH: 1 };
@@ -51,6 +53,7 @@ export const DEFAULT_ALERT_PREFS: AlertPrefs = {
   customName: '',
   vibrate: true,
   categories: { signal: true, entry: true, target: true, stop: true, exit: true, error: true },
+  background: false,
 };
 
 /** Merge stored prefs over the defaults (older saves may lack newer fields). */
@@ -126,3 +129,20 @@ export function newAlerts(events: EngineEvent[], seen: Set<string>, prefs: Alert
 /** Engine status lines that report a live order failure (alerted as 'error'). */
 export const isOrderErrorStatus = (status: string) =>
   /live order error|order failed|stop-loss order failed|rejected/i.test(status);
+
+/** One-line status for the background notification ("NIFTY · PAPER · WAIT · 10:29"). */
+export function statusLine(snap: {
+  config: { symbol: string; tradeMode: string; autoRefresh: boolean };
+  dashboard: { decision: { signal: string } } | null;
+  state: { position: { direction: string; strike: number } | null };
+  lastRefresh: number | null;
+}): string {
+  const t = snap.lastRefresh
+    ? new Date(snap.lastRefresh + 5.5 * 3600_000).toISOString().slice(11, 16) + ' IST'
+    : 'not refreshed';
+  const pos = snap.state.position
+    ? `IN ${snap.state.position.direction}${snap.state.position.strike ? ' ' + snap.state.position.strike : ''}`
+    : (snap.dashboard?.decision.signal ?? '—');
+  const auto = snap.config.autoRefresh ? '' : ' · AUTO-REFRESH OFF';
+  return `${snap.config.symbol} · ${snap.config.tradeMode} · ${pos} · ${t}${auto}`;
+}

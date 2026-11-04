@@ -188,3 +188,22 @@ test('alert prefs: volume levels and safe loading of old saves', () => {
   assert.equal(p.categories.signal, true);
   assert.deepEqual(loadPrefs(null), DEFAULT_ALERT_PREFS);
 });
+
+test('background notification status line', async () => {
+  const { statusLine } = await import('../src/lib/alerts.ts');
+  const at = Date.UTC(2026, 10, 4, 4, 59); // 10:29 IST
+  const base = { config: { symbol: 'NIFTY', tradeMode: 'PAPER', autoRefresh: true }, lastRefresh: at };
+  assert.equal(
+    statusLine({ ...base, dashboard: { decision: { signal: 'WAIT' } }, state: { position: null } }),
+    'NIFTY · PAPER · WAIT · 10:29 IST',
+  );
+  assert.equal(
+    statusLine({
+      ...base,
+      config: { ...base.config, autoRefresh: false },
+      dashboard: null,
+      state: { position: { direction: 'PE', strike: 24200 } },
+    }),
+    'NIFTY · PAPER · IN PE 24200 · 10:29 IST · AUTO-REFRESH OFF',
+  );
+});

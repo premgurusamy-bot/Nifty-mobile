@@ -3,18 +3,21 @@ import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from 'expo-aud
 import * as DocumentPicker from 'expo-document-picker';
 import { File, Paths } from 'expo-file-system';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Platform, Pressable, StyleSheet, Text, Vibration, View } from 'react-native';
+import { AppState, Platform, Pressable, StyleSheet, Text, Vibration, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   DEFAULT_ALERT_PREFS,
   isOrderErrorStatus,
   loadPrefs,
   newAlerts,
+  statusLine,
   VOLUME,
   type AlertCategory,
   type AlertItem,
   type AlertPrefs,
 } from '../lib/alerts';
+import { backgroundSupported, heartbeat, isBackgroundRunning, startBackground, stopBackground } from '../lib/background';
+import { ensureNotificationPermission, notifyNow } from '../lib/notify';
 import { colors } from '../theme';
 import { useEngine } from './EngineContext';
 
@@ -31,6 +34,10 @@ interface AlertsValue {
   pickCustom: () => Promise<string | null>;
   /** Play the current sound + show a sample message. */
   test: () => void;
+  /** Background running (Android). */
+  bg: { supported: boolean; running: boolean; error: string | null; notifications: boolean | null };
+  /** Turn background running on (also turns auto-refresh on) or off. */
+  setBackground: (on: boolean) => Promise<void>;
 }
 
 const Ctx = createContext<AlertsValue | null>(null);
@@ -55,7 +62,14 @@ const ACCENT: Record<AlertCategory, string> = {
 };
 
 export function AlertsProvider({ children }: { children: ReactNode }) {
-  const { snap } = useEngine();
+  const { snap, updateConfig } = useEngine();
+  const snapRef = useRef(snap);
+  const [bg, setBg] = useState<AlertsValue['bg']>({
+    supported: backgroundSupported(),
+    running: false,
+    error: null,
+    notifications: null,
+  });
   const [prefs, setPrefs] = useState<AlertPrefs>(DEFAULT_ALERT_PREFS);
   // Latest prefs for callbacks; written together with the state (never during render).
   const prefsRef = useRef(prefs);
@@ -72,8 +86,10 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
         setPrefs(p);
       })
       .catch(() => {});
-    // Alerts should be heard even with the iPhone's silent switch on, and duck other audio.
-    setAudioModeAsync({ playsInSilentMode: true, interruptionMode: 'duckOthers' }).catch(() => {});
+    // Alerts should be heard with the silent switch on and while the app is in the background.
+    setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'duckOthers' }).catch(
+      () => {},
+    );
   }, []);
 
   // One player per chosen sound; swapped when the sound changes.
@@ -109,7 +125,8 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
         /* a broken custom file must not break trading */
       }
     }
-    if (p.vibrate && Platform.OS !== 'web') {
+    // In the background the notification channel vibrates instead.
+    if (p.vibrate && Platform.OS !== 'web' && AppState.currentState === 'active') {
       Vibration.vibrate(category === 'stop' || category === 'error' ? [0, 500, 200, 500, 200, 500] : [0, 350, 150, 350]);
     }
   }, []);
@@ -118,7 +135,12 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
     (items: AlertItem[]) => {
       if (!items.length) return;
       ring(items[items.length - 1].category);
-      if (prefsRef.current.popup) setShown((s) => [...items.reverse(), ...s].slice(0, 3));
+      const p = prefsRef.current;
+      // Away from the app: a system notification that pops up over other apps / the lock screen.
+      if (p.popup && AppState.currentState !== 'active') {
+        for (const a of items) notifyNow({ title: a.title, body: a.message, category: a.category }).catch(() => {});
+      }
+      if (p.popup) setShown((s) => [...[...items].reverse(), ...s].slice(0, 3));
     },
     [ring],
   );
@@ -138,6 +160,42 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
       }
     }
   }, [snap, raise]);
+
+  // Background running: start/stop the service with the setting; heartbeat while the UI is alive.
+  useEffect(() => {
+    snapRef.current = snap;
+  }, [snap]);
+  useEffect(() => {
+    if (!bg.supported) return;
+    let cancelled = false;
+    const sync = async () => {
+      try {
+        if (prefs.background) {
+          const desc = snapRef.current ? statusLine(snapRef.current) : 'Starting…';
+          await startBackground(desc);
+        } else await stopBackground();
+        if (!cancelled) setBg((b) => ({ ...b, running: isBackgroundRunning(), error: null }));
+      } catch (e) {
+        if (!cancelled) setBg((b) => ({ ...b, running: isBackgroundRunning(), error: (e as Error).message }));
+      }
+    };
+    void sync();
+    return () => {
+      cancelled = true;
+    };
+  }, [prefs.background, bg.supported]);
+  useEffect(() => {
+    const beat = () => heartbeat(snapRef.current ? statusLine(snapRef.current) : undefined);
+    beat();
+    const t = setInterval(() => {
+      beat();
+      setBg((b) => (b.running === isBackgroundRunning() ? b : { ...b, running: isBackgroundRunning() }));
+    }, 15_000);
+    return () => clearInterval(t);
+  }, []);
+  useEffect(() => {
+    if (snap) heartbeat(statusLine(snap));
+  }, [snap]);
 
   // Pop-ups clear themselves (stop-loss / errors stay longer).
   useEffect(() => {
@@ -177,6 +235,15 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
         await persist({ ...prefsRef.current, tone: 'custom', customUri: uri, customName: a.name });
         return a.name;
       },
+      bg,
+      setBackground: async (on) => {
+        if (on) {
+          const granted = await ensureNotificationPermission().catch(() => false);
+          setBg((b) => ({ ...b, notifications: granted }));
+          if (snapRef.current && !snapRef.current.config.autoRefresh) await updateConfig({ autoRefresh: true });
+        }
+        await persist({ ...prefsRef.current, background: on });
+      },
       test: () =>
         raise([
           {
@@ -188,7 +255,7 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
           },
         ]),
     }),
-    [prefs, persist, raise],
+    [prefs, persist, raise, bg, updateConfig],
   );
 
   return (
