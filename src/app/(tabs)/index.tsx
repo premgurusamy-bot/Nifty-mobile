@@ -228,10 +228,39 @@ export default function DashboardScreen() {
             phone ? switchMode(m) : setTradeMsg('Connect your Dhan account in ⚙ Settings to trade LIVE.')
           }
         />
+        <Text style={s.label}>Entries</Text>
+        <Segmented
+          options={[
+            { label: 'Manual (tap ENTER)', value: 'MANUAL' as const },
+            { label: 'Automatic', value: 'AUTO' as const },
+          ]}
+          value={(isLive ? cfg.autoEntryLive : cfg.autoEntryPaper !== false) ? 'AUTO' : 'MANUAL'}
+          onChange={(v) => {
+            const on = v === 'AUTO';
+            if (!isLive) {
+              void updateConfig({ autoEntryPaper: on }).catch((e) => setTradeMsg(e.message));
+              return;
+            }
+            if (!on) {
+              void updateConfig({ autoEntryLive: false }).catch((e) => setTradeMsg(e.message));
+              return;
+            }
+            confirmDialog(
+              'Turn on automatic LIVE entries?',
+              'The app will place REAL buy orders on your Dhan account by itself whenever a signal is confirmed — with a stop-loss order at Dhan on every fill — while it is running. Your limits still apply: trades per day, no trade after a loss, daily max loss, the entry cutoff time, the premium filters and max lots. Auto refresh is switched on. Keep the app running (Settings → Run in background).',
+              'Turn on',
+              () => void updateConfig({ autoEntryLive: true, autoRefresh: true }).catch((e) => setTradeMsg(e.message)),
+            );
+          }}
+        />
         <Text style={[ui.muted, isLive && { color: colors.down, fontWeight: '700' }]}>
           {isLive
-            ? 'LIVE — ENTER / EXIT place real orders on your Dhan account. Signals are not traded automatically.'
-            : 'PAPER — signals are traded on paper, nothing is sent to Dhan.'}
+            ? cfg.autoEntryLive
+              ? 'LIVE · AUTOMATIC — confirmed signals place REAL orders on your Dhan account by themselves.'
+              : 'LIVE · MANUAL — ENTER / EXIT place real orders on your Dhan account. Signals only alert you.'
+            : cfg.autoEntryPaper !== false
+              ? 'PAPER · AUTOMATIC — signals are traded on paper, nothing is sent to Dhan.'
+              : 'PAPER · MANUAL — signals alert you; tap ENTER to take them on paper.'}
         </Text>
         {blocked ? <PreflightList result={blocked} /> : null}
       </Card>

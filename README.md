@@ -109,6 +109,20 @@ Turning it on also turns auto-refresh on. Leave the app with Home / the app swit
 closes it, and the service then posts a "stopped watching" alert and stops. Use **Allow unrestricted
 battery use**, and on Xiaomi / Oppo / Vivo / Realme / OnePlus also allow Autostart.
 
+## Entries: Manual / Automatic
+
+Dashboard → Trading mode → **Entries**, set separately for PAPER and LIVE:
+
+- **PAPER** — Automatic (default, as before): confirmed signals are traded on paper. Manual: they alert you
+  and wait for ENTER.
+- **LIVE** — Manual (default): confirmed signals only alert you. Automatic (asks for confirmation; turns
+  auto-refresh on): each newly confirmed signal places a real market BUY through the same path as ENTER,
+  so every gate is checked again (trades per day, no trade after a loss, daily max loss, entry cutoff,
+  premium filters, max lots, capital) and the exchange stop-loss is placed on fill; one order per signal,
+  never while a limit entry is pending or a position is open. Journaled as "Auto LIVE entry"; a refused or
+  failed order shows as "Live order error - automatic entry failed: …" and raises an alert.
+  **Switching into LIVE always starts in Manual.** Works while the app is running (Run in background).
+
 ## Cheap premium filter (options)
 
 Settings → Engine settings → **Cheap premium filter**: **Minimum option premium** (default ₹40) and

@@ -177,9 +177,13 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   num('underlyingSecurityId', 0, 1e9);
   num('refreshSeconds', 15, 3600);
   if (patch.autoRefresh !== undefined) next.autoRefresh = !!patch.autoRefresh;
+  if (patch.autoEntryPaper !== undefined) next.autoEntryPaper = !!patch.autoEntryPaper;
+  if (patch.autoEntryLive !== undefined) next.autoEntryLive = !!patch.autoEntryLive;
   if (patch.alertsEnabled !== undefined) next.alertsEnabled = !!patch.alertsEnabled;
   if (patch.tradeMode !== undefined) {
     if (patch.tradeMode !== 'PAPER' && patch.tradeMode !== 'LIVE') throw new Error('tradeMode must be PAPER or LIVE');
+    // Every switch into LIVE starts with manual entries: automatic live trading is a separate, explicit choice.
+    if (patch.tradeMode === 'LIVE' && next.tradeMode !== 'LIVE' && patch.autoEntryLive === undefined) next.autoEntryLive = false;
     next.tradeMode = patch.tradeMode;
   }
   if (patch.liveProduct !== undefined) {
@@ -574,7 +578,16 @@ export class EngineRunner {
   }
 
   /** Open a position from a manual ENTER (paper at LTP, or live at the actual fill). */
-  async manualEnter(opts: { entry?: number; qty?: number; live?: LiveLegs; plan?: TradePlan; reason?: string } = {}) {
+  /** Take (and clear) this cycle's LIVE automatic-entry request, if any. */
+  takeAutoRequest(): string | null {
+    const k = this.state.liveAutoRequest ?? null;
+    if (k) this.state = { ...this.state, liveAutoRequest: null };
+    return k;
+  }
+
+  async manualEnter(
+    opts: { entry?: number; qty?: number; live?: LiveLegs; plan?: TradePlan; reason?: string; auto?: boolean } = {},
+  ) {
     const plan = opts.plan ?? this.entryPlan();
     const d = this.dashboard!;
     const now = this.clock();
@@ -592,7 +605,7 @@ export class EngineRunner {
       oiBias: d.decision.oiStrength,
       iv: d.greeks.iv,
       delta: d.greeks.delta,
-      reason: `${opts.live ? 'Manual LIVE entry' : 'Manual entry'}${opts.reason ? ` · ${opts.reason}` : ''}: ${d.decision.decisionText} | Confidence ${d.decision.confidence.toFixed(2)}/100`,
+      reason: `${opts.auto ? 'Auto LIVE entry' : opts.live ? 'Manual LIVE entry' : 'Manual entry'}${opts.reason ? ` · ${opts.reason}` : ''}: ${d.decision.decisionText} | Confidence ${d.decision.confidence.toFixed(2)}/100`,
     });
     next.pendingEntry = null;
     if (opts.live && next.position) next.position.live = opts.live;

@@ -92,6 +92,11 @@ export interface EngineConfig {
   autoRefresh: boolean;
   /** PAPER: the engine trades its signals on paper (like the workbook). LIVE: real Dhan orders, entries only via ENTER. */
   tradeMode: TradeMode;
+  /** PAPER: the engine takes confirmed signals by itself (true) or waits for ENTER (false). */
+  autoEntryPaper: boolean;
+  /** LIVE: place real entry orders automatically on confirmed signals. Off by default, and
+   *  switched off again every time the app is switched to LIVE. */
+  autoEntryLive: boolean;
   /** Product for live option orders: INTRADAY (auto square-off) or MARGIN (carry forward / NRML). */
   liveProduct: 'INTRADAY' | 'MARGIN';
   /** Options: skip trades whose premium is below this (₹; 0 = off). */
@@ -158,6 +163,8 @@ export const DEFAULT_CONFIG: EngineConfig = {
   maxDailyLoss: 3000,
   autoRefresh: false,
   tradeMode: 'PAPER',
+  autoEntryPaper: true,
+  autoEntryLive: false,
   liveProduct: 'INTRADAY',
   minPremium: 40,
   maxStopPct: 25,
@@ -274,6 +281,8 @@ export interface EngineState {
   lastFiredKey: string;
   /** Last confirmed live signal alerted (so each one alerts once). */
   lastSignalKey?: string;
+  /** Set for one cycle when LIVE automatic entry should place an order for a new confirmed signal. */
+  liveAutoRequest?: string | null;
   realizedToday: number;
   position: OpenPosition | null;
   journal: JournalRow[];

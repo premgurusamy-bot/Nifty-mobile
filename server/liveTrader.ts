@@ -170,7 +170,7 @@ export class LiveTrader {
    * at that price, which stays pending at Dhan until it fills (checked on every
    * refresh) or you cancel it. Either way the protective stop goes in on fill.
    */
-  async enter(runner: EngineRunner, limit?: number): Promise<OpenPosition | null> {
+  async enter(runner: EngineRunner, limit?: number, opts: { auto?: boolean } = {}): Promise<OpenPosition | null> {
     if (this.busy) throw new Error('Another live order is in progress');
     if (runner.state.pendingEntry) throw new Error('An entry order is already pending — cancel it first.');
     this.busy = true;
@@ -185,7 +185,7 @@ export class LiveTrader {
       const side = sideOf(plan.direction);
       if (limit == null) {
         const fill = await this.marketOrder(securityId, openSide(side), plan.qty, c);
-        return await this.opened(runner, plan, securityId, fill);
+        return await this.opened(runner, plan, securityId, fill, opts.auto);
       }
       validateLimit(limit, c.tick);
       const res = await this.dhan.placeOrder({
@@ -226,12 +226,12 @@ export class LiveTrader {
   }
 
   /** Entry filled: open the engine position at the real fill, then place the protective stop. */
-  private async opened(runner: EngineRunner, plan: TradePlan, securityId: string, buy: Fill) {
+  private async opened(runner: EngineRunner, plan: TradePlan, securityId: string, buy: Fill, auto = false) {
     const live: LiveLegs = { securityId, entryOrderId: buy.orderId, slOrderId: null };
     const limitNote = runner.state.pendingEntry
       ? `limit ${runner.state.pendingEntry.limit.toFixed(2)} filled`
       : undefined;
-    const pos = await runner.manualEnter({ plan, entry: buy.avgPrice, qty: buy.filledQty, live, reason: limitNote });
+    const pos = await runner.manualEnter({ plan, entry: buy.avgPrice, qty: buy.filledQty, live, reason: limitNote, auto });
     try {
       const sl = await this.placeStop(securityId, pos.remainingQty, pos.currentSl, pos.side ?? 1, ctxOf(runner.config));
       await runner.patchPosition({ live: { ...live, slOrderId: sl } });
@@ -321,6 +321,22 @@ export class LiveTrader {
    * `before` is the state going into the cycle, `after` the result.
    */
   async afterCycle(runner: EngineRunner, before: EngineState, after: EngineState) {
+    // LIVE automatic entry: this cycle confirmed a new signal and the switch is on.
+    const auto = runner.takeAutoRequest();
+    if (auto && !this.busy) {
+      const cfg = runner.config;
+      if (cfg.tradeMode === 'LIVE' && cfg.autoEntryLive && !runner.state.position && !runner.state.pendingEntry) {
+        try {
+          // Same path as tapping ENTER at market: every gate (time cutoff, daily limits, premium
+          // filters, lot cap, capital) is checked again, and the exchange stop-loss goes in on fill.
+          const pos = await this.enter(runner, undefined, { auto: true });
+          if (pos) runner.status = `Automatic LIVE entry filled: ${pos.remainingQty} @ ${pos.entry.toFixed(2)}`;
+        } catch (e) {
+          runner.status = `Live order error - automatic entry failed: ${(e as Error).message}`;
+        }
+        return;
+      }
+    }
     if (this.busy) return;
     if (!after.position && after.pendingEntry?.live) {
       this.busy = true;

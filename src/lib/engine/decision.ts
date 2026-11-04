@@ -562,6 +562,7 @@ function stagedDecision(
   let decisionText: string;
   let plan: TradePlan | null = null;
   let opened = false;
+  s.liveAutoRequest = null; // only ever valid for the cycle that confirmed it
 
   if (s.position) {
     signal = 'IN POSITION';
@@ -613,23 +614,29 @@ function stagedDecision(
             plan = tp;
             signal = x.buySignal;
             decisionText = `TRADE - CONFIRMED BREAK (${label})`;
-            if (cfg.tradeMode === 'LIVE') {
-              // Live mode never trades by itself: the confirmed signal waits for ENTER.
-              decisionText = `SIGNAL CONFIRMED - tap ENTER to trade live (${label})`;
+            const live = cfg.tradeMode === 'LIVE';
+            const auto = live ? !!cfg.autoEntryLive : cfg.autoEntryPaper !== false;
+            if (s.pendingEntry) {
+              // Your own limit entry is waiting — don't stack another entry on top.
+              decisionText = `SIGNAL CONFIRMED - your limit entry @ ${fmt2(s.pendingEntry.limit)} is pending (${label})`;
+            } else if (!auto || live) {
+              // Manual mode waits for ENTER; LIVE automatic hands the order to the live trader.
+              const what = `${direction === 'LONG' || direction === 'SHORT' ? `${x.buySignal} ${cfg.symbol}` : `${cfg.symbol} BUY ${direction} ${selectedStrike}`}`;
+              decisionText = auto
+                ? `SIGNAL CONFIRMED - placing the LIVE order automatically (${label})`
+                : `SIGNAL CONFIRMED - tap ENTER to trade${live ? ' live' : ''} (${label})`;
               if (s.lastSignalKey !== key) {
                 s.lastSignalKey = key;
+                if (auto) s.liveAutoRequest = key;
                 pushEvent(
                   s,
                   {
                     kind: 'SIGNAL',
-                    message: `${direction === 'LONG' || direction === 'SHORT' ? `${x.buySignal} ${cfg.symbol}` : `${cfg.symbol} BUY ${direction} ${selectedStrike}`} confirmed @ ${fmt2(tp.entry)} · ${tp.qty} qty · SL ${fmt2(tp.sl)} — tap ENTER to trade`,
+                    message: `${what} confirmed @ ${fmt2(tp.entry)} · ${tp.qty} qty · SL ${fmt2(tp.sl)} — ${auto ? 'placing LIVE order automatically' : 'tap ENTER to trade'}`,
                   },
                   now,
                 );
               }
-            } else if (s.pendingEntry) {
-              // Your own limit entry is waiting — don't stack an automatic one on top.
-              decisionText = `SIGNAL CONFIRMED - your limit entry @ ${fmt2(s.pendingEntry.limit)} is pending (${label})`;
             } else {
               openTrade(s, cfg, {
                 direction,
