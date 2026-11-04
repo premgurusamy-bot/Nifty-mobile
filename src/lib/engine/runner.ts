@@ -179,6 +179,13 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   num('capitalLive', 0, 1e11);
   num('capitalPct', 1, 100);
   num('marginPerLot', 0, 1e9);
+  if (patch.profitLock !== undefined) next.profitLock = !!patch.profitLock;
+  num('lockStart', 1, 1e10);
+  num('lockStep', 1, 1e10);
+  num('lockRideFrom', 0, 1e10);
+  num('lockRideAmount', 0, 1e10);
+  if (next.lockRideFrom > 0 && next.lockRideFrom < next.lockStart)
+    throw new Error('The ride level must be at least the lock start (or 0 to keep stepping)');
   num('rollDays', 0, 30);
   if (patch.futSecurityId !== undefined) {
     const id = String(patch.futSecurityId).trim();

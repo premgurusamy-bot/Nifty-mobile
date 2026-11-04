@@ -33,6 +33,7 @@ import { FACTOR_LABELS, sideOf } from './types.ts';
 import { sessionOpen, type Session } from './catalog.ts';
 import { evaluateFutures, buildFuturesPlan } from './futures.ts';
 import { sizeLots, type SizingConfig } from './sizing.ts';
+import { lockedProfit } from './profitLock.ts';
 
 const IV_HISTORY_MAX = 20000;
 const EVENTS_MAX = 100;
@@ -298,9 +299,16 @@ export function checkAndCloseIfHit(s: EngineState, ltp: number, cfg: EngineConfi
   // "reached" in the trade's favourable / adverse direction (works for shorts too)
   const atOrBeyond = (level: number) => side * (ltp - level) >= 0;
   const stopped = () => side * (ltp - p.currentSl) <= 0;
+  const lockOn = !!cfg.profitLock;
+  if (lockOn) applyProfitLock(s, p, ltp, cfg, now);
+  // A stop raised by the profit lock exits as "PROFIT LOCK" (with the ₹ it secured).
+  const lockReason = () =>
+    p.lockedPnl != null && p.lockPrice != null && side * (p.currentSl - p.lockPrice) <= 1e-9
+      ? `PROFIT LOCK HIT (Rs ${Math.round(p.lockedPnl)} secured)`
+      : null;
   if (!p.partialBooked) {
     if (stopped()) {
-      finalize(s, p, p.currentSl, p.totalQty, 0, 'SL HIT (full)', now);
+      finalize(s, p, p.currentSl, p.totalQty, 0, lockReason() ?? 'SL HIT (full)', now);
       return true;
     }
     if (atOrBeyond(p.target1)) {
@@ -315,7 +323,9 @@ export function checkAndCloseIfHit(s: EngineState, ltp: number, cfg: EngineConfi
       p.partialQty = halfQty;
       p.partialPnl = booked;
       p.remainingQty = p.totalQty - halfQty;
-      p.currentSl = p.entry;
+      // Rest trails at breakeven — or higher, if the profit lock already secured more.
+      p.currentSl = side * (p.currentSl - p.entry) > 0 ? p.currentSl : p.entry;
+      if (lockOn) applyProfitLock(s, p, ltp, cfg, now, true);
       s.realizedToday += booked;
       const j = journalRow(s, p.journalId);
       if (j) {
@@ -334,14 +344,50 @@ export function checkAndCloseIfHit(s: EngineState, ltp: number, cfg: EngineConfi
     return false;
   }
   if (stopped()) {
-    finalize(s, p, p.currentSl, p.remainingQty, p.partialPnl, 'TRAIL SL HIT (remainder)', now);
+    finalize(s, p, p.currentSl, p.remainingQty, p.partialPnl, lockReason() ?? 'TRAIL SL HIT (remainder)', now);
     return true;
   }
-  if (atOrBeyond(p.target2)) {
+  // Profit lock on: Target 2 is off — the lock trails the remainder instead.
+  if (!lockOn && atOrBeyond(p.target2)) {
     finalize(s, p, p.target2, p.remainingQty, p.partialPnl, 'TARGET 2 HIT (remainder)', now);
     return true;
   }
   return false;
+}
+
+/**
+ * Profit lock: track the trade's best total profit and raise the stop so that
+ * profit stays secured (see profitLock.ts). The stop only ever moves in the trade's favour.
+ */
+function applyProfitLock(s: EngineState, p: OpenPosition, ltp: number, cfg: EngineConfig, now: number, quiet = false) {
+  const side = sideP(p);
+  const qty = p.partialBooked ? p.remainingQty : p.totalQty;
+  const booked = p.partialBooked ? p.partialPnl : 0;
+  if (!(qty > 0)) return;
+  const pnl = booked + side * (ltp - p.entry) * qty * pvP(p);
+  p.peakPnl = Math.max(p.peakPnl ?? 0, pnl);
+  const lock = lockedProfit(p.peakPnl, cfg);
+  if (lock == null) return;
+  // Price at which the open part still leaves `lock` in total profit, on the tick (rounded to secure ≥ lock).
+  const tick = cfg.tickSize || 0.05;
+  const raw = p.entry + (side * (lock - booked)) / (qty * pvP(p));
+  const price = Number(((side > 0 ? Math.ceil(raw / tick - 1e-9) : Math.floor(raw / tick + 1e-9)) * tick).toFixed(4));
+  if (side * (price - p.currentSl) <= 1e-9 && p.lockedPnl === lock) return;
+  const raised = side * (price - p.currentSl) > 1e-9;
+  if (raised) p.currentSl = price;
+  if (raised || p.lockPrice == null) p.lockPrice = price;
+  const changed = p.lockedPnl !== lock;
+  p.lockedPnl = lock;
+  if (changed && !quiet) {
+    pushEvent(
+      s,
+      {
+        kind: 'INFO',
+        message: `${positionLabel(p)} - profit lock: Rs ${Math.round(lock)} secured (peak Rs ${Math.round(p.peakPnl)}), stop ${fmt2(p.currentSl)}`,
+      },
+      now,
+    );
+  }
 }
 
 // ---------------------------------------------------------------- opening / closing trades

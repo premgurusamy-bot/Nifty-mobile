@@ -15,6 +15,7 @@ import { isLocalApi } from '../api/localApi';
 import { PreflightList, type PreflightView } from '../components/engine';
 import { CATALOG, catalogEntry, sessionLabel } from '../lib/engine/catalog';
 import { formatINR } from '../lib/format';
+import { lockedProfit } from '../lib/engine/profitLock';
 import { AlertSettingsCard } from '../components/AlertSettings';
 import { Button, Card, Segmented, styles as ui } from '../components/ui';
 import type { EngineConfig } from '../lib/engine/types';
@@ -41,7 +42,11 @@ type NumKey =
   | 'capitalPaper'
   | 'capitalLive'
   | 'capitalPct'
-  | 'marginPerLot';
+  | 'marginPerLot'
+  | 'lockStart'
+  | 'lockStep'
+  | 'lockRideFrom'
+  | 'lockRideAmount';
 
 /** Strategy / discipline settings — shared by every instrument. */
 const ENGINE_FIELDS: [NumKey, string][] = [
@@ -74,7 +79,19 @@ const SIZING_FIELDS: [NumKey, string][] = [
   ['capitalPct', 'Use this % of capital per trade (1–100)'],
   ['marginPerLot', 'MCX margin per lot (₹, 0 = estimate 12% of contract value)'],
 ];
-const FIELDS: [NumKey, string][] = [...ENGINE_FIELDS, ...OPTION_FIELDS, ...FUTURES_FIELDS, ...SIZING_FIELDS];
+const LOCK_FIELDS: [NumKey, string][] = [
+  ['lockStart', 'Start locking at profit (₹)'],
+  ['lockStep', 'Lock step (₹) — secured profit rises by this, one step behind'],
+  ['lockRideFrom', 'Stop stepping at secured profit (₹, 0 = keep stepping)'],
+  ['lockRideAmount', 'Above that, let this much ride from the peak (₹)'],
+];
+const FIELDS: [NumKey, string][] = [
+  ...ENGINE_FIELDS,
+  ...OPTION_FIELDS,
+  ...FUTURES_FIELDS,
+  ...SIZING_FIELDS,
+  ...LOCK_FIELDS,
+];
 const PCTS = [25, 50, 75, 100];
 
 const INDEXES = CATALOG.filter((c) => c.kind === 'INDEX_OPTIONS');
@@ -233,6 +250,21 @@ export default function SettingsScreen() {
   };
 
   const [sizeMsg, setSizeMsg] = useState<string | null>(null);
+  const [lockMsg, setLockMsg] = useState<string | null>(null);
+  const lockDraft = {
+    lockStart: Number(draft.lockStart),
+    lockStep: Number(draft.lockStep),
+    lockRideFrom: Number(draft.lockRideFrom),
+    lockRideAmount: Number(draft.lockRideAmount),
+  };
+  const lockPreview = (() => {
+    const { lockStart: a, lockStep: st, lockRideFrom: r, lockRideAmount: m } = lockDraft;
+    if (!(a > 0) || !(st > 0)) return [];
+    const peaks = new Set<number>([a, a + st, a + 2 * st]);
+    if (r > 0 && m > 0) [r, r + st, r + m, r + m + st, r + m + 2 * st + 2000].forEach((x) => peaks.add(x));
+    else [a + 3 * st, a + 5 * st].forEach((x) => peaks.add(x));
+    return [...peaks].sort((x, y) => x - y).map((pk) => [pk, lockedProfit(pk, lockDraft) ?? 0] as const);
+  })();
   const [instMsg, setInstMsg] = useState<string | null>(null);
   const cur = cfg ? catalogEntry(cfg.symbol) : null;
   const isFut = cfg?.instrumentKind === 'MCX_FUTURES';
@@ -456,6 +488,46 @@ export default function SettingsScreen() {
             ) : null}
             {sizeMsg ? <Text style={{ color: sizeMsg === 'Saved' ? colors.up : colors.down }}>{sizeMsg}</Text> : null}
             <Button label="Save capital settings" onPress={() => void save({}, setSizeMsg)} />
+          </Card>
+        ) : null}
+
+        {cfg ? (
+          <Card style={{ gap: 12 }}>
+            <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Profit lock (trailing ₹)</Text>
+            <View style={s.switchRow}>
+              <Text style={s.label}>Lock in profit as the trade moves in my favour</Text>
+              <Switch
+                value={cfg.profitLock}
+                onValueChange={(v) => void save({ profitLock: v }, setLockMsg)}
+                accessibilityLabel="Profit lock"
+              />
+            </View>
+            <Text style={ui.muted}>
+              Counts the whole trade&apos;s profit (including the half booked at Target 1). Once it reaches the start,
+              the stop-loss moves up so that profit is secured — one step behind the best profit, so small dips
+              don&apos;t exit. Target 1 still books half; Target 2 is off while this is on. In LIVE the stop order at
+              Dhan is moved too. A fast gap can still fill worse than the locked amount.
+            </Text>
+            {LOCK_FIELDS.map(([k, label]) => (
+              <Field
+                key={k}
+                label={label}
+                value={draft[k] ?? ''}
+                onChange={(v) => setDraft((d) => ({ ...d, [k]: v }))}
+              />
+            ))}
+            {lockPreview.length ? (
+              <View style={{ gap: 2 }}>
+                <Text style={s.label}>Best profit reached → secured</Text>
+                {lockPreview.map(([pk, lk]) => (
+                  <Text key={pk} style={ui.muted}>
+                    {formatINR(pk, 0)} → {formatINR(lk, 0)}
+                  </Text>
+                ))}
+              </View>
+            ) : null}
+            {lockMsg ? <Text style={{ color: lockMsg === 'Saved' ? colors.up : colors.down }}>{lockMsg}</Text> : null}
+            <Button label="Save profit lock" onPress={() => void save({}, setLockMsg)} />
           </Card>
         ) : null}
 

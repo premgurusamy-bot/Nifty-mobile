@@ -107,6 +107,16 @@ export interface EngineConfig {
   capitalPct: number;
   /** MCX futures: margin blocked per lot (₹); 0 = estimate at 12 % of the contract value. */
   marginPerLot: number;
+  /** ₹ profit lock (trailing on total trade profit); turns Target 2 off. */
+  profitLock: boolean;
+  /** Lock engages at this profit (₹) … */
+  lockStart: number;
+  /** … and rises by this much for every further step, one step behind the peak. */
+  lockStep: number;
+  /** Step locking stops at this secured profit; above it the trade trails (0 = keep stepping). */
+  lockRideFrom: number;
+  /** Profit the trade may give back from its peak above the ride level (₹). */
+  lockRideAmount: number;
 }
 
 export type SizingMode = 'RISK' | 'CAPITAL';
@@ -148,6 +158,11 @@ export const DEFAULT_CONFIG: EngineConfig = {
   capitalLive: 0,
   capitalPct: 100,
   marginPerLot: 0,
+  profitLock: false,
+  lockStart: 10000,
+  lockStep: 5000,
+  lockRideFrom: 20000,
+  lockRideAmount: 10000,
 };
 
 /** Index presets from Moddhanapi.ApplyIndexPreset (security ids confirmed in the workbook). */
@@ -198,6 +213,11 @@ export interface OpenPosition {
   symbol?: string;
   /** Present when the position was opened with real Dhan orders. */
   live?: LiveLegs;
+  /** Profit lock: best total profit (₹) seen, and the profit currently secured. */
+  peakPnl?: number;
+  lockedPnl?: number;
+  /** Stop price the profit lock set (to label a stop-out as a profit-lock exit). */
+  lockPrice?: number;
 }
 
 export interface JournalRow {

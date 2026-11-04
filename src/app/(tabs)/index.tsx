@@ -368,7 +368,19 @@ export default function DashboardScreen() {
                 [isFut ? 'Live price' : 'Live premium', ltp ?? '—'],
                 ['Current (trailing) SL', p.currentSl, colors.down],
                 ['Target 1', p.target1, colors.up],
-                ['Target 2', p.target2, colors.up],
+                ['Target 2', cfg.profitLock ? 'off (profit lock)' : p.target2, colors.up],
+                ...(cfg.profitLock
+                  ? ([
+                      ['Best profit (peak)', formatSigned(p.peakPnl ?? 0, 0)],
+                      [
+                        'Profit locked',
+                        p.lockedPnl != null
+                          ? `${formatINR(p.lockedPnl, 0)} secured`
+                          : `starts at ${formatINR(cfg.lockStart, 0)}`,
+                        p.lockedPnl != null ? colors.up : undefined,
+                      ],
+                    ] as [string, string | number, string?][])
+                  : []),
                 ['Quantity (remaining / total)', `${p.remainingQty} / ${p.totalQty}`],
                 ['Partial booked', p.partialBooked ? `${p.partialQty} @ T1 (${formatSigned(p.partialPnl, 0)})` : 'No'],
                 [

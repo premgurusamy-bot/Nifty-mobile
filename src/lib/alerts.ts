@@ -4,7 +4,7 @@
  */
 import type { EngineEvent } from './engine/types.ts';
 
-export type AlertCategory = 'signal' | 'entry' | 'target' | 'stop' | 'exit' | 'error';
+export type AlertCategory = 'signal' | 'entry' | 'target' | 'lock' | 'stop' | 'exit' | 'error';
 export type VolumeLevel = 'LOW' | 'MEDIUM' | 'HIGH';
 export type BuiltInSound = 'chime' | 'beep' | 'bell' | 'alarm';
 
@@ -38,6 +38,7 @@ export const CATEGORY_LABELS: Record<AlertCategory, string> = {
   signal: 'Signal confirmed (LIVE — waits for ENTER)',
   entry: 'Trade entered (incl. limit order filled)',
   target: 'Target 1 hit (partial booked)',
+  lock: 'Profit locked / raised',
   stop: 'Stop-loss hit',
   exit: 'Target 2 / other exits',
   error: 'Order errors',
@@ -52,7 +53,7 @@ export const DEFAULT_ALERT_PREFS: AlertPrefs = {
   customUri: '',
   customName: '',
   vibrate: true,
-  categories: { signal: true, entry: true, target: true, stop: true, exit: true, error: true },
+  categories: { signal: true, entry: true, target: true, lock: true, stop: true, exit: true, error: true },
   background: false,
 };
 
@@ -74,7 +75,10 @@ export function categoryOf(e: Pick<EngineEvent, 'kind' | 'message'>): AlertCateg
       return 'entry';
     case 'PARTIAL':
       return 'target';
+    case 'INFO':
+      return /profit lock/i.test(e.message) ? 'lock' : null;
     case 'EXIT':
+      if (/PROFIT LOCK/i.test(e.message)) return 'lock';
       if (/\bSL\b|stop/i.test(e.message)) return 'stop';
       return /TARGET 1/i.test(e.message) ? 'target' : 'exit';
     case 'ERROR':
@@ -88,6 +92,7 @@ export const ALERT_TITLES: Record<AlertCategory, string> = {
   signal: 'Signal confirmed',
   entry: 'Trade entered',
   target: 'Target hit',
+  lock: 'Profit lock',
   stop: 'Stop-loss hit',
   exit: 'Position closed',
   error: 'Order problem',

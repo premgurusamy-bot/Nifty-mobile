@@ -355,8 +355,21 @@ export class LiveTrader {
         await runner.patchPosition({ live: { ...live, slOrderId: sl } });
         return;
       }
-      // Still open and unchanged: did the exchange stop fire while we weren't looking?
+      // Still open: did the exchange stop fire while we weren't looking?
       const filled = await this.stopFilled(live.slOrderId);
+      if (!filled && side * (cur.currentSl - prev.currentSl) > 1e-9) {
+        // Profit lock raised the stop: replace the exchange stop at the new level.
+        await this.cancelQuietly(live.slOrderId);
+        const late = await this.stopFilled(live.slOrderId);
+        if (late) {
+          this.busy = false;
+          await runner.manualExit({ price: late.avgPrice, reason: 'SL HIT (exchange stop order)' });
+          return;
+        }
+        const sl = await this.placeStop(live.securityId, cur.remainingQty, cur.currentSl, side, c);
+        await runner.patchPosition({ live: { ...live, slOrderId: sl } });
+        return;
+      }
       if (filled) {
         this.busy = false;
         await runner.manualExit({ price: filled.avgPrice, reason: 'SL HIT (exchange stop order)' });

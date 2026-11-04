@@ -56,6 +56,7 @@ const ACCENT: Record<AlertCategory, string> = {
   signal: colors.accent,
   entry: colors.up,
   target: colors.up,
+  lock: colors.up,
   stop: colors.down,
   exit: colors.warn,
   error: colors.down,

@@ -109,6 +109,25 @@ Turning it on also turns auto-refresh on. Leave the app with Home / the app swit
 closes it, and the service then posts a "stopped watching" alert and stops. Use **Allow unrestricted
 battery use**, and on Xiaomi / Oppo / Vivo / Realme / OnePlus also allow Autostart.
 
+## Profit lock (trailing ₹)
+
+Settings → **Profit lock** (off by default) trails the stop on the trade's total ₹ profit, including the half
+booked at Target 1. It is one step behind the best profit, so small dips don't exit:
+
+| Best profit | Secured |
+|---|---|
+| ₹10,000 | ₹5,000 |
+| ₹15,000 | ₹10,000 |
+| ₹20,000 | ₹15,000 |
+| ₹25,000 | ₹20,000 |
+| ₹30,000 | ₹20,000 (₹10,000 riding) |
+| ₹35,000 / ₹42,000 | ₹25,000 / ₹32,000 (trails ₹10,000 below the peak) |
+
+All four amounts are editable (start, step, ride level, ride amount). The stop only moves in the trade's
+favour; Target 1 still books half; Target 2 is off while the lock is on. In LIVE the exchange stop order at
+Dhan is replaced at the new level. Exits are journaled as `PROFIT LOCK HIT (Rs … secured)`, and each lock
+raise is an alert ("Profit locked / raised"). A single-lot trade still exits in full at Target 1.
+
 ## Export (journal & logs)
 
 Journal tab → **Export** shares a file (WhatsApp, Gmail, Drive, Files…):
