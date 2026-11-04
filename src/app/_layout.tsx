@@ -1,5 +1,6 @@
 import { DarkTheme, Stack, ThemeProvider } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { AlertsProvider } from '../state/AlertsContext';
 import { EngineProvider } from '../state/EngineContext';
 import { MarketProvider } from '../state/MarketContext';
 import { SettingsProvider } from '../state/SettingsContext';
@@ -23,6 +24,7 @@ export default function RootLayout() {
     <ThemeProvider value={theme}>
       <SettingsProvider>
         <EngineProvider>
+          <AlertsProvider>
           <MarketProvider>
             <PortfolioProvider>
               <StatusBar style="light" />
@@ -41,6 +43,7 @@ export default function RootLayout() {
               </Stack>
             </PortfolioProvider>
           </MarketProvider>
+          </AlertsProvider>
         </EngineProvider>
       </SettingsProvider>
     </ThemeProvider>

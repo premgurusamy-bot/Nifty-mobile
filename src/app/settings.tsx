@@ -14,6 +14,8 @@ import { isIPv4 } from '../../server/preflight.ts';
 import { isLocalApi } from '../api/localApi';
 import { PreflightList, type PreflightView } from '../components/engine';
 import { CATALOG, catalogEntry, sessionLabel } from '../lib/engine/catalog';
+import { formatINR } from '../lib/format';
+import { AlertSettingsCard } from '../components/AlertSettings';
 import { Button, Card, Segmented, styles as ui } from '../components/ui';
 import type { EngineConfig } from '../lib/engine/types';
 import { useEngine } from '../state/EngineContext';
@@ -35,7 +37,11 @@ type NumKey =
   | 'pointValue'
   | 'tickSize'
   | 'maxLots'
-  | 'rollDays';
+  | 'rollDays'
+  | 'capitalPaper'
+  | 'capitalLive'
+  | 'capitalPct'
+  | 'marginPerLot';
 
 /** Strategy / discipline settings — shared by every instrument. */
 const ENGINE_FIELDS: [NumKey, string][] = [
@@ -62,7 +68,14 @@ const FUTURES_FIELDS: [NumKey, string][] = [
   ['maxLots', 'Max lots per trade (0 = no cap)'],
   ['rollDays', 'Roll to next month this many days before expiry'],
 ];
-const FIELDS: [NumKey, string][] = [...ENGINE_FIELDS, ...OPTION_FIELDS, ...FUTURES_FIELDS];
+const SIZING_FIELDS: [NumKey, string][] = [
+  ['capitalPaper', 'Paper trading capital (₹)'],
+  ['capitalLive', 'Live trading capital (₹, 0 = Dhan available balance)'],
+  ['capitalPct', 'Use this % of capital per trade (1–100)'],
+  ['marginPerLot', 'MCX margin per lot (₹, 0 = estimate 12% of contract value)'],
+];
+const FIELDS: [NumKey, string][] = [...ENGINE_FIELDS, ...OPTION_FIELDS, ...FUTURES_FIELDS, ...SIZING_FIELDS];
+const PCTS = [25, 50, 75, 100];
 
 const INDEXES = CATALOG.filter((c) => c.kind === 'INDEX_OPTIONS');
 const MCX = CATALOG.filter((c) => c.kind === 'MCX_FUTURES');
@@ -219,6 +232,7 @@ export default function SettingsScreen() {
     }
   };
 
+  const [sizeMsg, setSizeMsg] = useState<string | null>(null);
   const [instMsg, setInstMsg] = useState<string | null>(null);
   const cur = cfg ? catalogEntry(cfg.symbol) : null;
   const isFut = cfg?.instrumentKind === 'MCX_FUTURES';
@@ -398,6 +412,57 @@ export default function SettingsScreen() {
 
         {cfg ? (
           <Card style={{ gap: 12 }}>
+            <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Position size & capital</Text>
+            <Segmented
+              options={[
+                { label: 'Risk per trade', value: 'RISK' as const },
+                { label: 'Capital %', value: 'CAPITAL' as const },
+              ]}
+              value={cfg.sizingMode}
+              onChange={(v) => void save({ sizingMode: v }, setSizeMsg)}
+            />
+            <Text style={ui.muted}>
+              {cfg.sizingMode === 'CAPITAL'
+                ? `Lots = capital × % ÷ cost of 1 lot (${isFut ? 'margin per lot' : 'premium × lot size'}). PAPER uses the paper capital, LIVE the live capital (or your Dhan balance). Max lots per trade still applies — set it to 0 for no cap.`
+                : `Lots are sized so the stop-loss costs at most the max risk per trade (₹${cfg.maxRisk}). Switch to Capital % to size by money instead.`}
+            </Text>
+            {SIZING_FIELDS.filter(([k]) => isFut || k !== 'marginPerLot').map(([k, label]) => (
+              <Field
+                key={k}
+                label={label}
+                value={draft[k] ?? ''}
+                onChange={(v) => setDraft((d) => ({ ...d, [k]: v }))}
+              />
+            ))}
+            <View style={s.chips}>
+              {PCTS.map((p) => (
+                <Chip
+                  key={p}
+                  label={`${p}%`}
+                  active={draft.capitalPct === String(p)}
+                  onPress={() => setDraft((d) => ({ ...d, capitalPct: String(p) }))}
+                />
+              ))}
+            </View>
+            {snap?.capital ? (
+              <Text style={ui.muted}>
+                Now ({cfg.tradeMode}): {formatINR(snap.capital.capital, 0)} per trade — {formatINR(snap.capital.base, 0)}{' '}
+                {snap.capital.source}
+                {cfg.capitalPct < 100 ? ` × ${cfg.capitalPct}%` : ''}
+              </Text>
+            ) : null}
+            {snap?.dashboard?.candidatePlan?.sizing ? (
+              <Text style={ui.muted}>Next entry: {snap.dashboard.candidatePlan.sizing}</Text>
+            ) : null}
+            {sizeMsg ? <Text style={{ color: sizeMsg === 'Saved' ? colors.up : colors.down }}>{sizeMsg}</Text> : null}
+            <Button label="Save capital settings" onPress={() => void save({}, setSizeMsg)} />
+          </Card>
+        ) : null}
+
+        <AlertSettingsCard />
+
+        {cfg ? (
+          <Card style={{ gap: 12 }}>
             <Text style={[ui.sectionTitle, { marginTop: 0 }]}>
               Engine settings {snap?.demo ? '(demo)' : settings.connection === 'DIRECT' ? '(this phone)' : '(server)'}
             </Text>
@@ -410,7 +475,7 @@ export default function SettingsScreen() {
               />
             ))}
             <View style={s.switchRow}>
-              <Text style={s.label}>Alerts enabled (Telegram on the server)</Text>
+              <Text style={s.label}>Engine alerts (Telegram when run on a server)</Text>
               <Switch value={cfg.alertsEnabled} onValueChange={(v) => void updateConfig({ alertsEnabled: v })} />
             </View>
             {cfgMsg ? <Text style={{ color: cfgMsg === 'Saved' ? colors.up : colors.down }}>{cfgMsg}</Text> : null}

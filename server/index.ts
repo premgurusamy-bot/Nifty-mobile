@@ -15,6 +15,7 @@ import { pathToFileURL } from 'node:url';
 import type { PlaceOrderBody } from '../src/lib/apiTypes.ts';
 import { EQUITIES } from '../src/lib/instruments.ts';
 import { DhanClient, DhanError } from './dhan.ts';
+import { mapFunds } from './mapping.ts';
 import { loadScripMaster, SCRIP_MASTER_URL } from './scripMaster.ts';
 import { DhanService, HttpError } from './service.ts';
 import { EngineRunner } from '../src/lib/engine/runner.ts';
@@ -229,6 +230,7 @@ export async function start(cfg: ServerConfig) {
   );
   await engine.init();
   engine.syncTimer();
+  engine.fundsSource = async () => mapFunds(await dhan.fundLimit());
 
   const envPath = cfg.envPath ?? null;
   const token = new TokenKeeper(dhan, {

@@ -13,6 +13,7 @@
  *  - The engine runs only while the app is open (Android pauses background JS).
  */
 import { DhanClient } from '../../server/dhan.ts';
+import { mapFunds } from '../../server/mapping.ts';
 import { DhanEngineSource } from '../../server/engineSource.ts';
 import { LiveTrader } from '../../server/liveTrader.ts';
 import { extractIps, isIPv4, runPreflight, type PreflightResult } from '../../server/preflight.ts';
@@ -70,6 +71,7 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
   await engine.init();
   const trader = new LiveTrader(dhan, service, { sleep: o.sleep });
   engine.afterCycle = (before, after) => trader.afterCycle(engine, before, after);
+  engine.fundsSource = async () => mapFunds(await dhan.fundLimit());
   service.setLiveOrders(engine.config.tradeMode === 'LIVE');
   engine.syncTimer();
   const token = new TokenKeeper(dhan, { autoRenew: true, persist: o.persistToken });

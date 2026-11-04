@@ -79,6 +79,26 @@ Pick the instrument in ⚙ Settings → **Instrument**. All of its settings load
 - **Live orders:** a short opens with a SELL and is protected by a BUY STOP_LOSS above it. All prices are on the instrument's tick.
 - **Paper-test first:** the futures model is new, so trade it on PAPER before using real money.
 
+## Position size & capital
+
+Settings → **Position size & capital** chooses how many lots a trade takes:
+
+- **Risk per trade** (the workbook, default): lots = max risk ÷ (stop distance × ₹ per point per lot).
+- **Capital %**: lots = capital × % ÷ cost of one lot. Options cost premium × lot size; MCX futures cost the
+  margin per lot (enter it, or leave 0 to estimate 12 % of price × point value).
+  - PAPER uses the **paper capital**; LIVE uses the **live capital**, or the Dhan available balance
+    (fetched each refresh) when live capital is 0. Use 100 % to put the whole capital into a trade.
+  - **Max lots per trade** still caps the size (set 0 for no cap). If the capital can't buy one lot the
+    signal is blocked and ENTER is disabled, with the reason shown.
+
+## Alerts (on the phone)
+
+Settings → **Alerts** shows an on-screen message, plays a sound and vibrates for: confirmed LIVE signals
+(once each), entries (including limit fills), Target 1, stop-loss hits, other exits and live order errors.
+Each event type can be switched off. Volume Low / Medium / High (30 / 60 / 100 % of the media volume);
+built-in Chime / Beep / Bell / Alarm, or **Pick custom sound** to use any audio file on the phone (copied
+into the app). Alerts work while the app is open.
+
 ## Phone-only setup (no server)
 
 1. ⚙ Settings → **Dhan account (this phone)**: enter your Dhan client id and access token and tap **Save & test**. They are checked with Dhan and stored only on the phone, encrypted by the Android Keystore.

@@ -32,6 +32,7 @@ import type {
 import { FACTOR_LABELS, sideOf } from './types.ts';
 import { sessionOpen, type Session } from './catalog.ts';
 import { evaluateFutures, buildFuturesPlan } from './futures.ts';
+import { sizeLots, type SizingConfig } from './sizing.ts';
 
 const IV_HISTORY_MAX = 20000;
 const EVENTS_MAX = 100;
@@ -208,7 +209,7 @@ export function buildTradePlan(
   dir: Direction,
   strike: number,
   atr: number,
-  cfg: EngineConfig,
+  cfg: SizingConfig,
 ): TradePlan | null {
   if (dir === 'LONG' || dir === 'SHORT') return null;
   const leg = legOf(findStrike(chain, strike), dir);
@@ -220,9 +221,8 @@ export function buildTradePlan(
   const sl = Math.max(entry - riskPts, 0.05);
   const target1 = entry + riskPts * cfg.rrTarget;
   const target2 = entry + riskPts * cfg.rrTarget * 1.5;
-  let lots = Math.max(1, Math.floor(cfg.maxRisk / (riskPts * cfg.lotSize)));
-  if (cfg.maxLots > 0) lots = Math.min(lots, cfg.maxLots);
-  const qty = lots * cfg.lotSize;
+  const size = sizeLots(cfg, riskPts * cfg.lotSize, entry * cfg.lotSize, 'premium per lot');
+  const qty = size.lots * cfg.lotSize;
   return {
     strike,
     direction: dir,
@@ -236,6 +236,8 @@ export function buildTradePlan(
     qty,
     maxLoss: riskPts * qty,
     potentialProfit: (target1 - entry) * qty,
+    sizing: size.sizing,
+    ...(size.blocked ? { blocked: size.blocked } : {}),
   };
 }
 
@@ -524,6 +526,11 @@ function stagedDecision(
           if (!tp) {
             signal = 'WAIT';
             decisionText = `SETUP PENDING - no price for ${positionLabel({ direction, strike: selectedStrike, symbol: cfg.symbol })}`;
+          } else if (tp.blocked || tp.qty <= 0) {
+            plan = tp;
+            s.blockedReason = tp.blocked ?? 'Position size is 0 lots';
+            signal = 'NO TRADE';
+            decisionText = `BLOCKED - ${s.blockedReason}`;
           } else {
             plan = tp;
             signal = x.buySignal;
@@ -531,6 +538,17 @@ function stagedDecision(
             if (cfg.tradeMode === 'LIVE') {
               // Live mode never trades by itself: the confirmed signal waits for ENTER.
               decisionText = `SIGNAL CONFIRMED - tap ENTER to trade live (${label})`;
+              if (s.lastSignalKey !== key) {
+                s.lastSignalKey = key;
+                pushEvent(
+                  s,
+                  {
+                    kind: 'SIGNAL',
+                    message: `${direction === 'LONG' || direction === 'SHORT' ? `${x.buySignal} ${cfg.symbol}` : `${cfg.symbol} BUY ${direction} ${selectedStrike}`} confirmed @ ${fmt2(tp.entry)} · ${tp.qty} qty · SL ${fmt2(tp.sl)} — tap ENTER to trade`,
+                  },
+                  now,
+                );
+              }
             } else if (s.pendingEntry) {
               // Your own limit entry is waiting — don't stack an automatic one on top.
               decisionText = `SIGNAL CONFIRMED - your limit entry @ ${fmt2(s.pendingEntry.limit)} is pending (${label})`;

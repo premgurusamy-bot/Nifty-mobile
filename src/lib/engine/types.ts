@@ -97,7 +97,21 @@ export interface EngineConfig {
   /** Seconds between automatic refreshes (floor 15, like the workbook). */
   refreshSeconds: number;
   alertsEnabled: boolean;
+  /** RISK: lots sized so the stop costs ≤ max risk. CAPITAL: lots = (capital × %) ÷ cost per lot. */
+  sizingMode: SizingMode;
+  /** Paper-trading capital (₹). */
+  capitalPaper: number;
+  /** Live capital (₹); 0 = use the Dhan account's available balance. */
+  capitalLive: number;
+  /** Share of the capital one trade may use (1–100 %). */
+  capitalPct: number;
+  /** MCX futures: margin blocked per lot (₹); 0 = estimate at 12 % of the contract value. */
+  marginPerLot: number;
 }
+
+export type SizingMode = 'RISK' | 'CAPITAL';
+/** Estimated MCX margin when no per-lot margin is entered (share of price × point value). */
+export const EST_MARGIN_PCT = 0.12;
 
 export const DEFAULT_CONFIG: EngineConfig = {
   symbol: 'NIFTY',
@@ -129,6 +143,11 @@ export const DEFAULT_CONFIG: EngineConfig = {
   liveProduct: 'INTRADAY',
   refreshSeconds: 15,
   alertsEnabled: true,
+  sizingMode: 'RISK',
+  capitalPaper: 100000,
+  capitalLive: 0,
+  capitalPct: 100,
+  marginPerLot: 0,
 };
 
 /** Index presets from Moddhanapi.ApplyIndexPreset (security ids confirmed in the workbook). */
@@ -209,7 +228,7 @@ export interface JournalRow {
 
 export interface EngineEvent {
   at: number;
-  kind: 'TRADE' | 'PARTIAL' | 'EXIT' | 'INFO' | 'ERROR';
+  kind: 'SIGNAL' | 'TRADE' | 'PARTIAL' | 'EXIT' | 'INFO' | 'ERROR';
   message: string;
 }
 
@@ -221,6 +240,8 @@ export interface EngineState {
   blockedReason: string;
   pending: PendingSetup | null;
   lastFiredKey: string;
+  /** Last confirmed live signal alerted (so each one alerts once). */
+  lastSignalKey?: string;
   realizedToday: number;
   position: OpenPosition | null;
   journal: JournalRow[];
@@ -285,6 +306,10 @@ export interface TradePlan {
   qty: number;
   maxLoss: number;
   potentialProfit: number;
+  /** How the lots were sized (e.g. "Capital ₹1,00,000 × 100% → 3 lots × ₹21,450"). */
+  sizing?: string;
+  /** Set when the plan can't be traded (qty 0) — e.g. capital below the cost of 1 lot. */
+  blocked?: string;
 }
 
 export interface ScoreBreakdown {

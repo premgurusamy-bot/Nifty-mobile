@@ -15,6 +15,7 @@ import {
 import { findStrike, legOf } from './indicators.ts';
 import { catalogEntry, CATALOG } from './catalog.ts';
 import { buildFuturesPlan } from './futures.ts';
+import { sizingCapital, type SizingConfig } from './sizing.ts';
 import {
   DEFAULT_CONFIG,
   sideOf,
@@ -73,6 +74,8 @@ export interface EngineSnapshot {
   closes: number[];
   marketOpen: boolean;
   demo: boolean;
+  /** Capital-based sizing: the capital a trade may use now (CAPITAL mode only). */
+  capital?: { capital: number; base: number; source: string; funds: number | null };
 }
 
 const roundTick = (p: number, tick = 0.05) => Number((Math.round(p / tick) * tick).toFixed(4));
@@ -150,6 +153,14 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   num('pointValue', 0.0001, 10_000_000);
   num('tickSize', 0.0001, 1000);
   num('maxLots', 0, 1000);
+  if (patch.sizingMode !== undefined) {
+    if (patch.sizingMode !== 'RISK' && patch.sizingMode !== 'CAPITAL') throw new Error('sizingMode must be RISK or CAPITAL');
+    next.sizingMode = patch.sizingMode;
+  }
+  num('capitalPaper', 0, 1e11);
+  num('capitalLive', 0, 1e11);
+  num('capitalPct', 1, 100);
+  num('marginPerLot', 0, 1e9);
   num('rollDays', 0, 30);
   if (patch.futSecurityId !== undefined) {
     const id = String(patch.futSecurityId).trim();
@@ -177,6 +188,10 @@ export class EngineRunner {
    * live trading uses it to mirror partial bookings / exits with real orders.
    */
   afterCycle: ((before: EngineState, after: EngineState) => Promise<void>) | null = null;
+  /** Dhan available balance (₹), used by CAPITAL sizing in LIVE when live capital is 0. */
+  funds: number | null = null;
+  /** Fetches the live account balance (phone / server with Dhan); null in demo. */
+  fundsSource: (() => Promise<number>) | null = null;
   private running: Promise<void> | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private source: EngineDataSource;
@@ -197,6 +212,27 @@ export class EngineRunner {
     const saved = await this.store.load().catch(() => null);
     if (saved?.state) this.state = { ...initialEngineState(), ...saved.state };
     if (saved?.config) this.config = { ...DEFAULT_CONFIG, ...saved.config };
+  }
+
+  /** Config the plan builders size with (adds the fetched account balance). */
+  sizingConfig(): SizingConfig {
+    return { ...this.config, availableFunds: this.funds };
+  }
+
+  private needsFunds() {
+    const c = this.config;
+    return c.sizingMode === 'CAPITAL' && c.tradeMode === 'LIVE' && !(c.capitalLive > 0) && !!this.fundsSource;
+  }
+
+  /** Refresh the account balance for capital sizing (keeps the last value on failure). */
+  async refreshFunds(): Promise<void> {
+    if (!this.needsFunds()) return;
+    try {
+      const f = await this.fundsSource!();
+      if (Number.isFinite(f)) this.funds = f;
+    } catch {
+      /* keep the last balance; sizing shows "not fetched yet" if there never was one */
+    }
   }
 
   private clock() {
@@ -241,7 +277,8 @@ export class EngineRunner {
     }
     try {
       const before = this.state;
-      const { state, dashboard } = runCycle(this.state, this.config, { ...data, now });
+      await this.refreshFunds();
+      const { state, dashboard } = runCycle(this.state, this.sizingConfig(), { ...data, now });
       this.state = state;
       this.dashboard = dashboard;
       this.candles = data.candles;
@@ -280,6 +317,12 @@ export class EngineRunner {
       this.candles = [];
     }
     this.config = next;
+    await this.refreshFunds();
+    // Re-size the ENTER plan right away (capital / risk / lots edits show without a refresh).
+    const d = this.dashboard;
+    if (d && d.candidatePlan && !this.state.position) {
+      d.candidatePlan = this.planFor(d.decision.direction, d.decision.selectedStrike, d.market.atr) ?? d.candidatePlan;
+    }
     await this.store.save(this.state, this.config);
     this.syncTimer();
   }
@@ -296,8 +339,8 @@ export class EngineRunner {
   private planFor(direction: Direction, strike: number, atr: number): TradePlan | null {
     if (!this.lastChain) return null;
     return direction === 'LONG' || direction === 'SHORT'
-      ? buildFuturesPlan(direction, this.lastChain.spot, atr, this.config)
-      : buildTradePlan(this.lastChain, direction, strike, atr, this.config);
+      ? buildFuturesPlan(direction, this.lastChain.spot, atr, this.sizingConfig())
+      : buildTradePlan(this.lastChain, direction, strike, atr, this.sizingConfig());
   }
 
   /** Plan a manual ENTER would use now (the dashboard's leading direction + best strike). */
@@ -310,6 +353,7 @@ export class EngineRunner {
     const plan = d.candidatePlan ?? this.planFor(d.decision.direction, d.decision.selectedStrike, d.market.atr);
     if (!plan || plan.entry <= 0)
       throw new Error(`No price for ${d.decision.direction} ${d.decision.selectedStrike || this.config.symbol}`);
+    if (plan.blocked || plan.qty <= 0) throw new Error(plan.blocked ?? 'Position size is 0 lots');
     return plan;
   }
 
@@ -511,6 +555,9 @@ export class EngineRunner {
       closes: this.candles.slice(-150).map((c) => c.c),
       marketOpen: this.marketOpen(),
       demo,
+      ...(this.config.sizingMode === 'CAPITAL'
+        ? { capital: { ...sizingCapital(this.sizingConfig()), funds: this.funds } }
+        : {}),
     };
   }
 }

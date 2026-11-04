@@ -298,6 +298,12 @@ export default function DashboardScreen() {
                   {isFut ? 'Price' : 'Premium'} now {formatNumber(cand.entry, dp)} · quantity {qtyLabel(cand.qty)}
                   {isFut ? ` · ₹${formatNumber(cfg.pointValue, 0)} per point per lot` : ''}
                 </Text>
+                {cand.sizing ? <Text style={[ui.muted, { fontSize: 12 }]}>Size: {cand.sizing}</Text> : null}
+                {cand.blocked ? (
+                  <Text style={{ color: colors.down, fontWeight: '600' }}>
+                    Can&apos;t enter: {cand.blocked}. Change capital in Settings → Position size & capital.
+                  </Text>
+                ) : null}
                 <View style={{ gap: 6 }}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                     <Text style={s.label}>
@@ -345,7 +351,7 @@ export default function DashboardScreen() {
                   }
                   color={cand.direction === 'CE' ? colors.up : colors.down}
                   onPress={doEnter}
-                  disabled={busy}
+                  disabled={busy || !!cand.blocked}
                 />
               </>
             ) : (

@@ -10,7 +10,8 @@
  */
 import { istDay, type Technical } from './indicators.ts';
 import { livePriceAction } from './priceAction.ts';
-import { sideOf, type Candle, type Direction, type EngineConfig, type Factor, type TradePlan } from './types.ts';
+import { sideOf, type Candle, type Direction, type Factor, type TradePlan } from './types.ts';
+import { futuresMarginPerLot, sizeLots, type SizingConfig } from './sizing.ts';
 
 export const FUTURES_FACTORS: [key: string, label: string, max: number][] = [
   ['emaTrend', 'EMA Trend', 15],
@@ -166,7 +167,7 @@ const roundTo = (p: number, tick: number) => (tick > 0 ? Math.round(p / tick) * 
 const clean = (p: number, tick: number) => Number(roundTo(p, tick).toFixed(4));
 
 /** ATR × multiplier risk in price points; lots sized so the stop costs ≤ max risk (capped by max lots). */
-export function buildFuturesPlan(dir: Direction, entry: number, atr: number, cfg: EngineConfig): TradePlan | null {
+export function buildFuturesPlan(dir: Direction, entry: number, atr: number, cfg: SizingConfig): TradePlan | null {
   if ((dir !== 'LONG' && dir !== 'SHORT') || !(entry > 0)) return null;
   const side = sideOf(dir);
   const tick = cfg.tickSize || 0.05;
@@ -174,9 +175,9 @@ export function buildFuturesPlan(dir: Direction, entry: number, atr: number, cfg
   if (!(risk > 0)) risk = entry * 0.003;
   risk = Math.max(tick, clean(risk, tick));
   const pv = cfg.pointValue || 1;
-  let lots = Math.max(1, Math.floor(cfg.maxRisk / (risk * pv)));
-  if (cfg.maxLots > 0) lots = Math.min(lots, cfg.maxLots);
-  const qty = lots * (cfg.lotSize || 1);
+  const m = futuresMarginPerLot(entry, cfg);
+  const size = sizeLots(cfg, risk * pv, m.margin, m.estimated ? 'est. margin per lot' : 'margin per lot');
+  const qty = size.lots * (cfg.lotSize || 1);
   const sl = clean(entry - side * risk, tick);
   const target1 = clean(entry + side * risk * cfg.rrTarget, tick);
   const target2 = clean(entry + side * risk * cfg.rrTarget * 1.5, tick);
@@ -193,5 +194,7 @@ export function buildFuturesPlan(dir: Direction, entry: number, atr: number, cfg
     qty,
     maxLoss: risk * pv * qty,
     potentialProfit: risk * cfg.rrTarget * pv * qty,
+    sizing: size.sizing,
+    ...(size.blocked ? { blocked: size.blocked } : {}),
   };
 }
