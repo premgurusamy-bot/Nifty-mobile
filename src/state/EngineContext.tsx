@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { BacktestResult } from '../lib/engine/backtest';
-import { EngineRunner, type EngineSnapshot, type EngineStore } from '../lib/engine/runner';
+import { EngineRunner, type EngineExport, type EngineSnapshot, type EngineStore } from '../lib/engine/runner';
 import { SimEngineSource } from '../lib/engine/simSource';
 import type { PreflightResult } from '../../server/preflight.ts';
 import { isLocalApi } from '../api/localApi';
@@ -22,6 +22,8 @@ interface EngineValue {
   updateConfig: (patch: Partial<EngineConfig>) => Promise<void>;
   backtest: () => Promise<BacktestResult>;
   resetJournal: () => Promise<void>;
+  /** Journal, decision log, events and settings for export. */
+  exportData: () => Promise<EngineExport>;
   /** True when connected to Dhan from this phone (LIVE trading possible). */
   phone: boolean;
   /** Manual ENTER / EXIT of the engine's trade (real Dhan orders in LIVE mode). */
@@ -152,6 +154,11 @@ export function EngineProvider({ children }: { children: ReactNode }) {
 
   const backtest = useCallback(async () => (api ? api.engineBacktest() : demo.current!.backtest()), [api]);
 
+  const exportData = useCallback(
+    async () => (api ? api.engineExport() : demo.current!.exportData()),
+    [api],
+  );
+
   const resetJournal = useCallback(
     () =>
       run(async () => {
@@ -229,6 +236,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
       updateConfig,
       backtest,
       resetJournal,
+      exportData,
       phone: !!phoneApi,
       enter,
       cancelEntry,
@@ -245,6 +253,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
       updateConfig,
       backtest,
       resetJournal,
+      exportData,
       phoneApi,
       enter,
       cancelEntry,

@@ -109,6 +109,20 @@ Turning it on also turns auto-refresh on. Leave the app with Home / the app swit
 closes it, and the service then posts a "stopped watching" alert and stops. Use **Allow unrestricted
 battery use**, and on Xiaomi / Oppo / Vivo / Realme / OnePlus also allow Autostart.
 
+## Export (journal & logs)
+
+Journal tab → **Export** shares a file (WhatsApp, Gmail, Drive, Files…):
+
+- **Trade journal (CSV)** — every trade with entry / SL / target / exit, P&L, WIN/LOSS, confidence, trend,
+  PCR, OI bias, IV, delta and entry / exit reasons.
+- **Decision log (CSV)** — a row whenever the engine's decision, signal or position changes, on every new
+  5-min candle, and for every refresh error: spot, trend, signal, confidence, CE/PE (long/short) scores,
+  pattern, PCR, IV percentile, every factor's points, decision text, position, realized P&L, status.
+  Keeps the latest 3,000 rows; clearing the journal keeps it.
+- **Alerts & events (CSV)** — entries, partials, exits, signals (latest 100).
+- **Everything (JSON)** — all of the above plus settings and win-rate / P&L stats. Dhan id and token are
+  never included.
+
 ## Phone-only setup (no server)
 
 1. ⚙ Settings → **Dhan account (this phone)**: enter your Dhan client id and access token and tap **Save & test**. They are checked with Dhan and stored only on the phone, encrypted by the Android Keystore.

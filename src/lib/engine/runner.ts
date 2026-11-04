@@ -10,6 +10,7 @@ import {
   closeOpenPosition,
   isWithinMarketHours,
   openTrade,
+  positionLabel,
   runCycle,
 } from './decision.ts';
 import { findStrike, legOf } from './indicators.ts';
@@ -30,6 +31,9 @@ import {
   type EngineState,
   type LiveLegs,
   type TradePlan,
+  type CycleLogRow,
+  type JournalRow,
+  type OpenPosition,
 } from './types.ts';
 
 /** The MCX futures contract the engine is trading (current month, rolled before expiry). */
@@ -62,6 +66,20 @@ export interface EngineStore {
 }
 
 /** What the app receives (state minus the bulky IV history). */
+export const CYCLE_LOG_MAX = 3000;
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+export interface EngineExport {
+  exportedAt: number;
+  config: EngineConfig;
+  journal: JournalRow[];
+  events: EngineEvent[];
+  cycleLog: CycleLogRow[];
+  position: OpenPosition | null;
+  realizedToday: number;
+  tradesToday: number;
+}
+
 export interface EngineSnapshot {
   config: EngineConfig;
   state: Omit<EngineState, 'ivHistory'> & { ivSnapshots: number };
@@ -190,6 +208,7 @@ export class EngineRunner {
   afterCycle: ((before: EngineState, after: EngineState) => Promise<void>) | null = null;
   /** Dhan available balance (₹), used by CAPITAL sizing in LIVE when live capital is 0. */
   funds: number | null = null;
+  private lastLoggedCandle = 0;
   /** Fetches the live account balance (phone / server with Dhan); null in demo. */
   fundsSource: (() => Promise<number>) | null = null;
   private running: Promise<void> | null = null;
@@ -269,6 +288,7 @@ export class EngineRunner {
     } catch (e) {
       const msg = (e as Error).message;
       this.status = `Error - ${msg}`;
+      this.logCycle(now, 'ERROR');
       if (/token|DH-901|401/i.test(msg)) {
         this.banner =
           'Dhan unavailable - token likely expired (tokens expire every 24h). Regenerate in Dhan Web > Profile > DhanHQ Trading APIs.';
@@ -293,13 +313,77 @@ export class EngineRunner {
         }
       }
       this.lastRefresh = now;
+      this.logCycle(now, 'OK');
       // Every event raised during a cycle is stamped with that cycle's clock.
       const fresh = state.events.filter((e) => e.at === now);
       if (fresh.length) this.onEvents(fresh, this.config);
       await this.store.save(this.state, this.config);
     } catch (e) {
       this.status = `Error - ${(e as Error).message}`;
+      this.logCycle(now, 'ERROR');
     }
+  }
+
+  /**
+   * Decision log: keeps a row when the decision / signal / position changes, on each
+   * new 5-min candle, and for every error — informative without a row per refresh.
+   */
+  private logCycle(now: number, result: 'OK' | 'ERROR') {
+    const d = result === 'OK' ? this.dashboard : null;
+    const p = this.state.position;
+    const row: CycleLogRow = {
+      at: now,
+      symbol: this.config.symbol,
+      mode: this.config.tradeMode,
+      result,
+      spot: d?.market.spot ?? null,
+      trend: d?.market.trend ?? '',
+      signal: d?.decision.signal ?? '',
+      direction: d?.decision.direction ?? '',
+      strike: d?.decision.selectedStrike ?? 0,
+      confidence: d ? round2(d.decision.confidence) : null,
+      scoreUp: d ? round2(d.decision.scoreCE) : null,
+      scoreDown: d ? round2(d.decision.scorePE) : null,
+      pattern: d?.decision.pattern ?? '',
+      pcr: d ? round2(d.chain.pcr) : null,
+      ivPercentile: d ? round2(d.decision.ivPercentile) : null,
+      factors: d ? d.factors.map((f) => `${f.key}=${round2(f.value)}`).join(' ') : '',
+      decision: d?.decision.decisionText ?? '',
+      position: p
+        ? `${positionLabel(p)} × ${p.remainingQty} @ ${p.entry} SL ${p.currentSl}${d?.positionLtp != null ? ` ltp ${d.positionLtp}` : ''}`
+        : '',
+      realizedToday: round2(this.state.realizedToday),
+      status: this.status,
+    };
+    const log = this.state.cycleLog ?? [];
+    const prev = log[log.length - 1];
+    const candle = this.candles[this.candles.length - 1]?.t ?? 0;
+    const changed =
+      !prev ||
+      result === 'ERROR' ||
+      prev.result !== result ||
+      prev.symbol !== row.symbol ||
+      prev.signal !== row.signal ||
+      prev.decision !== row.decision ||
+      prev.position.split(' ltp ')[0] !== row.position.split(' ltp ')[0] ||
+      candle !== this.lastLoggedCandle;
+    if (!changed) return;
+    this.lastLoggedCandle = candle;
+    this.state = { ...this.state, cycleLog: [...log, row].slice(-CYCLE_LOG_MAX) };
+  }
+
+  /** Everything worth exporting for review (journal, decision log, events, settings). */
+  exportData(): EngineExport {
+    return {
+      exportedAt: this.clock(),
+      config: this.config,
+      journal: this.state.journal,
+      events: this.state.events,
+      cycleLog: this.state.cycleLog ?? [],
+      position: this.state.position,
+      realizedToday: this.state.realizedToday,
+      tradesToday: this.state.tradesToday,
+    };
   }
 
   async updateConfig(patch: Partial<EngineConfig>) {
@@ -507,7 +591,8 @@ export class EngineRunner {
   }
 
   async resetJournal() {
-    this.state = { ...initialEngineState(), ivHistory: this.state.ivHistory };
+    // Clears trades and counters; the decision log is kept (export it any time).
+    this.state = { ...initialEngineState(), ivHistory: this.state.ivHistory, cycleLog: this.state.cycleLog };
     await this.store.save(this.state, this.config);
   }
 
@@ -544,7 +629,8 @@ export class EngineRunner {
   }
 
   snapshot(demo = false): EngineSnapshot {
-    const { ivHistory, ...rest } = this.state;
+    // The decision log is exported on request, not shipped with every poll.
+    const { ivHistory, cycleLog: _log, ...rest } = this.state;
     return {
       config: this.config,
       state: { ...rest, ivSnapshots: ivHistory.length },

@@ -3,7 +3,10 @@ import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from '
 import { KV } from '../../components/engine';
 import { LineChart } from '../../components/LineChart';
 import { Button, Card, Empty, Segmented, Stat, styles as ui } from '../../components/ui';
+import Constants from 'expo-constants';
 import { summarizeJournal, type BacktestResult } from '../../lib/engine/backtest';
+import { eventsCsv, exportFileName, fullExportJson, journalCsv, logCsv } from '../../lib/export';
+import { shareTextFile } from '../../lib/shareFile';
 import { formatNumber, formatSigned } from '../../lib/format';
 import { useEngine } from '../../state/EngineContext';
 import { colors, pnlColor } from '../../theme';
@@ -22,7 +25,31 @@ const confirm = (msg: string, onYes: () => void) => {
 };
 
 export default function JournalScreen() {
-  const { snap, backtest, resetJournal } = useEngine();
+  const { snap, backtest, resetJournal, exportData } = useEngine();
+  const [exMsg, setExMsg] = useState<string | null>(null);
+  const [exBusy, setExBusy] = useState(false);
+
+  const doExport = async (kind: 'journal' | 'log' | 'events' | 'all') => {
+    setExBusy(true);
+    setExMsg(null);
+    try {
+      const data = await exportData();
+      const base = exportFileName(kind, data.exportedAt, data.config.symbol);
+      if (kind === 'all') {
+        const json = fullExportJson(data, { version: Constants.expoConfig?.version ?? '?', demo: !!snap?.demo });
+        await shareTextFile(`${base}.json`, json, 'application/json');
+      } else {
+        const csv = kind === 'journal' ? journalCsv(data.journal) : kind === 'log' ? logCsv(data.cycleLog) : eventsCsv(data.events);
+        await shareTextFile(`${base}.csv`, csv, 'text/csv');
+      }
+      const n = kind === 'journal' ? data.journal.length : kind === 'log' ? data.cycleLog.length : kind === 'events' ? data.events.length : null;
+      setExMsg(`Exported ${base}${n != null ? ` (${n} rows)` : ''}`);
+    } catch (e) {
+      setExMsg(`Failed: ${(e as Error).message}`);
+    } finally {
+      setExBusy(false);
+    }
+  };
   const [tab, setTab] = useState<Tab>('JOURNAL');
   const [bt, setBt] = useState<BacktestResult | null>(null);
   const [btError, setBtError] = useState<string | null>(null);
@@ -188,6 +215,20 @@ export default function JournalScreen() {
           ) : null}
         </>
       )}
+
+      <Card style={{ gap: 10 }}>
+        <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Export</Text>
+        <Text style={ui.muted}>
+          Share as a file (WhatsApp, Gmail, Drive, Files…). CSV opens in Excel / Google Sheets. The decision log has a row
+          whenever the engine&apos;s decision changes and for each new candle, with scores and every factor — use it to
+          see why trades were taken or skipped. No Dhan id or token is included.
+        </Text>
+        <Button label="Trade journal (CSV)" onPress={() => void doExport('journal')} disabled={exBusy} />
+        <Button label="Decision log (CSV)" color={colors.cardAlt} onPress={() => void doExport('log')} disabled={exBusy} />
+        <Button label="Alerts & events (CSV)" color={colors.cardAlt} onPress={() => void doExport('events')} disabled={exBusy} />
+        <Button label="Everything (JSON)" color={colors.cardAlt} onPress={() => void doExport('all')} disabled={exBusy} />
+        {exMsg ? <Text style={{ color: exMsg.startsWith('Failed') ? colors.down : colors.up }}>{exMsg}</Text> : null}
+      </Card>
 
       {tab === 'JOURNAL' && journal.length > 0 && !snap?.state.position ? (
         <Pressable

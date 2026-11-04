@@ -153,6 +153,9 @@ export function createApp(cfg: ServerConfig, service: DhanService, engine?: Engi
           if (!engine.candles.length) await engine.refresh();
           return send(200, engine.backtest());
         }
+        if (req.method === 'GET' && path === '/api/engine/export') {
+          return send(200, engine.exportData());
+        }
         if (req.method === 'POST' && path === '/api/engine/reset-journal') {
           await engine.resetJournal();
           return send(200, engine.snapshot());

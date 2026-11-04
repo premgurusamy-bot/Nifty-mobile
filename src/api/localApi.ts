@@ -138,6 +138,7 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
       if (!engine.candles.length) await engine.refresh();
       return engine.backtest();
     },
+    engineExport: async () => engine.exportData(),
     engineResetJournal: async () => {
       if (engine.state.position) throw new Error('Exit the open position before clearing the journal.');
       if (engine.state.pendingEntry) throw new Error('Cancel the pending entry order before clearing the journal.');

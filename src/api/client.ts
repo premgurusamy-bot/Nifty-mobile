@@ -10,7 +10,7 @@ import type {
   StatusResponse,
 } from '../lib/apiTypes';
 import type { BacktestResult } from '../lib/engine/backtest';
-import type { EngineSnapshot } from '../lib/engine/runner';
+import type { EngineExport, EngineSnapshot } from '../lib/engine/runner';
 import type { EngineConfig } from '../lib/engine/types';
 
 export class ApiError extends Error {
@@ -60,6 +60,7 @@ export function createApi(baseUrl: string, apiKey: string, timeoutMs = 20000) {
     engineConfig: (patch: Partial<EngineConfig>) => req<EngineSnapshot>('PUT', '/api/engine/config', patch),
     engineBacktest: () => req<BacktestResult>('GET', '/api/engine/backtest'),
     engineResetJournal: () => req<EngineSnapshot>('POST', '/api/engine/reset-journal'),
+    engineExport: () => req<EngineExport>('GET', '/api/engine/export'),
   };
 }
 

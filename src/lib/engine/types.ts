@@ -255,6 +255,36 @@ export interface EngineState {
   lastDecisionText: string;
   /** A manual limit entry waiting for the premium to reach its price. */
   pendingEntry: PendingEntry | null;
+  /** Decision log for export: a row whenever the decision changes, each new candle, and every error. */
+  cycleLog?: CycleLogRow[];
+}
+
+/** One engine refresh, as exported in the logs (for reviewing / improving the strategy). */
+export interface CycleLogRow {
+  at: number;
+  symbol: string;
+  mode: TradeMode;
+  /** 'OK' or 'ERROR'. */
+  result: 'OK' | 'ERROR';
+  spot: number | null;
+  trend: string;
+  signal: string;
+  direction: string;
+  strike: number;
+  confidence: number | null;
+  /** CE / LONG score and PE / SHORT score. */
+  scoreUp: number | null;
+  scoreDown: number | null;
+  pattern: string;
+  pcr: number | null;
+  ivPercentile: number | null;
+  /** "key=points" per factor of the leading direction. */
+  factors: string;
+  decision: string;
+  /** Open position: "PE 24200 @ 82.65 ltp 90.10", or blank. */
+  position: string;
+  realizedToday: number;
+  status: string;
 }
 
 /** Manual ENTER at a limit price below the market. */
