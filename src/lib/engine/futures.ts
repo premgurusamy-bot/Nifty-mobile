@@ -12,6 +12,7 @@ import { istDay, type Technical } from './indicators.ts';
 import { livePriceAction } from './priceAction.ts';
 import { sideOf, type Candle, type Direction, type Factor, type TradePlan } from './types.ts';
 import { futuresMarginPerLot, sizeLots, type SizingConfig } from './sizing.ts';
+import type { Calibration } from './calibration.ts';
 
 export const FUTURES_FACTORS: [key: string, label: string, max: number][] = [
   ['emaTrend', 'EMA Trend', 15],
@@ -76,6 +77,7 @@ function scoreSide(
     swingSupport: number;
     swingResistance: number;
     oi: ReturnType<typeof oiBuildup>;
+    cal?: Calibration;
   },
 ) {
   const side = sideOf(dir);
@@ -84,7 +86,9 @@ function scoreSide(
   const emaTrend = emaState === side ? 15 : emaState === 0 ? 6 : 0;
 
   const vwapPct = vwap ? ((spot - vwap) / vwap) * 100 * side : 0;
-  const vwapPos = vwapPct > 0.05 ? 10 : vwapPct > 0 ? 5 : 0;
+  // % thresholds in this contract's typical moves (NIFTY-calibrated numbers × volatility scale).
+  const volScale = ctx.cal?.vol ?? 1;
+  const vwapPos = vwapPct > 0.05 * volScale ? 10 : vwapPct > 0 ? 5 : 0;
 
   const priceAction = side > 0 ? pa.bull : pa.bear;
 
@@ -98,7 +102,7 @@ function scoreSide(
   const volume = avgVol > 0 && candleWithUs ? (last.v >= avgVol * 1.5 ? 10 : last.v >= avgVol ? 5 : 0) : 0;
 
   const fromOpen = ctx.dayOpen ? ((spot - ctx.dayOpen) / ctx.dayOpen) * 100 * side : 0;
-  const dayOpen = fromOpen > 0.2 ? 10 : fromOpen > 0 ? 5 : 0;
+  const dayOpen = fromOpen > 0.2 * volScale ? 10 : fromOpen > 0 ? 5 : 0;
 
   const o = ctx.oi;
   let oiScore = 0;
@@ -134,7 +138,7 @@ function scoreSide(
   return { total: factors.reduce((a, f) => a + f.value, 0), factors, momentum: m };
 }
 
-export function evaluateFutures(c: Candle[], tech: Technical, spot: number): FuturesEvaluation {
+export function evaluateFutures(c: Candle[], tech: Technical, spot: number, cal?: Calibration): FuturesEvaluation {
   const pa = livePriceAction(c, tech, 0, 0); // no option-chain OI levels for futures
   const today = istDay(c[c.length - 1].t);
   const session = c.filter((x) => istDay(x.t) === today);
@@ -142,7 +146,7 @@ export function evaluateFutures(c: Candle[], tech: Technical, spot: number): Fut
   const sessHigh = Math.max(...session.map((x) => x.h), spot);
   const sessLow = Math.min(...session.map((x) => x.l), spot);
   const oi = oiBuildup(c);
-  const ctx = { dayOpen, sessHigh, sessLow, swingSupport: pa.swingSupport, swingResistance: pa.swingResistance, oi };
+  const ctx = { dayOpen, sessHigh, sessLow, swingSupport: pa.swingSupport, swingResistance: pa.swingResistance, oi, cal };
   const L = scoreSide('LONG', c, tech, spot, pa, ctx);
   const S = scoreSide('SHORT', c, tech, spot, pa, ctx);
   const long = L.total >= S.total;

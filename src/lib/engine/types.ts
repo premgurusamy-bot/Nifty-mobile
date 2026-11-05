@@ -493,4 +493,6 @@ export interface Dashboard {
   candidatePlan: TradePlan | null;
   /** Live premium of the open position's strike, when one is open. */
   positionLtp: number | null;
+  /** How the scoring thresholds were scaled for this instrument (NIFTY: none). */
+  calibration?: { base: boolean; price: number; vol: number; lot: number };
 }

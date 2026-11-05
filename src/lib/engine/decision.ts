@@ -34,6 +34,7 @@ import { sessionOpen, type Session } from './catalog.ts';
 import { evaluateFutures, buildFuturesPlan } from './futures.ts';
 import { sizeLots, type SizingConfig } from './sizing.ts';
 import { lockedProfit } from './profitLock.ts';
+import { calibrationFor, NO_CALIBRATION, type Calibration } from './calibration.ts';
 
 const IV_HISTORY_MAX = 20000;
 const EVENTS_MAX = 100;
@@ -147,7 +148,13 @@ function scoreIV(history: number[], iv: number): number {
 // ---------------------------------------------------------------- scoring
 
 /** SelectBestStrike: ATM and the next 2 OTM strikes, best delta-fit / IV / liquidity. */
-export function selectBestStrike(chain: ChainSnapshot, dir: OptionSide, atm: number, interval: number): number {
+export function selectBestStrike(
+  chain: ChainSnapshot,
+  dir: OptionSide,
+  atm: number,
+  interval: number,
+  cal: Calibration = NO_CALIBRATION,
+): number {
   if (!chain.strikes.length) return atm;
   const sign = dir === 'CE' ? 1 : -1;
   let best = atm;
@@ -162,8 +169,9 @@ export function selectBestStrike(chain: ChainSnapshot, dir: OptionSide, atm: num
     else if (delta > 0) score += 4;
     if (leg.iv > 0 && leg.iv <= 20) score += 5;
     else if (leg.iv > 0 && leg.iv <= 30) score += 2;
-    if (leg.oi > 0) score += Math.min(3, leg.oi / 100000);
-    if (leg.volume > 0) score += Math.min(2, leg.volume / 50000);
+    // Liquidity in NIFTY-sized units (lot-scaled for other indexes).
+    if (leg.oi > 0) score += Math.min(3, leg.oi / (100000 * cal.lot));
+    if (leg.volume > 0) score += Math.min(2, leg.volume / (50000 * cal.lot));
     if (score > bestScore) {
       bestScore = score;
       best = cand;
@@ -181,6 +189,8 @@ export interface ScoreInputs {
   spot: number;
   leg: Leg | null;
   ivHistory: number[];
+  /** Instrument calibration (NIFTY = none). */
+  cal?: Calibration;
 }
 
 /** ScoreDirection: 10 factors, total 0-105. */
@@ -191,8 +201,10 @@ export function scoreDirection(dir: OptionSide, x: ScoreInputs): { total: number
   const emaTrend =
     (bull && emaState === 'BULLISH') || (!bull && emaState === 'BEARISH') ? 15 : emaState === 'SIDEWAYS' ? 6 : 0;
 
+  const cal = x.cal ?? NO_CALIBRATION;
   const pct = x.vwap !== 0 ? ((x.spot - x.vwap) / x.vwap) * 100 : 0;
-  const vwapPosition = bull ? (pct > 0.05 ? 10 : pct > 0 ? 5 : 0) : pct < -0.05 ? 10 : pct < 0 ? 5 : 0;
+  const vw = 0.05 * cal.vol; // "clearly" past VWAP, in this instrument's typical moves
+  const vwapPosition = bull ? (pct > vw ? 10 : pct > 0 ? 5 : 0) : pct < -vw ? 10 : pct < 0 ? 5 : 0;
 
   const oiBias = bull ? (x.pcr > 1.1 ? 15 : x.pcr > 1 ? 8 : 0) : x.pcr < 0.9 ? 15 : x.pcr < 1 ? 8 : 0;
   const dist = Math.abs(x.pcr - 1);
@@ -203,9 +215,10 @@ export function scoreDirection(dir: OptionSide, x: ScoreInputs): { total: number
   const deltaFit = absDelta >= 0.35 && absDelta <= 0.6 ? 10 : absDelta > 0 ? 4 : 0;
   const ivLevel = scoreIV(x.ivHistory, leg?.iv ?? 0);
   const absGamma = Math.abs(leg?.gamma ?? 0);
-  const gamma = absGamma >= 0.001 && absGamma <= 0.01 ? 10 : absGamma > 0 ? 4 : 0;
+  // Gamma ∝ 1/price and theta (premium points/day) ∝ price: scale the NIFTY bands.
+  const gamma = absGamma >= 0.001 / cal.price && absGamma <= 0.01 / cal.price ? 10 : absGamma > 0 ? 4 : 0;
   const absTheta = Math.abs(leg?.theta ?? 0);
-  const thetaDrag = absTheta < 5 ? 10 : absTheta < 15 ? 5 : 0;
+  const thetaDrag = absTheta < 5 * cal.price ? 10 : absTheta < 15 * cal.price ? 5 : 0;
   const vol = leg?.volume ?? 0;
   const oi = leg?.oi ?? 0;
   let volume = 0;
@@ -706,7 +719,8 @@ function runFuturesCycle(
   const tech = computeTechnical(candles);
   if (!tech) throw new Error('No candle data');
   const spot = chain.spot || tech.last.close;
-  const ev = evaluateFutures(candles, tech, spot);
+  const cal = calibrationFor(cfg, spot, tech.last.atr);
+  const ev = evaluateFutures(candles, tech, spot, cal);
 
   let positionLtp: number | null = null;
   if (s.position) {
@@ -786,6 +800,7 @@ function runFuturesCycle(
     plan: decided.plan,
     candidatePlan,
     positionLtp,
+    calibration: cal,
   };
   return { state: s, dashboard };
 }
@@ -812,9 +827,11 @@ function runOptionsCycle(
 
   captureIVSnapshot(s, chain, metrics.atm, now);
 
-  const bestCE = selectBestStrike(chain, 'CE', metrics.atm, cfg.strikeInterval);
-  const bestPE = selectBestStrike(chain, 'PE', metrics.atm, cfg.strikeInterval);
+  const cal = calibrationFor(cfg, spot, tech.last.atr);
+  const bestCE = selectBestStrike(chain, 'CE', metrics.atm, cfg.strikeInterval, cal);
+  const bestPE = selectBestStrike(chain, 'PE', metrics.atm, cfg.strikeInterval, cal);
   const base = {
+    cal,
     pcr: metrics.pcr,
     ema20: tech.last.ema20,
     ema50: tech.last.ema50,
@@ -932,6 +949,7 @@ function runOptionsCycle(
     plan,
     candidatePlan,
     positionLtp,
+    calibration: cal,
   };
   return { state: s, dashboard };
 }

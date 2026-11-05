@@ -114,6 +114,17 @@ Turning it on also turns auto-refresh on. Leave the app with Home / the app swit
 closes it, and the service then posts a "stopped watching" alert and stops. Use **Allow unrestricted
 battery use**, and on Xiaomi / Oppo / Vivo / Realme / OnePlus also allow Autostart.
 
+## Score calibration (BANK NIFTY, FIN NIFTY, MCX)
+
+The confidence engine was tuned on NIFTY; NIFTY's scoring is unchanged (the golden workbook tests still
+pass exactly). For every other instrument, the few thresholds that are absolute numbers are rescaled
+(`src/lib/engine/calibration.ts`): gamma band ÷ and theta limits × the price level vs NIFTY (24,200),
+"clearly past VWAP" (0.05%) and, for MCX, "up from the day open" (0.2%) × the instrument's 5-minute ATR %
+vs NIFTY's (0.055%, bounded 0.5–4×), and strike-liquidity units × lot size vs NIFTY's 65. Everything else
+(EMA trend, PCR, delta, IV percentile per instrument, price action, momentum, breakout) is already
+scale-free. Check: the real 27 Aug NIFTY market scaled to BANK NIFTY's price level scored 82.9 before
+(gamma 4 instead of 10) and 88.9 — the same as NIFTY — after. The Dashboard shows the factors used.
+
 ## Screener (index / MCX picker + "market today")
 
 The **Screener** tab runs the engine on NIFTY, BANK NIFTY and FIN NIFTY (Dhan live data on the phone,

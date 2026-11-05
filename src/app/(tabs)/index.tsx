@@ -533,6 +533,17 @@ export default function DashboardScreen() {
             </>
           )}
           <FactorBreakdown factors={d.factors ?? []} total={d.decision.confidence} />
+          {d.calibration && !d.calibration.base ? (
+            <Text style={[ui.muted, { fontSize: 12 }]}>
+              Score calibrated to NIFTY for {cfg.symbol}:{' '}
+              {isFut
+                ? `volatility ×${d.calibration.vol.toFixed(2)} (VWAP and day-open thresholds)`
+                : `price ×${d.calibration.price.toFixed(2)} (gamma / theta), volatility ×${d.calibration.vol.toFixed(2)} (VWAP), lot ×${d.calibration.lot.toFixed(2)} (liquidity)`}
+              {isFut
+                ? '. MCX uses the futures factors (no option Greeks) on the same 0–100 scale and the same 80 / 65 levels.'
+                : '. Same factors and weights as NIFTY; an 80 here means what 80 means on NIFTY.'}
+            </Text>
+          ) : null}
         </>
       )}
 
