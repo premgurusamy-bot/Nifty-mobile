@@ -37,6 +37,7 @@ export default function TabsLayout() {
       }}
     >
       <Tabs.Screen name="index" options={{ title: 'Dashboard', tabBarIcon: icon('speedometer-outline') }} />
+      <Tabs.Screen name="screener" options={{ title: 'Screener', tabBarIcon: icon('pulse-outline') }} />
       <Tabs.Screen name="options" options={{ title: 'Option Chain', tabBarIcon: icon('grid-outline') }} />
       <Tabs.Screen name="journal" options={{ title: 'Journal', tabBarIcon: icon('book-outline') }} />
       <Tabs.Screen name="markets" options={{ title: 'Markets', tabBarIcon: icon('trending-up') }} />

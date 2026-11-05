@@ -7,6 +7,7 @@ import type { PreflightResult } from '../../server/preflight.ts';
 import { isLocalApi } from '../api/localApi';
 import type { EngineConfig, TradeMode } from '../lib/engine/types';
 import { useSettings, type DataMode } from './SettingsContext';
+import { screenAll, SCREEN_INDEXES, type ScreenReport } from '../lib/screener';
 
 /**
  * The option-buying engine (ported from the Excel workbook).
@@ -34,6 +35,8 @@ interface EngineValue {
   /** Returns the pre-flight result when switching to LIVE (null otherwise); LIVE only applies if it passed. */
   setTradeMode: (mode: TradeMode) => Promise<PreflightResult | null>;
   preflight: () => Promise<PreflightResult>;
+  /** Screen NIFTY / BANKNIFTY / FINNIFTY now (live in phone mode, simulated in demo). */
+  screener: () => Promise<ScreenReport>;
 }
 
 const Ctx = createContext<EngineValue | null>(null);
@@ -238,6 +241,29 @@ export function EngineProvider({ children }: { children: ReactNode }) {
     return phoneApi.preflight();
   }, [phoneApi]);
 
+  // Demo screener: one simulated market per index, kept between scans so it moves on.
+  const demoSims = useRef<Record<string, SimEngineSource>>({});
+  const screener = useCallback(async (): Promise<ScreenReport> => {
+    if (phoneApi) return phoneApi.screener();
+    if (api) throw new Error('The screener runs on the phone: connect Dhan in Settings (it is not available through a server).');
+    const r = demo.current;
+    if (!r) throw new Error('Demo engine not ready yet');
+    const sims = demoSims.current;
+    SCREEN_INDEXES.forEach((sym, i) => (sims[sym] ??= new SimEngineSource(1000 + i * 77)));
+    let at = Date.now();
+    return screenAll({
+      load: async (cfg) => {
+        const sim = sims[cfg.symbol];
+        const d = await sim.load(cfg);
+        at = sim.now();
+        return d;
+      },
+      now: () => at,
+      config: r.config,
+      state: r.state,
+    });
+  }, [api, phoneApi]);
+
   const value = useMemo(
     () => ({
       mode,
@@ -255,6 +281,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
       exit,
       setTradeMode,
       preflight,
+      screener,
     }),
     [
       mode,
@@ -272,6 +299,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
       exit,
       setTradeMode,
       preflight,
+      screener,
     ],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

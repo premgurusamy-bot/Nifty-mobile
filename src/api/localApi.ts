@@ -14,6 +14,7 @@
  */
 import { DhanClient } from '../../server/dhan.ts';
 import { mapFunds } from '../../server/mapping.ts';
+import { screenAll, type ScreenReport } from '../lib/screener.ts';
 import { DhanEngineSource } from '../../server/engineSource.ts';
 import { LiveTrader } from '../../server/liveTrader.ts';
 import { extractIps, isIPv4, runPreflight, type PreflightResult } from '../../server/preflight.ts';
@@ -62,6 +63,8 @@ export interface PhoneTrading {
   /** Register (or replace) the PRIMARY whitelisted IP at Dhan. */
   registerStaticIp: (ip: string) => Promise<string[]>;
   dhanIps: () => Promise<string[]>;
+  /** Screen NIFTY / BANKNIFTY / FINNIFTY on live data (takes ~10 s: one option chain per 3 s). */
+  screener: () => Promise<ScreenReport>;
 }
 
 export type LocalApi = Api & PhoneTrading & { dispose: () => void };
@@ -76,6 +79,8 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
   const trader = new LiveTrader(dhan, service, { sleep: o.sleep });
   engine.afterCycle = (before, after) => trader.afterCycle(engine, before, after);
   engine.fundsSource = async () => mapFunds(await dhan.fundLimit());
+  // The screener's own data source (same Dhan client, so it shares the rate limits).
+  const screenSource = new DhanEngineSource(dhan);
 
   // Live P&L: quote the open position every couple of seconds between engine refreshes.
   const idCache = new Map<string, string>();
@@ -216,6 +221,13 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
       return extractIps(await dhan.getIP());
     },
     dhanIps: async () => extractIps(await dhan.getIP()),
+    screener: () =>
+      screenAll({
+        load: (cfg) => screenSource.load(cfg, Date.now()),
+        now: () => Date.now(),
+        config: engine.config,
+        state: engine.state,
+      }),
     dispose: () => {
       if (ticker) clearInterval(ticker);
       engine.stop();

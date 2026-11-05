@@ -114,6 +114,22 @@ Turning it on also turns auto-refresh on. Leave the app with Home / the app swit
 closes it, and the service then posts a "stopped watching" alert and stops. Use **Allow unrestricted
 battery use**, and on Xiaomi / Oppo / Vivo / Realme / OnePlus also allow Autostart.
 
+## Screener (index picker + "market today")
+
+The **Screener** tab runs the engine on NIFTY, BANK NIFTY and FIN NIFTY (Dhan live data on the phone,
+simulated in demo; one scan takes ~10 s because Dhan allows one option chain per 3 s) and ranks them:
+
+- **Verdict** GOOD NOW / CAUTION / AVOID / NO NEW TRADES and a 0–100 suitability score: the engine's
+  confidence (40%), how cleanly the index is moving over the last hour (efficiency, 25), whether the trend
+  agrees with the side (15), sane volatility (10) and whether ENTER would be allowed under your settings (10),
+  minus penalties for chop, an over-extended day and expiry day.
+- **If you ENTER at market now**: the strike, premium, quantity, SL, T1 and max loss under your sizing.
+- **Why**: ✓ points for and ⚠ risks — sideways / counter-trend, choppy, extended range, opening gap, chasing
+  the day high / low, expiry day or tomorrow, high IV, first 15 minutes, delayed data, refused entries.
+- **Market today**: session phase, time left before your cutoff, whether the indexes agree, expiry days,
+  your own day (trades used, P&L, no-revenge lockout) and a reminder that no news / events data is used.
+- **Trade … instead** switches the engine to that index. **Rescan every minute** is optional.
+
 ## Auto-refresh speed
 
 Settings → Engine settings → **Auto-refresh interval**: minimum **3 seconds** (was 15). 3 s is the fastest
