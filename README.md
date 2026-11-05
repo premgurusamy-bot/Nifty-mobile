@@ -84,6 +84,11 @@ Pick the instrument in ⚙ Settings → **Instrument**. All of its settings load
 Settings → **Position size & capital** chooses how many lots a trade takes:
 
 - **Risk per trade** (the workbook, default): lots = max risk ÷ (stop distance × ₹ per point per lot).
+- **Fixed lots**: every trade takes the lots you set. For options the stop-loss is your chosen % below the
+  entry premium (1–40%, on the ₹0.05 tick; targets 2× and 3× that distance) instead of the ATR stop; the
+  "maximum stop %" premium filter is off in this mode, the minimum premium still applies. MCX keeps its ATR
+  stop. Max lots still caps it, and a trade is blocked if the capital can't pay for the lots (LIVE with the
+  balance not fetched yet is left to Dhan).
 - **Capital %**: lots = capital × % ÷ cost of one lot. Options cost premium × lot size; MCX futures cost the
   margin per lot (enter it, or leave 0 to estimate 12 % of price × point value).
   - PAPER uses the **paper capital**; LIVE uses the **live capital**, or the Dhan available balance

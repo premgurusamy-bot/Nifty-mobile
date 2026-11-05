@@ -120,6 +120,10 @@ export interface EngineConfig {
   capitalPct: number;
   /** MCX futures: margin blocked per lot (₹); 0 = estimate at 12 % of the contract value. */
   marginPerLot: number;
+  /** FIXED sizing: lots per trade. */
+  fixedLots: number;
+  /** FIXED sizing, options: stop-loss as % of the entry premium (1–40). MCX keeps its ATR stop. */
+  fixedStopPct: number;
   /** ₹ profit lock (trailing on total trade profit); turns Target 2 off. */
   profitLock: boolean;
   /** Lock engages at this profit (₹) … */
@@ -132,7 +136,9 @@ export interface EngineConfig {
   lockRideAmount: number;
 }
 
-export type SizingMode = 'RISK' | 'CAPITAL';
+export type SizingMode = 'RISK' | 'CAPITAL' | 'FIXED';
+/** Largest stop-loss you can choose in Fixed-lots mode (% of the option premium). */
+export const MAX_FIXED_STOP_PCT = 40;
 /** Estimated MCX margin when no per-lot margin is entered (share of price × point value). */
 export const EST_MARGIN_PCT = 0.12;
 
@@ -182,6 +188,8 @@ export const DEFAULT_CONFIG: EngineConfig = {
   capitalLive: 0,
   capitalPct: 100,
   marginPerLot: 0,
+  fixedLots: 1,
+  fixedStopPct: 20,
   profitLock: false,
   lockStart: 10000,
   lockStep: 5000,

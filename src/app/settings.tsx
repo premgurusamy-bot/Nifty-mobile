@@ -14,7 +14,7 @@ import { isIPv4 } from '../../server/preflight.ts';
 import { isLocalApi } from '../api/localApi';
 import { PreflightList, type PreflightView } from '../components/engine';
 import { CATALOG, catalogEntry, sessionLabel } from '../lib/engine/catalog';
-import { formatINR } from '../lib/format';
+import { formatINR, formatNumber } from '../lib/format';
 import { lockedProfit } from '../lib/engine/profitLock';
 import { AlertSettingsCard } from '../components/AlertSettings';
 import { Button, Card, Segmented, styles as ui } from '../components/ui';
@@ -48,7 +48,9 @@ type NumKey =
   | 'lockRideFrom'
   | 'lockRideAmount'
   | 'minPremium'
-  | 'maxStopPct';
+  | 'maxStopPct'
+  | 'fixedLots'
+  | 'fixedStopPct';
 
 /** Strategy / discipline settings — shared by every instrument. */
 const ENGINE_FIELDS: [NumKey, string][] = [
@@ -87,11 +89,17 @@ const LOCK_FIELDS: [NumKey, string][] = [
   ['lockRideFrom', 'Stop stepping at secured profit (₹, 0 = keep stepping)'],
   ['lockRideAmount', 'Above that, let this much ride from the peak (₹)'],
 ];
+const FIXED_FIELDS: [NumKey, string][] = [
+  ['fixedLots', 'Lots per trade'],
+  ['fixedStopPct', 'Stop-loss % of premium (1–40)'],
+];
+const STOP_PCTS = [10, 20, 30, 40];
 const CHEAP_FIELDS: [NumKey, string][] = [
   ['minPremium', 'Minimum option premium (₹, 0 = off)'],
   ['maxStopPct', 'Maximum stop-loss as % of premium (0 = off)'],
 ];
 const FIELDS: [NumKey, string][] = [
+  ...FIXED_FIELDS,
   ...CHEAP_FIELDS,
   ...ENGINE_FIELDS,
   ...OPTION_FIELDS,
@@ -560,18 +568,54 @@ export default function SettingsScreen() {
             <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Position size & capital</Text>
             <Segmented
               options={[
-                { label: 'Risk per trade', value: 'RISK' as const },
+                { label: 'Fixed lots', value: 'FIXED' as const },
+                { label: 'Risk ₹', value: 'RISK' as const },
                 { label: 'Capital %', value: 'CAPITAL' as const },
               ]}
               value={cfg.sizingMode}
               onChange={(v) => void save({ sizingMode: v }, setSizeMsg)}
             />
             <Text style={ui.muted}>
-              {cfg.sizingMode === 'CAPITAL'
+              {cfg.sizingMode === 'FIXED'
+                ? isFut
+                  ? `Every trade takes the lots you set. MCX keeps its ATR-based stop. Max lots per trade still caps it (now ${cfg.maxLots || 'no cap'}).`
+                  : `Every trade takes the lots you set, with the stop-loss at your % below the entry premium (up to 40%); targets are 2× and 3× that distance. The "maximum stop %" premium filter doesn't apply in this mode; the minimum premium does. Max lots per trade still caps it (now ${cfg.maxLots || 'no cap'}).`
+                : cfg.sizingMode === 'CAPITAL'
                 ? `Lots = capital × % ÷ cost of 1 lot (${isFut ? 'margin per lot' : 'premium × lot size'}). PAPER uses the paper capital, LIVE the live capital (or your Dhan balance). Max lots per trade still applies — set it to 0 for no cap.`
                 : `Lots are sized so the stop-loss costs at most the max risk per trade (₹${cfg.maxRisk}). Switch to Capital % to size by money instead.`}
             </Text>
-            {SIZING_FIELDS.filter(([k]) => isFut || k !== 'marginPerLot').map(([k, label]) => (
+            {cfg.sizingMode === 'FIXED' ? (
+              <>
+                {FIXED_FIELDS.filter(([k]) => !isFut || k !== 'fixedStopPct').map(([k, label]) => (
+                  <Field
+                    key={k}
+                    label={label}
+                    value={draft[k] ?? ''}
+                    onChange={(v) => setDraft((d) => ({ ...d, [k]: v }))}
+                  />
+                ))}
+                {!isFut ? (
+                  <View style={s.chips}>
+                    {STOP_PCTS.map((p) => (
+                      <Chip
+                        key={p}
+                        label={`SL ${p}%`}
+                        active={draft.fixedStopPct === String(p)}
+                        onPress={() => setDraft((d) => ({ ...d, fixedStopPct: String(p) }))}
+                      />
+                    ))}
+                  </View>
+                ) : null}
+                {!isFut && Number(draft.fixedLots) > 0 && Number(draft.fixedStopPct) > 0 ? (
+                  <Text style={ui.muted}>
+                    {Number(draft.fixedLots)} lot(s) × {cfg.lotSize} = {Number(draft.fixedLots) * cfg.lotSize} qty. Example
+                    at a ₹100 premium: SL ₹{formatNumber(100 * (1 - Number(draft.fixedStopPct) / 100))}, max loss{' '}
+                    {formatINR(Number(draft.fixedLots) * cfg.lotSize * Number(draft.fixedStopPct), 0)}.
+                  </Text>
+                ) : null}
+              </>
+            ) : null}
+            {SIZING_FIELDS.filter(([k]) => (isFut || k !== 'marginPerLot') && (cfg.sizingMode !== 'FIXED' || k !== 'capitalPct')).map(([k, label]) => (
               <Field
                 key={k}
                 label={label}
@@ -579,7 +623,7 @@ export default function SettingsScreen() {
                 onChange={(v) => setDraft((d) => ({ ...d, [k]: v }))}
               />
             ))}
-            <View style={s.chips}>
+            <View style={[s.chips, cfg.sizingMode === 'FIXED' && { display: 'none' }]}>
               {PCTS.map((p) => (
                 <Chip
                   key={p}

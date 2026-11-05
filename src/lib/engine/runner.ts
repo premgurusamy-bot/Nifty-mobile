@@ -19,6 +19,7 @@ import { buildFuturesPlan } from './futures.ts';
 import { sizingCapital, type SizingConfig } from './sizing.ts';
 import {
   DEFAULT_CONFIG,
+  MAX_FIXED_STOP_PCT,
   MIN_REFRESH_SECONDS,
   sideOf,
   type Direction,
@@ -210,12 +211,16 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   num('tickSize', 0.0001, 1000);
   num('maxLots', 0, 1000);
   if (patch.sizingMode !== undefined) {
-    if (patch.sizingMode !== 'RISK' && patch.sizingMode !== 'CAPITAL') throw new Error('sizingMode must be RISK or CAPITAL');
+    if (patch.sizingMode !== 'RISK' && patch.sizingMode !== 'CAPITAL' && patch.sizingMode !== 'FIXED')
+      throw new Error('sizingMode must be RISK, CAPITAL or FIXED');
     next.sizingMode = patch.sizingMode;
   }
   num('capitalPaper', 0, 1e11);
   num('capitalLive', 0, 1e11);
   num('capitalPct', 1, 100);
+  num('fixedLots', 1, 1000);
+  if (!Number.isInteger(next.fixedLots)) throw new Error('Fixed lots must be a whole number');
+  num('fixedStopPct', 1, MAX_FIXED_STOP_PCT);
   num('marginPerLot', 0, 1e9);
   num('minPremium', 0, 100_000);
   num('maxStopPct', 0, 100);

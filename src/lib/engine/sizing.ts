@@ -53,6 +53,23 @@ export function sizeLots(
   costLabel = 'per lot',
 ): { lots: number; sizing: string; blocked?: string } {
   const cap = cfg.maxLots > 0 ? cfg.maxLots : Infinity;
+  if (cfg.sizingMode === 'FIXED') {
+    const want = Math.max(1, Math.floor(cfg.fixedLots || 1));
+    const lots = Math.min(want, cap);
+    const capped = lots < want ? ` (max lots ${cfg.maxLots})` : '';
+    // Can the capital pay for it? (LIVE with the balance not fetched yet: Dhan itself will refuse if not.)
+    const { base: capital, source } = sizingCapital(cfg); // the whole capital: "% per trade" is for Capital mode
+    const known = !(cfg.tradeMode === 'LIVE' && !(cfg.capitalLive > 0) && cfg.availableFunds == null);
+    const sizing = `Fixed ${lots} lot(s)${capped} · max loss ${inr(riskPerLot * lots)}`;
+    if (known && costPerLot > 0 && costPerLot * lots > capital) {
+      return {
+        lots: 0,
+        sizing,
+        blocked: `${lots} lot(s) need ${inr(costPerLot * lots)} (${costLabel} ${inr(costPerLot)}) but ${source} is ${inr(capital)}`,
+      };
+    }
+    return { lots, sizing };
+  }
   if (cfg.sizingMode !== 'CAPITAL') {
     const raw = Math.max(1, Math.floor(cfg.maxRisk / riskPerLot));
     const lots = Math.min(raw, cap);

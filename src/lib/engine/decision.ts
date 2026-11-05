@@ -241,9 +241,13 @@ export function buildTradePlan(
   if (!leg) return null;
   const entry = leg.ltp;
   const delta = Math.abs(leg.delta) || 0.4;
-  let riskPts = atr * cfg.atrMult * delta;
+  const fixedPct = cfg.sizingMode === 'FIXED';
+  // Fixed lots: your stop-loss % of the premium (1–40%); otherwise the workbook's ATR × delta stop.
+  let riskPts = fixedPct
+    ? Math.max(0.05, Number((Math.round((entry * Math.min(cfg.fixedStopPct || 20, 40)) / 100 / 0.05) * 0.05).toFixed(2)))
+    : atr * cfg.atrMult * delta;
   if (riskPts <= 0) riskPts = entry * 0.1;
-  const sl = Math.max(entry - riskPts, 0.05);
+  const sl = Math.max(fixedPct ? Number((entry - riskPts).toFixed(2)) : entry - riskPts, 0.05);
   const target1 = entry + riskPts * cfg.rrTarget;
   const target2 = entry + riskPts * cfg.rrTarget * 1.5;
   const size = sizeLots(cfg, riskPts * cfg.lotSize, entry * cfg.lotSize, 'premium per lot');
@@ -253,7 +257,7 @@ export function buildTradePlan(
   const cheap =
     cfg.minPremium > 0 && entry < cfg.minPremium
       ? `Premium ${fmt2(entry)} is below the minimum ${fmt2(cfg.minPremium)}`
-      : cfg.maxStopPct > 0 && stopPct > cfg.maxStopPct
+      : !fixedPct && cfg.maxStopPct > 0 && stopPct > cfg.maxStopPct
         ? `Stop-loss is ${stopPct.toFixed(1)}% of the premium (max ${cfg.maxStopPct}%)`
         : null;
   if (cheap) size.blocked = size.blocked ?? cheap;
