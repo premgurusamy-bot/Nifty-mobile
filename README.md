@@ -114,7 +114,7 @@ Turning it on also turns auto-refresh on. Leave the app with Home / the app swit
 closes it, and the service then posts a "stopped watching" alert and stops. Use **Allow unrestricted
 battery use**, and on Xiaomi / Oppo / Vivo / Realme / OnePlus also allow Autostart.
 
-## Screener (index picker + "market today")
+## Screener (index / MCX picker + "market today")
 
 The **Screener** tab runs the engine on NIFTY, BANK NIFTY and FIN NIFTY (Dhan live data on the phone,
 simulated in demo; one scan takes ~10 s because Dhan allows one option chain per 3 s) and ranks them:
@@ -128,6 +128,10 @@ simulated in demo; one scan takes ~10 s because Dhan allows one option chain per
   the day high / low, expiry day or tomorrow, high IV, first 15 minutes, delayed data, refused entries.
 - **Market today**: session phase, time left before your cutoff, whether the indexes agree, expiry days,
   your own day (trades used, P&L, no-revenge lockout) and a reminder that no news / events data is used.
+- **MCX minis** (switch at the top): Gold, Silver, Crude Oil, Natural Gas, Lead, Zinc and Aluminium minis
+  screened as futures — long / short, open-interest buildup instead of PCR / IV, MCX hours and your MCX
+  cutoff, contract expiry / roll, an evening-session warning for gold, silver, crude and natural gas, and each
+  contract's own lot cap (1 lot).
 - **Trade … instead** switches the engine to that index. **Rescan every minute** is optional.
 
 ## Auto-refresh speed

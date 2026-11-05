@@ -1,9 +1,9 @@
 import { router } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
-import { Button, Card, styles as ui } from '../../components/ui';
-import { formatNumber } from '../../lib/format';
-import type { ScreenReport, ScreenResult, Verdict } from '../../lib/screener';
+import { Button, Card, Segmented, styles as ui } from '../../components/ui';
+import { formatINR, formatNumber } from '../../lib/format';
+import type { ScreenGroup, ScreenReport, ScreenResult, Verdict } from '../../lib/screener';
 import { useEngine } from '../../state/EngineContext';
 import { colors, pnlColor } from '../../theme';
 
@@ -19,7 +19,9 @@ const time = (ms: number) => new Date(ms + 5.5 * 3600_000).toISOString().slice(1
 function IndexCard({ r, current, onUse }: { r: ScreenResult; current: boolean; onUse: () => void }) {
   const v = VERDICT[r.verdict];
   const p = r.plan;
-  const sideWord = r.direction === 'CE' ? 'BUY CE (up)' : 'BUY PE (down)';
+  const sideWord =
+    r.direction === 'CE' ? 'BUY CE (up)' : r.direction === 'PE' ? 'BUY PE (down)' : r.direction === 'LONG' ? 'BUY / long (up)' : 'SELL / short (down)';
+  const fut = r.group === 'MCX';
   return (
     <Card style={{ gap: 10, borderColor: v.color, borderWidth: 1 }}>
       <View style={st.head}>
@@ -49,11 +51,15 @@ function IndexCard({ r, current, onUse }: { r: ScreenResult; current: boolean; o
         <Text style={st.boxTitle}>If you ENTER at market now</Text>
         {p && !p.blocked && p.qty > 0 ? (
           <Text style={ui.title}>
-            BUY {p.direction} {p.strike} @ {formatNumber(p.entry)} × {p.qty} · SL {formatNumber(p.sl)} · T1{' '}
-            {formatNumber(p.target1)} · max loss ₹{Math.round(p.maxLoss).toLocaleString('en-IN')}
+            {fut
+              ? `${p.direction === 'LONG' ? 'BUY' : 'SELL'} ${r.symbol} × ${p.qty} lot${p.qty === 1 ? '' : 's'}`
+              : `BUY ${p.direction} ${p.strike}`}{' '}
+            @ {formatNumber(p.entry)}
+            {fut ? '' : ` × ${p.qty}`} · SL {formatNumber(p.sl)} · T1 {formatNumber(p.target1)} · max loss{' '}
+            {formatINR(p.maxLoss, 0)}
           </Text>
         ) : (
-          <Text style={{ color: colors.down }}>{p?.blocked ? `Refused: ${p.blocked}` : 'No option price to plan with.'}</Text>
+          <Text style={{ color: colors.down }}>{p?.blocked ? `Refused: ${p.blocked}` : 'No price to plan with.'}</Text>
         )}
         <Text style={ui.muted}>{r.decision}</Text>
       </View>
@@ -79,7 +85,10 @@ function IndexCard({ r, current, onUse }: { r: ScreenResult; current: boolean; o
 
 export default function ScreenerScreen() {
   const { snap, screener, updateConfig } = useEngine();
-  const [report, setReport] = useState<ScreenReport | null>(null);
+  const [group, setGroup] = useState<ScreenGroup>(snap?.config.instrumentKind === 'MCX_FUTURES' ? 'MCX' : 'INDEX');
+  // One report per group, so switching back shows the last scan straight away.
+  const [reports, setReports] = useState<Partial<Record<ScreenGroup, ScreenReport>>>({});
+  const report = reports[group] ?? null;
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [auto, setAuto] = useState(false);
@@ -91,14 +100,15 @@ export default function ScreenerScreen() {
     setBusy(true);
     setErr(null);
     try {
-      setReport(await screener());
+      const r = await screener(group);
+      setReports((m) => ({ ...m, [r.group]: r }));
     } catch (e) {
       setErr((e as Error).message);
     } finally {
       running.current = false;
       setBusy(false);
     }
-  }, [screener]);
+  }, [screener, group]);
 
   // First scan once the engine is ready; then every minute if you switch that on.
   const ready = !!snap;
@@ -125,6 +135,14 @@ export default function ScreenerScreen() {
 
   return (
     <ScrollView style={{ backgroundColor: colors.bg }} contentContainerStyle={{ padding: 16, gap: 12 }}>
+      <Segmented
+        options={[
+          { label: 'Indexes (NSE options)', value: 'INDEX' as ScreenGroup },
+          { label: 'MCX minis', value: 'MCX' as ScreenGroup },
+        ]}
+        value={group}
+        onChange={setGroup}
+      />
       <Card style={{ gap: 8 }}>
         <View style={st.head}>
           <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Market today</Text>
@@ -142,7 +160,13 @@ export default function ScreenerScreen() {
             ))}
           </>
         ) : (
-          <Text style={ui.muted}>{busy ? 'Scanning NIFTY, BANK NIFTY and FIN NIFTY… (about 10 s)' : 'Not scanned yet.'}</Text>
+          <Text style={ui.muted}>
+            {busy
+              ? group === 'MCX'
+                ? 'Scanning Gold, Silver, Crude Oil, Natural Gas, Lead, Zinc and Aluminium minis…'
+                : 'Scanning NIFTY, BANK NIFTY and FIN NIFTY… (about 10 s)'
+              : 'Not scanned yet.'}
+          </Text>
         )}
         {err ? <Text style={{ color: colors.down }}>{err}</Text> : null}
         {report?.failed.map((f) => (
@@ -162,7 +186,7 @@ export default function ScreenerScreen() {
       ))}
 
       <Text style={[ui.muted, { fontSize: 12 }]}>
-        Best first. The score uses the engine&apos;s own confidence plus how cleanly the index is moving, whether the
+        Best first. The score uses the engine&apos;s own confidence plus how cleanly the market is moving, whether the
         trend agrees, volatility, and whether ENTER would be allowed under your settings (sizing, premium filters,
         cutoff). It reads prices, OI and IV only — not news. It guides; it does not guarantee a result.
       </Text>

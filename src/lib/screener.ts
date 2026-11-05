@@ -1,5 +1,5 @@
 /**
- * Index screener: runs the app's own engine on each index's live data and adds a
+ * Screener (indexes + MCX minis): runs the app's own engine on each instrument's live data and adds a
  * "what is the market doing today" read, so you can pick the index (and side) that
  * suits right now — and see the risks before entering at market.
  *
@@ -8,17 +8,22 @@
 import { formatINR } from './format.ts';
 import { entryCutoff, istDate, pastEntryCutoff, runCycle } from './engine/decision.ts';
 import { istDay } from './engine/indicators.ts';
-import { catalogEntry, sessionOpen } from './engine/catalog.ts';
+import { CATALOG, catalogEntry, sessionOpen, type Session } from './engine/catalog.ts';
 import {
   initialEngineState,
   type Candle,
   type ChainSnapshot,
   type Dashboard,
+  type Direction,
   type EngineConfig,
   type TradePlan,
 } from './engine/types.ts';
 
 export const SCREEN_INDEXES = ['NIFTY', 'BANKNIFTY', 'FINNIFTY'] as const;
+/** MCX mini futures in the catalog (Gold, Silver, Crude Oil, Natural Gas, Lead, Zinc, Aluminium). */
+export const SCREEN_MCX = CATALOG.filter((c) => c.kind === 'MCX_FUTURES').map((c) => c.symbol);
+export type ScreenGroup = 'INDEX' | 'MCX';
+export const groupSymbols = (g: ScreenGroup): readonly string[] => (g === 'INDEX' ? SCREEN_INDEXES : SCREEN_MCX);
 
 export type Verdict = 'GOOD' | 'CAUTION' | 'AVOID' | 'NO NEW TRADES';
 
@@ -49,15 +54,20 @@ export interface ScreenResult {
   verdict: Verdict;
   /** 0–100 suitability for a trade now. */
   score: number;
-  direction: 'CE' | 'PE';
+  group: ScreenGroup;
+  /** CE / PE for index options, LONG / SHORT for MCX futures. */
+  direction: Direction;
   confidence: number;
   signal: string;
   decision: string;
   trend: string;
   pattern: string;
-  pcr: number;
-  iv: number;
+  /** Index options only. */
+  pcr: number | null;
+  iv: number | null;
   ivPercentile: number;
+  /** MCX only: open-interest buildup (e.g. LONG BUILDUP). */
+  buildup: string | null;
   expiry: string;
   expiryDay: boolean;
   daysToExpiry: number;
@@ -119,7 +129,7 @@ export function dayStats(candles: Candle[], vwap: number, atr: number, now: numb
   };
 }
 
-/** Screen one index from its candles + option chain, with the user's own engine settings. */
+/** Screen one instrument (index options or an MCX mini) with the user's own engine settings. */
 export function screenIndex(
   symbol: string,
   data: { candles: Candle[]; chain: ChainSnapshot },
@@ -158,8 +168,12 @@ function assess(
   now: number,
 ): ScreenResult {
   const dec = d.decision;
-  const direction = dec.direction === 'PE' ? 'PE' : 'CE';
-  const bull = direction === 'CE';
+  const isFut = cfg.instrumentKind === 'MCX_FUTURES';
+  const group: ScreenGroup = isFut ? 'MCX' : 'INDEX';
+  const direction: Direction = isFut ? (dec.direction === 'SHORT' ? 'SHORT' : 'LONG') : dec.direction === 'PE' ? 'PE' : 'CE';
+  const bull = direction === 'CE' || direction === 'LONG';
+  const session: Session = cfg.session;
+  const openMin = session === 'MCX' ? 9 * 60 : 9 * 60 + 15;
   const day = dayStats(data.candles, d.market.vwap, d.market.atr, now);
   const today = istDate(now);
   const expiry = d.expiry || data.chain.expiry;
@@ -168,7 +182,7 @@ function assess(
   const plan = d.candidatePlan;
   const t = ist(now);
   const mins = t.getUTCHours() * 60 + t.getUTCMinutes();
-  const marketOpen = sessionOpen(now, 'NSE');
+  const marketOpen = sessionOpen(now, session);
   const cutoff = pastEntryCutoff(cfg, now);
 
   const pros: string[] = [];
@@ -191,8 +205,8 @@ function assess(
   }
   const vwapOk = bull ? day.vwapDistPct > 0 : day.vwapDistPct < 0;
   if (vwapOk) pros.push(`Price ${bull ? 'above' : 'below'} VWAP (${pct(day.vwapDistPct)})`);
-  if (day.atrPct >= 0.03 && day.atrPct <= 0.2) score += 10;
-  else if (day.atrPct < 0.03) warnings.push('Very quiet: small moves, premiums decay');
+  if (day.atrPct >= 0.03 && day.atrPct <= (isFut ? 0.4 : 0.2)) score += 10;
+  else if (day.atrPct < 0.03) warnings.push(isFut ? 'Very quiet: small moves, hard to reach targets' : 'Very quiet: small moves, premiums decay');
   else warnings.push('Very volatile right now: stops get hit fast');
   if (plan && !plan.blocked && plan.qty > 0) score += 10;
 
@@ -206,15 +220,31 @@ function assess(
   }
   if (day.gapPct != null && Math.abs(day.gapPct) >= 0.5)
     warnings.push(`Gap ${day.gapPct > 0 ? 'up' : 'down'} ${pct(day.gapPct)} at the open — gaps often partly fill`);
-  if (bull && day.rangePos > 0.9) warnings.push('Near the day high — buying calls here chases the move');
-  if (!bull && day.rangePos < 0.1) warnings.push('Near the day low — buying puts here chases the move');
-  if (expiryDay) {
+  if (bull && day.rangePos > 0.9)
+    warnings.push(`Near the day high — ${isFut ? 'going long' : 'buying calls'} here chases the move`);
+  if (!bull && day.rangePos < 0.1)
+    warnings.push(`Near the day low — ${isFut ? 'going short' : 'buying puts'} here chases the move`);
+  if (isFut) {
+    const fut = d.futures;
+    if (fut?.buildup) {
+      const confirms = bull ? /LONG BUILDUP|SHORT COVERING/i.test(fut.buildup) : /SHORT BUILDUP|LONG UNWINDING/i.test(fut.buildup);
+      if (confirms) pros.push(`Open interest: ${fut.buildup.toLowerCase()} backs ${direction}`);
+      else warnings.push(`Open interest (${fut.buildup.toLowerCase()}) doesn't back ${direction}`);
+    }
+    if (expiryDay) {
+      score -= 10;
+      warnings.push('Contract expires today: thin, erratic trading — use the next month');
+    } else if (daysToExpiry <= Math.max(1, cfg.rollDays))
+      warnings.push(`Contract expires in ${daysToExpiry} day${daysToExpiry === 1 ? '' : 's'}: the engine rolls to the next month`);
+    if (marketOpen && mins >= 18 * 60 && /GOLD|SILVER|CRUDE|NATGAS/.test(symbol))
+      warnings.push('Evening session: US data and news move this contract sharply');
+  } else if (expiryDay) {
     score -= 10;
     warnings.push('Expiry day: premiums decay very fast and swing wildly, especially after 13:30');
   } else if (daysToExpiry === 1) warnings.push('Expiry tomorrow: time decay is high');
   if (dec.ivPercentile >= 80) warnings.push(`IV is high (${Math.round(dec.ivPercentile)}th percentile): options are expensive`);
   if (dec.ivPercentile >= 0 && dec.ivPercentile <= 20) pros.push('IV is low: options are cheap to buy');
-  if (marketOpen && mins < 9 * 60 + 30) warnings.push('First 15 minutes: opening swings are unreliable');
+  if (marketOpen && mins < openMin + 15) warnings.push('First 15 minutes: opening swings are unreliable');
   if (marketOpen && day.lastCandleAgeMin > 10) warnings.push(`Data looks delayed (last candle ${Math.round(day.lastCandleAgeMin)} min old)`);
   if (plan?.blocked) warnings.push(`ENTER would be refused: ${plan.blocked}`);
   if (dec.confidence < cfg.confWatch) warnings.push(`Confidence ${dec.confidence.toFixed(0)} is below your watch level (${cfg.confWatch})`);
@@ -237,8 +267,12 @@ function assess(
     `${label} ${move}`.trim(),
     `${shape}, ${trendWords}`,
     `${day.vwapDistPct >= 0 ? 'above' : 'below'} VWAP`,
-    `PCR ${d.chain.pcr.toFixed(2)} (${d.chain.pcr > 1.1 ? 'put writers strong' : d.chain.pcr < 0.9 ? 'call writers strong' : 'balanced'})`,
-    `IV ${d.greeks.iv.toFixed(1)}`,
+    ...(isFut
+      ? [d.futures?.buildup ? `OI ${d.futures.buildup.toLowerCase()}` : '']
+      : [
+          `PCR ${d.chain.pcr.toFixed(2)} (${d.chain.pcr > 1.1 ? 'put writers strong' : d.chain.pcr < 0.9 ? 'call writers strong' : 'balanced'})`,
+          `IV ${d.greeks.iv.toFixed(1)}`,
+        ]),
     expiryDay ? 'expiry today' : daysToExpiry <= 7 ? `expiry in ${daysToExpiry} day${daysToExpiry === 1 ? '' : 's'}` : '',
   ]
     .filter(Boolean)
@@ -249,15 +283,17 @@ function assess(
     label,
     verdict,
     score,
+    group,
     direction,
     confidence: dec.confidence,
     signal: dec.signal,
     decision: dec.decisionText,
     trend: dec.trend,
     pattern: dec.pattern,
-    pcr: d.chain.pcr,
-    iv: d.greeks.iv,
+    pcr: isFut ? null : d.chain.pcr,
+    iv: isFut ? null : d.greeks.iv,
     ivPercentile: dec.ivPercentile,
+    buildup: isFut ? (d.futures?.buildup ?? null) : null,
     expiry,
     expiryDay,
     daysToExpiry,
@@ -278,6 +314,7 @@ export function rankResults(rs: ScreenResult[]): ScreenResult[] {
 
 export interface ScreenReport {
   at: number;
+  group: ScreenGroup;
   results: ScreenResult[];
   /** Indexes that could not be loaded, with the reason. */
   failed: { symbol: string; error: string }[];
@@ -287,29 +324,50 @@ export interface ScreenReport {
   notes: string[];
 }
 
-export function marketNotes(results: ScreenResult[], now: number, account: ScreenReport['account'], cfg: EngineConfig): string[] {
+export function marketNotes(
+  results: ScreenResult[],
+  now: number,
+  account: ScreenReport['account'],
+  cfg: EngineConfig,
+  group: ScreenGroup = 'INDEX',
+): string[] {
   const notes: string[] = [];
   const t = ist(now);
   const mins = t.getUTCHours() * 60 + t.getUTCMinutes();
-  if (!sessionOpen(now, 'NSE')) notes.push('NSE is closed now; figures are from the last session.');
-  else if (mins < 9 * 60 + 30) notes.push('Opening phase (before 09:30): wait for the first 15 minutes to settle.');
-  else if (mins >= 14 * 60 + 30) notes.push('Late session: moves can reverse into the close; intraday positions square off around 15:20.');
-  const cut = entryCutoff(cfg);
-  if (cut && !pastEntryCutoff(cfg, now) && sessionOpen(now, 'NSE')) notes.push(`New trades allowed until ${cut} IST.`);
-  const dirs = new Set(results.filter((r) => r.verdict !== 'NO NEW TRADES').map((r) => r.direction));
-  if (results.length > 1 && dirs.size === 1)
-    notes.push(`All indexes point the same way (${[...dirs][0]}): a broad ${[...dirs][0] === 'CE' ? 'up' : 'down'} move.`);
-  else if (dirs.size > 1) notes.push('Indexes disagree on direction: a mixed, rotation-type market — be selective.');
+  const session: Session = group === 'MCX' ? 'MCX' : 'NSE';
+  const name = group === 'MCX' ? 'MCX' : 'NSE';
+  const open = sessionOpen(now, session);
+  const openMin = group === 'MCX' ? 9 * 60 : 9 * 60 + 15;
+  if (!open) notes.push(`${name} is closed now; figures are from the last session.`);
+  else if (mins < openMin + 15) notes.push('Opening phase: wait for the first 15 minutes to settle.');
+  else if (group === 'INDEX' && mins >= 14 * 60 + 30)
+    notes.push('Late session: moves can reverse into the close; intraday positions square off around 15:20.');
+  else if (group === 'MCX' && mins >= 18 * 60)
+    notes.push('MCX evening session: US data releases (around 18:00–20:30 IST) can jolt gold, silver, crude and natural gas.');
+  const cut = entryCutoff({ ...cfg, session });
+  if (cut && open && !pastEntryCutoff({ ...cfg, session }, now)) notes.push(`New trades allowed until ${cut} IST.`);
+  const live = results.filter((r) => r.verdict !== 'NO NEW TRADES');
+  const up = live.filter((r) => r.direction === 'CE' || r.direction === 'LONG').length;
+  const what = group === 'MCX' ? 'contracts' : 'indexes';
+  if (live.length > 1 && (up === 0 || up === live.length))
+    notes.push(`All ${what} point the same way (${up ? 'up' : 'down'}): a broad move.`);
+  else if (live.length > 1) notes.push(`${what[0].toUpperCase()}${what.slice(1)} disagree on direction: a mixed market — be selective.`);
   if (results.some((r) => r.expiryDay)) notes.push(`Expiry today for ${results.filter((r) => r.expiryDay).map((r) => r.label).join(', ')}.`);
   if (account.lossLockout) notes.push('You already have a loss today: the no-revenge rule blocks new trades.');
   else if (account.tradesToday >= account.maxTrades) notes.push(`Daily trade limit reached (${account.tradesToday}/${account.maxTrades}).`);
   else notes.push(`Your day: ${account.tradesToday}/${account.maxTrades} trades, booked ${formatINR(account.realizedToday, 0)}.`);
-  notes.push('No news or events data here: check the economic calendar (RBI / Fed / results / budget) before trading.');
+  notes.push(
+    group === 'MCX'
+      ? 'No news or events data here: check the calendar (US jobs / inflation / Fed, OPEC, inventory reports) before trading.'
+      : 'No news or events data here: check the economic calendar (RBI / Fed / results / budget) before trading.',
+  );
   return notes;
 }
 
-/** Load and screen every index (one after another: Dhan allows one option chain per 3 s). */
+/** Load and screen a group (one after another: Dhan allows one option chain per 3 s). */
 export async function screenAll(o: {
+  /** INDEX (default) = NIFTY / BANK NIFTY / FIN NIFTY; MCX = the mini futures. */
+  group?: ScreenGroup;
   load: (cfg: EngineConfig) => Promise<{ candles: Candle[]; chain: ChainSnapshot }>;
   now: () => number;
   /** The user's engine settings and state (for sizing, filters, IV history, today's counters). */
@@ -325,8 +383,10 @@ export async function screenAll(o: {
 }): Promise<ScreenReport> {
   const results: ScreenResult[] = [];
   const failed: { symbol: string; error: string }[] = [];
-  for (const symbol of SCREEN_INDEXES) {
+  const group = o.group ?? 'INDEX';
+  for (const symbol of groupSymbols(group)) {
     const e = catalogEntry(symbol)!;
+    const current = symbol === o.config.symbol;
     const cfg: EngineConfig = {
       ...o.config,
       symbol,
@@ -339,7 +399,13 @@ export async function screenAll(o: {
       pointValue: e.pointValue,
       tickSize: e.tickSize,
       session: e.session,
-      expiry: symbol === o.config.symbol ? o.config.expiry : '',
+      // Each instrument's own lot cap (1 for the MCX minis), as when you switch to it; yours for the current one.
+      maxLots: current ? o.config.maxLots : e.maxLots,
+      expiry: current ? o.config.expiry : '',
+      // MCX: the engine's resolved contract for the current symbol, otherwise resolve afresh.
+      futSecurityId: current ? o.config.futSecurityId : '',
+      futExpiry: current ? o.config.futExpiry : '',
+      futTradingSymbol: current ? o.config.futTradingSymbol : '',
     };
     try {
       const data = await o.load(cfg);
@@ -358,5 +424,12 @@ export async function screenAll(o: {
     maxDailyLoss: o.config.maxDailyLoss,
   };
   const ranked = rankResults(results);
-  return { at: o.now(), results: ranked, failed, account, notes: marketNotes(ranked, o.now(), account, o.config) };
+  return {
+    at: o.now(),
+    group,
+    results: ranked,
+    failed,
+    account,
+    notes: marketNotes(ranked, o.now(), account, o.config, group),
+  };
 }

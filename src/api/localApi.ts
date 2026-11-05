@@ -14,7 +14,7 @@
  */
 import { DhanClient } from '../../server/dhan.ts';
 import { mapFunds } from '../../server/mapping.ts';
-import { screenAll, type ScreenReport } from '../lib/screener.ts';
+import { screenAll, type ScreenGroup, type ScreenReport } from '../lib/screener.ts';
 import { DhanEngineSource } from '../../server/engineSource.ts';
 import { LiveTrader } from '../../server/liveTrader.ts';
 import { extractIps, isIPv4, runPreflight, type PreflightResult } from '../../server/preflight.ts';
@@ -63,8 +63,8 @@ export interface PhoneTrading {
   /** Register (or replace) the PRIMARY whitelisted IP at Dhan. */
   registerStaticIp: (ip: string) => Promise<string[]>;
   dhanIps: () => Promise<string[]>;
-  /** Screen NIFTY / BANKNIFTY / FINNIFTY on live data (takes ~10 s: one option chain per 3 s). */
-  screener: () => Promise<ScreenReport>;
+  /** Screen the indexes (~10 s: one option chain per 3 s) or the MCX minis on live data. */
+  screener: (group?: ScreenGroup) => Promise<ScreenReport>;
 }
 
 export type LocalApi = Api & PhoneTrading & { dispose: () => void };
@@ -221,8 +221,9 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
       return extractIps(await dhan.getIP());
     },
     dhanIps: async () => extractIps(await dhan.getIP()),
-    screener: () =>
+    screener: (group?: ScreenGroup) =>
       screenAll({
+        group,
         load: (cfg) => screenSource.load(cfg, Date.now()),
         now: () => Date.now(),
         config: engine.config,

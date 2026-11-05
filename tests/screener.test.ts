@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { after, before, test } from 'node:test';
 import { createLocalApi, type LocalApi } from '../src/api/localApi.ts';
-import { dayStats, rankResults, screenIndex, type ScreenResult } from '../src/lib/screener.ts';
+import { dayStats, groupSymbols, rankResults, SCREEN_MCX, screenIndex, type ScreenResult } from '../src/lib/screener.ts';
 import { computeTechnical } from '../src/lib/engine/indicators.ts';
 import { DEFAULT_CONFIG, type Candle, type ChainSnapshot } from '../src/lib/engine/types.ts';
 import { FAKE_CLIENT, FAKE_TOKEN, GOLDEN_EXPIRY, startFakeDhan } from './fakeDhan.ts';
@@ -103,4 +103,33 @@ test('phone: one scan loads NIFTY, BANK NIFTY and FIN NIFTY and reports the day'
   const s = await api.engine();
   assert.equal(s.config.symbol, 'NIFTY');
   assert.equal(s.state.position, null);
+});
+
+test('MCX group lists the seven mini contracts', () => {
+  assert.deepEqual(SCREEN_MCX, ['GOLDM', 'SILVERM', 'CRUDEOILM', 'NATGASMINI', 'LEADMINI', 'ZINCMINI', 'ALUMINI']);
+  assert.deepEqual(groupSymbols('INDEX'), ['NIFTY', 'BANKNIFTY', 'FINNIFTY']);
+});
+
+test('phone: an MCX scan screens the minis as futures (long/short, OI, MCX hours), no option chains', async () => {
+  const n = fake.requests.length;
+  const rep = await api.screener('MCX');
+  const calls = fake.requests.slice(n);
+  assert.equal(calls.filter((r) => r.path === '/optionchain').length, 0);
+  assert.equal(rep.group, 'MCX');
+  // the fake exchange lists Gold Mini and Lead Mini only; the rest report why they could not load
+  assert.deepEqual(rep.results.map((r) => r.symbol).sort(), ['GOLDM', 'LEADMINI']);
+  assert.equal(rep.failed.length, 5);
+  for (const r of rep.results) {
+    assert.equal(r.group, 'MCX');
+    assert.ok(['LONG', 'SHORT'].includes(r.direction), r.direction);
+    assert.equal(r.pcr, null);
+    assert.equal(r.iv, null);
+    assert.ok(r.buildup && /BUILDUP|COVERING|UNWINDING/.test(r.buildup), String(r.buildup));
+    assert.match(r.summary, / · OI (long|short) (buildup|covering|unwinding)/);
+    assert.ok(r.plan === null || r.plan.direction === r.direction);
+    if (r.plan && !r.plan.blocked) assert.equal(r.plan.qty, 1); // MCX minis: the 1-lot preset cap
+  }
+  assert.ok(rep.notes.some((x) => /US jobs \/ inflation \/ Fed, OPEC/.test(x)));
+  const s = await api.engine();
+  assert.equal(s.config.symbol, 'NIFTY'); // scanning never switches the engine
 });

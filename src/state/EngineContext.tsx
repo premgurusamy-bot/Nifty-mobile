@@ -7,7 +7,7 @@ import type { PreflightResult } from '../../server/preflight.ts';
 import { isLocalApi } from '../api/localApi';
 import type { EngineConfig, TradeMode } from '../lib/engine/types';
 import { useSettings, type DataMode } from './SettingsContext';
-import { screenAll, SCREEN_INDEXES, type ScreenReport } from '../lib/screener';
+import { groupSymbols, screenAll, type ScreenGroup, type ScreenReport } from '../lib/screener';
 
 /**
  * The option-buying engine (ported from the Excel workbook).
@@ -35,8 +35,8 @@ interface EngineValue {
   /** Returns the pre-flight result when switching to LIVE (null otherwise); LIVE only applies if it passed. */
   setTradeMode: (mode: TradeMode) => Promise<PreflightResult | null>;
   preflight: () => Promise<PreflightResult>;
-  /** Screen NIFTY / BANKNIFTY / FINNIFTY now (live in phone mode, simulated in demo). */
-  screener: () => Promise<ScreenReport>;
+  /** Screen the indexes or the MCX minis now (live in phone mode, simulated in demo). */
+  screener: (group?: ScreenGroup) => Promise<ScreenReport>;
 }
 
 const Ctx = createContext<EngineValue | null>(null);
@@ -243,15 +243,18 @@ export function EngineProvider({ children }: { children: ReactNode }) {
 
   // Demo screener: one simulated market per index, kept between scans so it moves on.
   const demoSims = useRef<Record<string, SimEngineSource>>({});
-  const screener = useCallback(async (): Promise<ScreenReport> => {
-    if (phoneApi) return phoneApi.screener();
+  const screener = useCallback(async (group: ScreenGroup = 'INDEX'): Promise<ScreenReport> => {
+    if (phoneApi) return phoneApi.screener(group);
     if (api) throw new Error('The screener runs on the phone: connect Dhan in Settings (it is not available through a server).');
     const r = demo.current;
     if (!r) throw new Error('Demo engine not ready yet');
     const sims = demoSims.current;
-    SCREEN_INDEXES.forEach((sym, i) => (sims[sym] ??= new SimEngineSource(1000 + i * 77)));
+    groupSymbols(group).forEach((sym, i) => {
+      sims[sym] ??= new SimEngineSource((group === 'MCX' ? 5000 : 1000) + i * 77);
+    });
     let at = Date.now();
     return screenAll({
+      group,
       load: async (cfg) => {
         const sim = sims[cfg.symbol];
         const d = await sim.load(cfg);
