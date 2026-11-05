@@ -59,7 +59,7 @@ const ENGINE_FIELDS: [NumKey, string][] = [
   ['atrMult', 'ATR multiplier for stop loss'],
   ['maxTradesPerDay', 'Daily trade limit'],
   ['maxDailyLoss', 'Daily max loss (₹, 0 = no limit)'],
-  ['refreshSeconds', 'Auto-refresh interval (sec, min 15)'],
+  ['refreshSeconds', 'Auto-refresh interval (sec, min 3)'],
 ];
 
 /** Contract settings — loaded from the catalog when you pick an instrument, editable. */

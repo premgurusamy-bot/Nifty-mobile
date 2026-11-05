@@ -29,7 +29,7 @@ import type {
   Signal,
   TradePlan,
 } from './types.ts';
-import { FACTOR_LABELS, sideOf } from './types.ts';
+import { FACTOR_LABELS, IV_SNAPSHOT_MS, sideOf } from './types.ts';
 import { sessionOpen, type Session } from './catalog.ts';
 import { evaluateFutures, buildFuturesPlan } from './futures.ts';
 import { sizeLots, type SizingConfig } from './sizing.ts';
@@ -115,7 +115,9 @@ export function canTakeNewTrade(s: EngineState, cfg: EngineConfig, now?: number)
 
 // ---------------------------------------------------------------- IV history
 
-export function captureIVSnapshot(s: EngineState, chain: ChainSnapshot, atm: number) {
+export function captureIVSnapshot(s: EngineState, chain: ChainSnapshot, atm: number, now?: number) {
+  // Fast refreshes don't flood the history: one snapshot per 15 s keeps the percentile's time window.
+  if (now != null && s.ivLastAt != null && now - s.ivLastAt < IV_SNAPSHOT_MS && now >= s.ivLastAt) return;
   const row = findStrike(chain, atm);
   if (!row) return;
   const ce = row.ce?.iv ?? 0;
@@ -123,6 +125,7 @@ export function captureIVSnapshot(s: EngineState, chain: ChainSnapshot, atm: num
   if (ce <= 0 && pe <= 0) return;
   const avg = ce > 0 && pe > 0 ? (ce + pe) / 2 : ce > 0 ? ce : pe;
   s.ivHistory.push(avg);
+  if (now != null) s.ivLastAt = now;
   if (s.ivHistory.length > IV_HISTORY_MAX) s.ivHistory = s.ivHistory.slice(s.ivHistory.length - IV_HISTORY_MAX);
 }
 
@@ -803,7 +806,7 @@ function runOptionsCycle(
   const spot = chain.spot || tech.last.close;
   const pa = livePriceAction(candles, tech, metrics.support, metrics.resistance);
 
-  captureIVSnapshot(s, chain, metrics.atm);
+  captureIVSnapshot(s, chain, metrics.atm, now);
 
   const bestCE = selectBestStrike(chain, 'CE', metrics.atm, cfg.strikeInterval);
   const bestPE = selectBestStrike(chain, 'PE', metrics.atm, cfg.strikeInterval);

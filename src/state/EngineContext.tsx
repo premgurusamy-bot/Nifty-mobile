@@ -102,18 +102,23 @@ export function EngineProvider({ children }: { children: ReactNode }) {
     let t: ReturnType<typeof setTimeout> | null = null;
     // While a trade is open on this phone, pull often so the running P&L ticks.
     let fast = false;
+    let pollMs = POLL_MS;
     const pull = () =>
       api
         .engine()
         .then((s) => {
           if (!alive) return;
           fast = !!s.state.position && isLocalApi(api);
+          pollMs = isLocalApi(api) && s.config.autoRefresh
+            ? Math.min(POLL_MS, Math.max(FAST_POLL_MS, (s.config.refreshSeconds * 1000) / 2))
+            : POLL_MS;
           setSnap(s);
           setError(null);
         })
         .catch((e) => alive && setError(e.message))
         .finally(() => {
-          if (alive) t = setTimeout(pull, fast ? FAST_POLL_MS : POLL_MS);
+          // Follow the engine: no slower than its refresh interval (3 s → 1.5 s pulls), at most 5 s.
+          if (alive) t = setTimeout(pull, fast ? FAST_POLL_MS : pollMs);
         });
     pull();
     return () => {

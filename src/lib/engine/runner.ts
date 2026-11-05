@@ -19,6 +19,7 @@ import { buildFuturesPlan } from './futures.ts';
 import { sizingCapital, type SizingConfig } from './sizing.ts';
 import {
   DEFAULT_CONFIG,
+  MIN_REFRESH_SECONDS,
   sideOf,
   type Direction,
   type OptionSide,
@@ -175,7 +176,7 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   num('maxDailyLoss', 0, 100_000_000);
   num('strikeInterval', 0, 10_000);
   num('underlyingSecurityId', 0, 1e9);
-  num('refreshSeconds', 15, 3600);
+  num('refreshSeconds', MIN_REFRESH_SECONDS, 3600);
   if (patch.autoRefresh !== undefined) next.autoRefresh = !!patch.autoRefresh;
   if (patch.autoEntryPaper !== undefined) next.autoEntryPaper = !!patch.autoEntryPaper;
   if (patch.autoEntryLive !== undefined) next.autoEntryLive = !!patch.autoEntryLive;
@@ -257,6 +258,8 @@ export class EngineRunner {
   /** Latest quote of the open position between refreshes (fast P&L ticker). */
   mark: { ltp: number; at: number; key: string } | null = null;
   private lastLoggedCandle = 0;
+  private lastSaveAt = 0;
+  private lastSaveKey = '';
   /** Fetches the live account balance (phone / server with Dhan); null in demo. */
   fundsSource: (() => Promise<number>) | null = null;
   private running: Promise<void> | null = null;
@@ -405,7 +408,7 @@ export class EngineRunner {
       // Every event raised during a cycle is stamped with that cycle's clock.
       const fresh = state.events.filter((e) => e.at === now);
       if (fresh.length) this.onEvents(fresh, this.config);
-      await this.store.save(this.state, this.config);
+      await this.saveAfterCycle(now);
     } catch (e) {
       this.status = `Error - ${(e as Error).message}`;
       this.logCycle(now, 'ERROR');
@@ -578,6 +581,32 @@ export class EngineRunner {
   }
 
   /** Open a position from a manual ENTER (paper at LTP, or live at the actual fill). */
+  /**
+   * Save after a refresh. Anything that matters (trades, stop / lock moves, pending orders,
+   * setups, alerts, counters, config) saves at once; otherwise at most every 15 s, so a 3-second
+   * refresh doesn't rewrite the whole engine state on the phone every 3 seconds.
+   */
+  private async saveAfterCycle(now: number) {
+    const s = this.state;
+    const key = JSON.stringify([
+      s.position,
+      s.pendingEntry,
+      s.pending,
+      s.journal.length,
+      s.journal.at(-1)?.exit ?? null,
+      s.events[0]?.at ?? 0,
+      s.tradesToday,
+      s.realizedToday,
+      s.day,
+      s.cycleLog?.length ?? 0,
+      this.config,
+    ]);
+    if (key === this.lastSaveKey && now - this.lastSaveAt < 15_000 && now >= this.lastSaveAt) return;
+    this.lastSaveKey = key;
+    this.lastSaveAt = now;
+    await this.store.save(this.state, this.config);
+  }
+
   /** Take (and clear) this cycle's LIVE automatic-entry request, if any. */
   takeAutoRequest(): string | null {
     const k = this.state.liveAutoRequest ?? null;
@@ -711,7 +740,7 @@ export class EngineRunner {
     }
     if (this.timer) return;
     this.timer = setInterval(() => {
-      const secs = Math.max(15, this.config.refreshSeconds);
+      const secs = Math.max(MIN_REFRESH_SECONDS, this.config.refreshSeconds);
       if (this.running) return;
       if (this.lastRefresh && this.clock() - this.lastRefresh < secs * 1000 && !this.source.alwaysOpen) return;
       if (!this.marketOpen()) {

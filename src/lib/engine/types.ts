@@ -107,7 +107,7 @@ export interface EngineConfig {
   lastEntryTime: string;
   /** Same for MCX futures (they trade until late evening). */
   lastEntryTimeMcx: string;
-  /** Seconds between automatic refreshes (floor 15, like the workbook). */
+  /** Seconds between automatic refreshes (min 3: Dhan allows one option-chain request per 3 s). */
   refreshSeconds: number;
   alertsEnabled: boolean;
   /** RISK: lots sized so the stop costs ≤ max risk. CAPITAL: lots = (capital × %) ÷ cost per lot. */
@@ -135,6 +135,11 @@ export interface EngineConfig {
 export type SizingMode = 'RISK' | 'CAPITAL';
 /** Estimated MCX margin when no per-lot margin is entered (share of price × point value). */
 export const EST_MARGIN_PCT = 0.12;
+
+/** Fastest auto-refresh: Dhan's option-chain API takes one request every 3 seconds. */
+export const MIN_REFRESH_SECONDS = 3;
+/** IV snapshots for the percentile are kept at most this often, whatever the refresh rate. */
+export const IV_SNAPSHOT_MS = 15_000;
 
 export const DEFAULT_CONFIG: EngineConfig = {
   symbol: 'NIFTY',
@@ -287,6 +292,8 @@ export interface EngineState {
   blockedReason: string;
   pending: PendingSetup | null;
   lastFiredKey: string;
+  /** When the last IV snapshot was taken (ms). */
+  ivLastAt?: number;
   /** Last confirmed live signal alerted (so each one alerts once). */
   lastSignalKey?: string;
   /** Set for one cycle when LIVE automatic entry should place an order for a new confirmed signal. */

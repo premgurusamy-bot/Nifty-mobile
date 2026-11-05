@@ -109,6 +109,14 @@ Turning it on also turns auto-refresh on. Leave the app with Home / the app swit
 closes it, and the service then posts a "stopped watching" alert and stops. Use **Allow unrestricted
 battery use**, and on Xiaomi / Oppo / Vivo / Realme / OnePlus also allow Autostart.
 
+## Auto-refresh speed
+
+Settings → Engine settings → **Auto-refresh interval**: minimum **3 seconds** (was 15). 3 s is the fastest
+Dhan allows for the option chain (one request per 3 s per the API limits; the app paces requests itself, so
+in practice a refresh lands every ~3–3.5 s). At fast rates the IV percentile still takes one snapshot per
+15 s, routine saves happen at most every 15 s (trades, stop / lock moves, orders, setups and alerts save at
+once), and the Dashboard follows the engine every 1.5 s.
+
 ## Portfolio: strategy results
 
 The Portfolio tab opens with **Strategy results** from the trade journal, separately for PAPER and LIVE:
