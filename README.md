@@ -27,7 +27,7 @@ The workbook's decision engine was ported rule for rule to TypeScript. A golden 
 | `priceAction.ts` | `modPriceAction` v4: engulfing, pin bars, doji, inside bar, EMA/VWAP pullbacks, OI and swing level reactions, volume confirmation, confluence bonus, 0–10 rescale, swing levels |
 | `decision.ts` | `modDecisionEngine`, `modSignalState`, `modPosition`, `modIVHistory`, `modTradeJournal`: best strike (ATM + 2 OTM), 10-factor score, the **armed → pending → confirmed-break** state machine, the daily trade limit, no-revenge rule, ₹ daily max loss, trade plan (ATR × mult × delta risk, lots sized to max risk), half booking at T1 with the stop trailed to breakeven, T2/SL exits, IV percentile after 20 snapshots |
 | `backtest.ts` | `modBacktest`, `modSummary` |
-| `runner.ts` | `modMain.RefreshAll` / auto-refresh loop (market-hours gated, 15 s floor) |
+| `runner.ts` | `modMain.RefreshAll` / auto-refresh loop (market-hours gated, 3 s minimum) |
 
 **Deliberate differences from the VBA** (bug fixes):
 
@@ -46,7 +46,7 @@ The workbook's decision engine was ported rule for rule to TypeScript. A golden 
 
 ```
  Phone app (Expo)  ──HTTPS + access key──▶  Bridge server (server/, Node)  ──▶  Dhan HQ API v2
-  dashboard, journal,                       • runs the engine every 15 s in market hours
+  dashboard, journal,                       • runs the engine every 3–15 s in market hours
   chain, orders                             • holds your Dhan token (never on the phone)
                                             • journal / IV history in server/data/engine.json
                                             • respects Dhan rate limits, Telegram alerts
