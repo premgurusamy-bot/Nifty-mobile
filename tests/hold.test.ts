@@ -12,7 +12,7 @@ const candles: Candle[] = fx.candles;
 const chain: ChainSnapshot = fx.chain;
 const t0 = Date.UTC(2026, 7, 27, 6, 10, 0); // 11:40:00 IST
 const min = 60_000;
-const cfg = { ...DEFAULT_CONFIG, lastEntryTime: '' }; // default hold: 5 min, must hold or rise
+const cfg = { ...DEFAULT_CONFIG, lastEntryTime: '' }; // default hold: 3 min, must hold or rise
 
 /** Same market with the PE OI scaled so PCR moves (changes only the PCR / OI-bias points). */
 const withPePcr = (f: number): ChainSnapshot => ({
@@ -30,33 +30,33 @@ const start = () => {
   return r;
 };
 
-test('defaults: hold 5 minutes, score must hold or rise; validated', () => {
-  assert.deepEqual([DEFAULT_CONFIG.confirmHoldMinutes, DEFAULT_CONFIG.confirmRising], [5, true]);
+test('defaults: hold 3 minutes, score must hold or rise; validated', () => {
+  assert.deepEqual([DEFAULT_CONFIG.confirmHoldMinutes, DEFAULT_CONFIG.confirmRising], [3, true]);
   assert.equal(sanitizeConfig({ confirmHoldMinutes: 0 }, DEFAULT_CONFIG).confirmHoldMinutes, 0);
   assert.throws(() => sanitizeConfig({ confirmHoldMinutes: 61 }, DEFAULT_CONFIG), /confirmHoldMinutes/);
 });
 
 test('reaching 80 arms a hold; a break during the hold does not enter', () => {
   let r = start();
-  assert.match(r.dashboard.decision.decisionText, /^SETUP ARMED - score 88\.9, holding 5 min before entry, then break of /);
+  assert.match(r.dashboard.decision.decisionText, /^SETUP ARMED - score 88\.9, holding 3 min before entry, then break of /);
   r = cycle(r.state, t0 + 1 * min, { brk: true });
   assert.equal(r.state.position, null);
-  assert.match(r.dashboard.decision.decisionText, /^SETUP HOLDING - score steady since 88\.9, entry check at 11:45:00 \(/);
-  r = cycle(r.state, t0 + 4 * min + 59_000, { brk: true });
+  assert.match(r.dashboard.decision.decisionText, /^SETUP HOLDING - score steady since 88\.9, entry check at 11:43:00 \(/);
+  r = cycle(r.state, t0 + 2 * min + 59_000, { brk: true });
   assert.equal(r.state.position, null);
 });
 
-test('held 5 minutes at the same or a higher score, then the break → enters', () => {
+test('held 3 minutes at the same or a higher score, then the break → enters', () => {
   let r = start();
-  r = cycle(r.state, t0 + 2 * min);
-  r = cycle(r.state, t0 + 5 * min, { brk: true });
+  r = cycle(r.state, t0 + 1 * min);
+  r = cycle(r.state, t0 + 3 * min, { brk: true });
   assert.ok(r.state.position, r.dashboard.decision.decisionText);
   assert.equal(r.dashboard.decision.signal, 'BUY PE');
 });
 
-test('held 5 minutes but no break yet → waits for the break, then enters', () => {
+test('held 3 minutes but no break yet → waits for the break, then enters', () => {
   let r = start();
-  r = cycle(r.state, t0 + 5 * min);
+  r = cycle(r.state, t0 + 3 * min);
   assert.match(r.dashboard.decision.decisionText, /^SETUP PENDING - waiting for break of/);
   r = cycle(r.state, t0 + 6 * min, { brk: true });
   assert.ok(r.state.position);
@@ -64,33 +64,33 @@ test('held 5 minutes but no break yet → waits for the break, then enters', () 
 
 test('a dip below 80 during the hold restarts it', () => {
   let r = start();
-  r = cycle(r.state, t0 + 3 * min, { ch: withPePcr(1.75) }); // PCR ~0.97 → score falls below 80 (WATCH)
+  r = cycle(r.state, t0 + 2 * min, { ch: withPePcr(1.75) }); // PCR ~0.97 → score falls below 80 (WATCH)
   assert.ok(r.dashboard.decision.confidence < 80, String(r.dashboard.decision.confidence));
   assert.equal(r.state.pending!.holdFrom, null);
   r = cycle(r.state, t0 + 4 * min); // back to 88.9: a new hold starts now
   assert.equal(r.state.pending!.holdFrom, t0 + 4 * min);
   r = cycle(r.state, t0 + 6 * min, { brk: true }); // only 2 min of the new hold
   assert.equal(r.state.position, null);
-  r = cycle(r.state, t0 + 9 * min, { brk: true }); // 5 min of the new hold
+  r = cycle(r.state, t0 + 7 * min, { brk: true }); // 3 min of the new hold
   assert.ok(r.state.position);
 });
 
 test('a score weaker than at the start of the hold (fading) does not enter; the hold starts again', () => {
   let r = start(); // 88.9
   const weaker = withPePcr(1.3); // PCR ~0.72 → still ≥ 80, but lower
-  r = cycle(r.state, t0 + 5 * min, { ch: weaker, brk: true });
+  r = cycle(r.state, t0 + 3 * min, { ch: weaker, brk: true });
   const c = r.dashboard.decision.confidence;
   assert.ok(c >= 80 && c < 88.89, String(c));
   assert.equal(r.state.position, null);
   assert.match(r.dashboard.decision.decisionText, /^SETUP FADING - score \d+\.\d is below 88\.9 where the hold started; holding again/);
-  // A new 5-minute hold from the weaker score; steady at it → enters
-  r = cycle(r.state, t0 + 10 * min, { ch: weaker, brk: true });
+  // A new 3-minute hold from the weaker score; steady at it → enters
+  r = cycle(r.state, t0 + 6 * min, { ch: weaker, brk: true });
   assert.ok(r.state.position);
 });
 
 test('"must hold or rise" off: a weaker but still ≥ 80 score enters after the hold', () => {
   let r = start();
-  r = cycle(r.state, t0 + 5 * min, { ch: withPePcr(1.3), brk: true, c: { ...cfg, confirmRising: false } });
+  r = cycle(r.state, t0 + 3 * min, { ch: withPePcr(1.3), brk: true, c: { ...cfg, confirmRising: false } });
   assert.ok(r.state.position);
 });
 
@@ -100,4 +100,28 @@ test('hold 0: the workbook rule — the first break after 80 enters', () => {
   trig = r.state.pending!.trigger;
   r = cycle(r.state, t0 + 30_000, { brk: true, c: c0 });
   assert.ok(r.state.position);
+});
+
+test('saved settings: the old 5-minute default becomes 3 once; your own values are kept', async () => {
+  const { EngineRunner } = await import('../src/lib/engine/runner.ts');
+  const make = async (saved: Record<string, unknown>) => {
+    let stored: any = null;
+    const r = new EngineRunner(
+      { load: async () => ({}) as never },
+      { load: async () => ({ state: initialEngineState(), config: saved }), save: async (_s, c) => void (stored = c) },
+    );
+    await r.init();
+    await r.updateConfig({}); // saves
+    return { now: r.config.confirmHoldMinutes, stored };
+  };
+  const a = await make({ ...DEFAULT_CONFIG, confirmHoldMinutes: 5, configRev: undefined });
+  assert.equal(a.now, 3);
+  assert.equal(a.stored.configRev, 1);
+  assert.equal((await make({ ...DEFAULT_CONFIG, confirmHoldMinutes: 10, configRev: undefined })).now, 10);
+  assert.equal((await make({ ...DEFAULT_CONFIG, confirmHoldMinutes: 0, configRev: undefined })).now, 0);
+  // after the update, choosing 5 again is respected
+  assert.equal((await make({ ...DEFAULT_CONFIG, confirmHoldMinutes: 5, configRev: 1 })).now, 5);
+  // settings saved before the hold existed get the new default
+  const { confirmHoldMinutes: _x, ...old } = DEFAULT_CONFIG;
+  assert.equal((await make({ ...old, configRev: undefined })).now, 3);
 });

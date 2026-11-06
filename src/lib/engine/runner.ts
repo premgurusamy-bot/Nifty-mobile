@@ -245,6 +245,20 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   return next;
 }
 
+/** Current settings revision: 1 = hold before entry 5 → 3 minutes. */
+export const CONFIG_REV = 1;
+
+/**
+ * One-time updates to saved settings. Rev 1: the hold-before-entry default changed from 5 to 3
+ * minutes; a saved 5 (the old default) becomes 3, any other value you chose is kept.
+ */
+export function migrateConfig(cfg: EngineConfig, saved: Partial<EngineConfig>): EngineConfig {
+  const rev = saved.configRev ?? 0;
+  const next = { ...cfg, configRev: CONFIG_REV };
+  if (rev < 1 && saved.confirmHoldMinutes === 5) next.confirmHoldMinutes = 3;
+  return next;
+}
+
 export class EngineRunner {
   state: EngineState = initialEngineState();
   config: EngineConfig = { ...DEFAULT_CONFIG };
@@ -288,7 +302,7 @@ export class EngineRunner {
   async init() {
     const saved = await this.store.load().catch(() => null);
     if (saved?.state) this.state = { ...initialEngineState(), ...saved.state };
-    if (saved?.config) this.config = { ...DEFAULT_CONFIG, ...saved.config };
+    if (saved?.config) this.config = migrateConfig({ ...DEFAULT_CONFIG, ...saved.config }, saved.config);
   }
 
   /** Identifies the open position, so a quote for an old one is never shown. */

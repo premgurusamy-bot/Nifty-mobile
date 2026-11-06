@@ -86,6 +86,8 @@ export interface EngineConfig {
   confirmHoldMinutes: number;
   /** After the hold, only enter if the score is at or above where the hold started (not fading). */
   confirmRising: boolean;
+  /** Settings migrations already applied to this saved config. */
+  configRev?: number;
   rrTarget: number;
   maxRisk: number;
   lotSize: number;
@@ -169,7 +171,7 @@ export const DEFAULT_CONFIG: EngineConfig = {
   strikeInterval: 50,
   expiry: '',
   confHigh: 80,
-  confirmHoldMinutes: 5,
+  confirmHoldMinutes: 3,
   confirmRising: true,
   confWatch: 65,
   rrTarget: 2,

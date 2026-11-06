@@ -117,11 +117,11 @@ battery use**, and on Xiaomi / Oppo / Vivo / Realme / OnePlus also allow Autosta
 ## Hold before entry
 
 Reaching the trade level (80) no longer enters on the next break by itself. Settings → Engine settings →
-**Hold before entry** (default **5 minutes**, 0 = the workbook's immediate rule): the score must stay at or
+**Hold before entry** (default **3 minutes**, 0 = the workbook's immediate rule): the score must stay at or
 above the trade level for that long (a dip below restarts the wait), and — with **enter only if the score held
 or rose** on (default) — end at or above where the hold started (0.5-point tolerance; otherwise "SETUP
 FADING" and the hold starts again). Then price must break the setup's trigger. The Dashboard shows
-`SETUP HOLDING - score rising / steady / falling since 82.4, entry check at 11:45:00`. Applies to PAPER
+`SETUP HOLDING - score rising / steady / falling since 82.4, entry check at 11:43:00`. Applies to PAPER
 automatic entries, LIVE automatic entries and the confirmed-signal alerts; a manual ENTER is not held back.
 
 ## Score calibration (BANK NIFTY, FIN NIFTY, MCX)
