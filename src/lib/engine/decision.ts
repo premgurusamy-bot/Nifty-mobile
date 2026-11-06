@@ -33,7 +33,7 @@ import { FACTOR_LABELS, IV_SNAPSHOT_MS, sideOf } from './types.ts';
 import { sessionOpen, type Session } from './catalog.ts';
 import { evaluateFutures, buildFuturesPlan } from './futures.ts';
 import { sizeLots, type SizingConfig } from './sizing.ts';
-import { lockedProfit } from './profitLock.ts';
+import { dayPlanFor, lockFor } from './profitLock.ts';
 import { calibrationFor, NO_CALIBRATION, type Calibration } from './calibration.ts';
 
 const IV_HISTORY_MAX = 20000;
@@ -353,12 +353,15 @@ export function checkAndCloseIfHit(s: EngineState, ltp: number, cfg: EngineConfi
   // "reached" in the trade's favourable / adverse direction (works for shorts too)
   const atOrBeyond = (level: number) => side * (ltp - level) >= 0;
   const stopped = () => side * (ltp - p.currentSl) <= 0;
-  const lockOn = !!cfg.profitLock;
+  // Profit lock or day plan on: the lock trails the trade and Target 2 is off.
+  const lockOn = !!cfg.profitLock || !!cfg.dayPlanLock;
   if (lockOn) applyProfitLock(s, p, ltp, cfg, now);
   // A stop raised by the profit lock exits as "PROFIT LOCK" (with the ₹ it secured).
   const lockReason = () =>
     p.lockedPnl != null && p.lockPrice != null && side * (p.currentSl - p.lockPrice) <= 1e-9
-      ? `PROFIT LOCK HIT (Rs ${Math.round(p.lockedPnl)} secured)`
+      ? p.lockedPnl > 0
+        ? `PROFIT LOCK HIT (Rs ${Math.round(p.lockedPnl)} secured)`
+        : `DAY FLOOR HIT (today kept at least Rs ${Math.round(cfg.dayFloor)})`
       : null;
   if (!p.partialBooked) {
     if (stopped()) {
@@ -420,7 +423,8 @@ function applyProfitLock(s: EngineState, p: OpenPosition, ltp: number, cfg: Engi
   if (!(qty > 0)) return;
   const pnl = booked + side * (ltp - p.entry) * qty * pvP(p);
   p.peakPnl = Math.max(p.peakPnl ?? 0, pnl);
-  const lock = lockedProfit(p.peakPnl, cfg);
+  // Day plan (trade 1 ladder / trade 2 day floor / profit lock) or the plain profit lock.
+  const lock = lockFor(p, p.peakPnl, cfg);
   if (lock == null) return;
   // Price at which the open part still leaves `lock` in total profit, on the tick (rounded to secure ≥ lock).
   const tick = cfg.tickSize || 0.05;
@@ -437,7 +441,10 @@ function applyProfitLock(s: EngineState, p: OpenPosition, ltp: number, cfg: Engi
       s,
       {
         kind: 'INFO',
-        message: `${positionLabel(p)} - profit lock: Rs ${Math.round(lock)} secured (peak Rs ${Math.round(p.peakPnl)}), stop ${fmt2(p.currentSl)}`,
+        message:
+          lock > 0
+            ? `${positionLabel(p)} - profit lock: Rs ${Math.round(lock)} secured (peak Rs ${Math.round(p.peakPnl)}), stop ${fmt2(p.currentSl)}${p.dayPlan === 'FIRST' ? ' · day plan trade 1' : ''}`
+            : `${positionLabel(p)} - day plan: stop ${fmt2(price)} keeps today's total at least Rs ${Math.round(cfg.dayFloor)}${raised ? '' : ' (your stop-loss is tighter)'}`,
       },
       now,
     );
@@ -523,6 +530,11 @@ export function openTrade(s: EngineState, cfg: EngineConfig, a: OpenTradeArgs): 
     symbol: cfg.symbol,
     live: a.live,
   };
+  const plan = dayPlanFor(s.tradesToday, s.realizedToday, cfg);
+  if (plan) {
+    s.position.dayPlan = plan;
+    if (plan === 'SECOND') s.position.dayBooked = s.realizedToday;
+  }
   pushEvent(
     s,
     {

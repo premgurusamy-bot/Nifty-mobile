@@ -120,7 +120,7 @@ const withPos = (p: OpenPosition) => ({
     },
   ],
 });
-const goldCfg = sanitizeConfig({ symbol: 'GOLDM' }, DEFAULT_CONFIG);
+const goldCfg = { ...sanitizeConfig({ symbol: 'GOLDM' }, DEFAULT_CONFIG), dayPlanLock: false }; // workbook exits (T2 on)
 
 test('short futures: a RISING price hits the stop; ₹ P&L = −(exit−entry) × lots × ₹/point', () => {
   const s = withPos(shortPos());

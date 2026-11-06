@@ -63,7 +63,9 @@ export function LivePnlCard({
           {profitLock ? (
             <Text style={[st.small, { color: position.lockedPnl != null ? colors.up : colors.muted }]}>
               {position.lockedPnl != null
-                ? `Profit lock: ${formatINR(position.lockedPnl, 0)} secured · best ${formatINR(position.peakPnl ?? 0, 0)}`
+                ? position.lockedPnl > 0
+                  ? `Profit lock: ${formatINR(position.lockedPnl, 0)} secured · best ${formatINR(position.peakPnl ?? 0, 0)}`
+                  : `Day floor: this trade may lose ${formatINR(-position.lockedPnl, 0)} at most · best ${formatINR(Math.max(0, position.peakPnl ?? 0), 0)}`
                 : `Profit lock: not engaged yet · best ${formatINR(Math.max(0, position.peakPnl ?? 0), 0)}`}
             </Text>
           ) : null}

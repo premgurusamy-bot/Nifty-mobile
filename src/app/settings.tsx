@@ -51,7 +51,14 @@ type NumKey =
   | 'minPremium'
   | 'maxStopPct'
   | 'fixedLots'
-  | 'fixedStopPct';
+  | 'fixedStopPct'
+  | 'dl1At'
+  | 'dl1Lock'
+  | 'dl2At'
+  | 'dl2Lock'
+  | 'dl3At'
+  | 'dl3Lock'
+  | 'dayFloor';
 
 /** Strategy / discipline settings — shared by every instrument. */
 const ENGINE_FIELDS: [NumKey, string][] = [
@@ -96,11 +103,27 @@ const FIXED_FIELDS: [NumKey, string][] = [
   ['fixedStopPct', 'Stop-loss % of premium (1–40)'],
 ];
 const STOP_PCTS = [10, 20, 30, 40];
+/** Day plan: trade 1 steps (best profit → secured) and the trade 2 day floor. */
+const DAY_STEPS: [NumKey, NumKey][] = [
+  ['dl1At', 'dl1Lock'],
+  ['dl2At', 'dl2Lock'],
+  ['dl3At', 'dl3Lock'],
+];
+const DAYPLAN_FIELDS: [NumKey, string][] = [
+  ['dl1At', 'Step 1: best profit (₹)'],
+  ['dl1Lock', 'Step 1: secure (₹)'],
+  ['dl2At', 'Step 2: best profit (₹)'],
+  ['dl2Lock', 'Step 2: secure (₹)'],
+  ['dl3At', 'Step 3: best profit (₹)'],
+  ['dl3Lock', 'Step 3: secure (₹)'],
+  ['dayFloor', 'Trade 2: keep the day total at least (₹)'],
+];
 const CHEAP_FIELDS: [NumKey, string][] = [
   ['minPremium', 'Minimum option premium (₹, 0 = off)'],
   ['maxStopPct', 'Maximum stop-loss as % of premium (0 = off)'],
 ];
 const FIELDS: [NumKey, string][] = [
+  ...DAYPLAN_FIELDS,
   ...FIXED_FIELDS,
   ...CHEAP_FIELDS,
   ...ENGINE_FIELDS,
@@ -652,9 +675,49 @@ export default function SettingsScreen() {
 
         {cfg ? (
           <Card style={{ gap: 12 }}>
-            <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Profit lock (trailing ₹)</Text>
+            <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Day plan lock</Text>
             <View style={s.switchRow}>
-              <Text style={s.label}>Lock in profit as the trade moves in my favour</Text>
+              <Text style={s.label}>Trade 1 ladder, trade 2 day floor, then the profit lock</Text>
+              <Switch
+                value={cfg.dayPlanLock}
+                onValueChange={(v) => void save({ dayPlanLock: v }, setLockMsg)}
+                accessibilityLabel="Day plan lock"
+              />
+            </View>
+            {cfg.dayPlanLock ? (
+              <>
+                <Text style={ui.muted}>
+                  Trade 1 of the day: once its best profit reaches a step, the stop secures that step&apos;s amount
+                  (the highest step reached counts). Above the last step the profit lock below keeps trailing, never
+                  below the last step&apos;s amount. Trade 2, if trade 1 booked at least the day floor: its stop keeps
+                  today&apos;s total at or above the floor (it may lose only what is above it), and the profit lock
+                  applies as it gains. Other trades: the profit lock. Target 1 still books half; Target 2 is off.
+                </Text>
+                {DAY_STEPS.map(([a, b]) => (
+                  <View key={a} style={{ flexDirection: 'row', gap: 10 }}>
+                    {[a, b].map((k) => (
+                      <View key={k} style={{ flex: 1 }}>
+                        <Field
+                          label={DAYPLAN_FIELDS.find(([x]) => x === k)![1]}
+                          value={draft[k] ?? ''}
+                          onChange={(v) => setDraft((d) => ({ ...d, [k]: v }))}
+                        />
+                      </View>
+                    ))}
+                  </View>
+                ))}
+                <Field
+                  label="Trade 2: keep the day total at least (₹)"
+                  value={draft.dayFloor ?? ''}
+                  onChange={(v) => setDraft((d) => ({ ...d, dayFloor: v }))}
+                />
+              </>
+            ) : null}
+            <Text style={[ui.sectionTitle]}>Profit lock (trailing ₹)</Text>
+            <View style={s.switchRow}>
+              <Text style={s.label}>
+                {cfg.dayPlanLock ? 'Profit lock ladder (used by the day plan; on its own when the day plan is off)' : 'Lock in profit as the trade moves in my favour'}
+              </Text>
               <Switch
                 value={cfg.profitLock}
                 onValueChange={(v) => void save({ profitLock: v }, setLockMsg)}

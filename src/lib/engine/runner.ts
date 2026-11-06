@@ -231,6 +231,14 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   num('lockStep', 1, 1e10);
   num('lockRideFrom', 0, 1e10);
   num('lockRideAmount', 0, 1e10);
+  if (patch.dayPlanLock !== undefined) next.dayPlanLock = !!patch.dayPlanLock;
+  for (const k of ['dl1At', 'dl1Lock', 'dl2At', 'dl2Lock', 'dl3At', 'dl3Lock', 'dayFloor'] as const) num(k, 0, 1e10);
+  if (!(next.dl1At < next.dl2At && next.dl2At < next.dl3At))
+    throw new Error('Day plan: the best-profit steps must rise (e.g. 9,000 < 12,000 < 14,000)');
+  if (!(next.dl1Lock <= next.dl2Lock && next.dl2Lock <= next.dl3Lock))
+    throw new Error('Day plan: the secured amounts must not fall from one step to the next');
+  for (const [at, lock] of [[next.dl1At, next.dl1Lock], [next.dl2At, next.dl2Lock], [next.dl3At, next.dl3Lock]])
+    if (lock >= at) throw new Error('Day plan: each secured amount must be below its best-profit step');
   if (next.lockRideFrom > 0 && next.lockRideFrom < next.lockStart)
     throw new Error('The ride level must be at least the lock start (or 0 to keep stepping)');
   num('rollDays', 0, 30);

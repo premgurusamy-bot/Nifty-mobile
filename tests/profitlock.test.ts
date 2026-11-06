@@ -92,7 +92,7 @@ test('short futures: lock moves the buy-stop DOWN, on the tick', () => {
 
 test('profit lock off: unchanged workbook behaviour (T2 closes the rest)', () => {
   const s = stateWith(pos());
-  const off = { ...cfg, profitLock: false };
+  const off = { ...cfg, profitLock: false, dayPlanLock: false };
   checkAndCloseIfHit(s, 105, off, 1);
   checkAndCloseIfHit(s, 125, off, 2);
   assert.equal(s.position, null);

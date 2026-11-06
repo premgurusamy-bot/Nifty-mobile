@@ -76,9 +76,9 @@ export function categoryOf(e: Pick<EngineEvent, 'kind' | 'message'>): AlertCateg
     case 'PARTIAL':
       return 'target';
     case 'INFO':
-      return /profit lock/i.test(e.message) ? 'lock' : null;
+      return /profit lock|day plan/i.test(e.message) ? 'lock' : null;
     case 'EXIT':
-      if (/PROFIT LOCK/i.test(e.message)) return 'lock';
+      if (/PROFIT LOCK|DAY FLOOR/i.test(e.message)) return 'lock';
       if (/\bSL\b|stop/i.test(e.message)) return 'stop';
       return /TARGET 1/i.test(e.message) ? 'target' : 'exit';
     case 'ERROR':

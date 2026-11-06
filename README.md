@@ -224,6 +224,21 @@ total including the open trade. Connected to Dhan, the phone quotes the open pos
 between engine refreshes (green dot = live price); stops, targets and the profit lock still act on each refresh
 (and in LIVE the exchange stop at Dhan acts on its own).
 
+## Day plan lock
+
+Settings → **Day plan lock** (on by default; Target 2 off, Target 1 still books half):
+
+- **Trade 1 of the day**: best profit ₹9,000 → ₹5,000 secured, ₹12,000 → ₹7,000, ₹14,000 → ₹10,000 (the
+  highest step reached counts; below ₹9,000 the normal stop-loss applies). Above ₹14,000 the profit-lock
+  ladder keeps trailing, never below ₹10,000 (₹20,000 → ₹15,000, ₹30,000 → ₹20,000, …).
+- **Trade 2**, when trade 1 booked at least ₹10,000: its stop keeps the day's total at or above ₹10,000 —
+  e.g. after a ₹14,000 trade 1 it may lose ₹4,000 at most (exits as `DAY FLOOR HIT`); after exactly ₹10,000
+  it starts at break-even. As it gains, the profit-lock ladder applies on top.
+- **Other trades** (trade 3+, or trade 2 after a smaller trade 1): the profit-lock ladder.
+
+All amounts are editable; the stop only ever moves in the trade's favour and, in LIVE, the exchange stop at
+Dhan follows it. The open-position card shows which rule the trade follows.
+
 ## Profit lock (trailing ₹)
 
 Settings → **Profit lock** (off by default) trails the stop on the trade's total ₹ profit, including the half

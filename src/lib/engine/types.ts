@@ -140,6 +140,22 @@ export interface EngineConfig {
   lockRideFrom: number;
   /** Profit the trade may give back from its peak above the ride level (₹). */
   lockRideAmount: number;
+  /**
+   * Day plan lock (turns Target 2 off, like the profit lock):
+   *  trade 1 — best profit dl1At → secure dl1Lock, dl2At → dl2Lock, dl3At → dl3Lock, then the profit
+   *            lock ladder keeps trailing above dl3At (never below dl3Lock);
+   *  trade 2 — when trade 1 booked at least dayFloor: the stop keeps the day's total ≥ dayFloor,
+   *            and the profit lock ladder applies on top;
+   *  other trades — the profit lock ladder.
+   */
+  dayPlanLock: boolean;
+  dl1At: number;
+  dl1Lock: number;
+  dl2At: number;
+  dl2Lock: number;
+  dl3At: number;
+  dl3Lock: number;
+  dayFloor: number;
 }
 
 export type SizingMode = 'RISK' | 'CAPITAL' | 'FIXED';
@@ -203,6 +219,14 @@ export const DEFAULT_CONFIG: EngineConfig = {
   lockStep: 5000,
   lockRideFrom: 20000,
   lockRideAmount: 10000,
+  dayPlanLock: true,
+  dl1At: 9000,
+  dl1Lock: 5000,
+  dl2At: 12000,
+  dl2Lock: 7000,
+  dl3At: 14000,
+  dl3Lock: 10000,
+  dayFloor: 10000,
 };
 
 /** Index presets from Moddhanapi.ApplyIndexPreset (security ids confirmed in the workbook). */
@@ -260,6 +284,10 @@ export interface OpenPosition {
   /** Profit lock: best total profit (₹) seen, and the profit currently secured. */
   peakPnl?: number;
   lockedPnl?: number;
+  /** Day plan: which rule this trade follows (set when it opens). */
+  dayPlan?: 'FIRST' | 'SECOND' | 'NORMAL';
+  /** Day plan, trade 2: profit already booked today when it opened. */
+  dayBooked?: number;
   /** Stop price the profit lock set (to label a stop-out as a profit-lock exit). */
   lockPrice?: number;
 }

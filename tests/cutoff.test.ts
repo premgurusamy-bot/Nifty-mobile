@@ -8,7 +8,7 @@ import { EngineRunner, sanitizeConfig } from '../src/lib/engine/runner.ts';
 import { DEFAULT_CONFIG, initialEngineState, type Candle, type ChainSnapshot } from '../src/lib/engine/types.ts';
 
 /** The workbook's rule: enter on the first break after the trade level (no hold). */
-const WB_CONFIG = { ...DEFAULT_CONFIG, confirmHoldMinutes: 0 };
+const WB_CONFIG = { ...DEFAULT_CONFIG, confirmHoldMinutes: 0, dayPlanLock: false };
 
 const fx = JSON.parse(readFileSync(new URL('./fixtures/workbook-2026-08-27.json', import.meta.url), 'utf8'));
 const candles: Candle[] = fx.candles;

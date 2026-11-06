@@ -202,7 +202,7 @@ export default function DashboardScreen() {
           live={snap.live}
           position={p ?? null}
           demo={snap.demo}
-          profitLock={cfg.profitLock}
+          profitLock={cfg.profitLock || cfg.dayPlanLock}
           label={p ? (p.direction === 'LONG' || p.direction === 'SHORT' ? `${p.direction} ${contract}` : `${p.direction} ${p.strike}`) : ''}
         />
       ) : null}
@@ -410,16 +410,34 @@ export default function DashboardScreen() {
                 [isFut ? 'Live price' : 'Live premium', liveLtp ?? '—'],
                 ['Current (trailing) SL', p.currentSl, colors.down],
                 ['Target 1', p.target1, colors.up],
-                ['Target 2', cfg.profitLock ? 'off (profit lock)' : p.target2, colors.up],
-                ...(cfg.profitLock
+                [
+                  'Target 2',
+                  cfg.profitLock || cfg.dayPlanLock ? `off (${cfg.dayPlanLock ? 'day plan' : 'profit lock'})` : p.target2,
+                  colors.up,
+                ],
+                ...(cfg.dayPlanLock && p.dayPlan
+                  ? ([
+                      [
+                        'Day plan',
+                        p.dayPlan === 'FIRST'
+                          ? `trade 1 ladder (${formatINR(cfg.dl1At, 0)}→${formatINR(cfg.dl1Lock, 0)}, ${formatINR(cfg.dl2At, 0)}→${formatINR(cfg.dl2Lock, 0)}, ${formatINR(cfg.dl3At, 0)}→${formatINR(cfg.dl3Lock, 0)})`
+                          : p.dayPlan === 'SECOND'
+                            ? `trade 2: day kept ≥ ${formatINR(cfg.dayFloor, 0)} (booked ${formatINR(p.dayBooked ?? 0, 0)})`
+                            : 'profit lock',
+                      ],
+                    ] as [string, string | number, string?][])
+                  : []),
+                ...(cfg.profitLock || cfg.dayPlanLock
                   ? ([
                       ['Best profit (peak)', formatSigned(p.peakPnl ?? 0, 0)],
                       [
                         'Profit locked',
-                        p.lockedPnl != null
+                        p.lockedPnl != null && p.lockedPnl > 0
                           ? `${formatINR(p.lockedPnl, 0)} secured`
-                          : `starts at ${formatINR(cfg.lockStart, 0)}`,
-                        p.lockedPnl != null ? colors.up : undefined,
+                          : p.lockedPnl != null
+                            ? `day floor: may lose ${formatINR(-p.lockedPnl, 0)} at most`
+                            : `starts at ${formatINR(cfg.dayPlanLock && p.dayPlan === 'FIRST' ? cfg.dl1At : cfg.lockStart, 0)}`,
+                        p.lockedPnl != null && p.lockedPnl > 0 ? colors.up : undefined,
                       ],
                     ] as [string, string | number, string?][])
                   : []),
