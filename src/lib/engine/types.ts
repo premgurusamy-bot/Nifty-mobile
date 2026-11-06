@@ -82,6 +82,10 @@ export interface EngineConfig {
   expiry: string;
   confHigh: number;
   confWatch: number;
+  /** Minutes the score must stay at or above the trade level before entering (0 = enter at once). */
+  confirmHoldMinutes: number;
+  /** After the hold, only enter if the score is at or above where the hold started (not fading). */
+  confirmRising: boolean;
   rrTarget: number;
   maxRisk: number;
   lotSize: number;
@@ -165,6 +169,8 @@ export const DEFAULT_CONFIG: EngineConfig = {
   strikeInterval: 50,
   expiry: '',
   confHigh: 80,
+  confirmHoldMinutes: 5,
+  confirmRising: true,
   confWatch: 65,
   rrTarget: 2,
   maxRisk: 2000,
@@ -212,6 +218,10 @@ export interface PendingSetup {
   trigger: number;
   strike: number;
   setAt: number;
+  /** Hold-before-entry: when the score last reached the trade level (null = it dipped below since). */
+  holdFrom?: number | null;
+  /** The score when that hold started (entry needs the score to hold or rise from it). */
+  holdConf?: number;
 }
 
 /** Dhan order references for a live position. */

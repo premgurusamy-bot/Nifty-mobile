@@ -169,6 +169,8 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   };
   num('confHigh', 0, 105);
   num('confWatch', 0, 105);
+  num('confirmHoldMinutes', 0, 60);
+  if (patch.confirmRising !== undefined) next.confirmRising = !!patch.confirmRising;
   num('rrTarget', 0.1, 20);
   num('maxRisk', 1, 10_000_000);
   num('lotSize', 1, 100_000);

@@ -26,6 +26,7 @@ import { colors } from '../theme';
 type NumKey =
   | 'confHigh'
   | 'confWatch'
+  | 'confirmHoldMinutes'
   | 'rrTarget'
   | 'maxRisk'
   | 'lotSize'
@@ -56,6 +57,7 @@ type NumKey =
 const ENGINE_FIELDS: [NumKey, string][] = [
   ['confHigh', 'High confidence threshold (trade)'],
   ['confWatch', 'Watch threshold (wait for confirmation)'],
+  ['confirmHoldMinutes', 'Hold before entry (minutes at the trade level, 0 = enter at once)'],
   ['rrTarget', 'Risk:Reward target'],
   ['maxRisk', 'Max risk per trade (₹)'],
   ['atrMult', 'ATR multiplier for stop loss'],
@@ -737,6 +739,19 @@ export default function SettingsScreen() {
                 onChange={(v) => setDraft((d) => ({ ...d, [k]: v }))}
               />
             ))}
+            <View style={s.switchRow}>
+              <Text style={s.label}>After the hold, enter only if the score held or rose (not fading)</Text>
+              <Switch
+                value={cfg.confirmRising !== false}
+                onValueChange={(v) => void updateConfig({ confirmRising: v })}
+                accessibilityLabel="Enter only if the score held or rose"
+              />
+            </View>
+            <Text style={[ui.muted, { fontSize: 12 }]}>
+              When the score reaches the trade level the engine waits this long before entering. A dip below the
+              trade level restarts the wait; after it, the score must be at or above where it started (0.5 point of
+              tolerance), then price must break the setup&apos;s trigger. Manual ENTER is not held back.
+            </Text>
             <View style={s.switchRow}>
               <Text style={s.label}>Engine alerts (Telegram when run on a server)</Text>
               <Switch value={cfg.alertsEnabled} onValueChange={(v) => void updateConfig({ alertsEnabled: v })} />

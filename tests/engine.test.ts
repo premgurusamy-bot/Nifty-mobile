@@ -21,6 +21,9 @@ import {
   type OpenPosition,
 } from '../src/lib/engine/types.ts';
 
+/** The workbook's rule: enter on the first break after the trade level (no hold). */
+const WB_CONFIG = { ...DEFAULT_CONFIG, confirmHoldMinutes: 0 };
+
 /**
  * Golden fixture: inputs AND outputs of the workbook's last refresh
  * (02_LiveMarket candles, 03_OptionChain, 12_IVHistory → 01_Dashboard, 04_Analytics).
@@ -63,7 +66,7 @@ test('golden: swing support/resistance match', () => {
 test('golden: full cycle reproduces the confidence score, its 10-factor breakdown, Greeks and IV snapshot', () => {
   const state: EngineState = { ...initialEngineState(), ivHistory: fx.ivHistoryBefore };
   const now = Date.UTC(2026, 7, 27, 6, 10, 27); // 11:40:27 IST
-  const { state: next, dashboard: d } = runCycle(state, DEFAULT_CONFIG, { candles, chain, now });
+  const { state: next, dashboard: d } = runCycle(state, WB_CONFIG, { candles, chain, now });
 
   close(next.ivHistory[next.ivHistory.length - 1], fx.ivCaptured);
   close(d.decision.confidence, E.confidence);
@@ -103,18 +106,18 @@ const mkCandle = (t: number, o: number, h: number, l: number, c: number): Candle
 test('staged decision: arm → pending → confirmed break fires once and opens a position', () => {
   const now0 = Date.UTC(2026, 7, 27, 6, 10, 27);
   let st: EngineState = { ...initialEngineState(), ivHistory: fx.ivHistoryBefore };
-  let r = runCycle(st, DEFAULT_CONFIG, { candles, chain, now: now0 });
+  let r = runCycle(st, WB_CONFIG, { candles, chain, now: now0 });
   const trigger = r.state.pending!.trigger;
   assert.equal(r.state.pending!.direction, 'PE');
 
   // Same candle again → still pending.
-  r = runCycle(r.state, DEFAULT_CONFIG, { candles, chain, now: now0 + 15_000 });
+  r = runCycle(r.state, WB_CONFIG, { candles, chain, now: now0 + 15_000 });
   assert.match(r.dashboard.decision.decisionText, /^SETUP PENDING/);
 
   // Latest candle low breaks the trigger → trade fires.
   const last = candles[candles.length - 1];
   const broke = [...candles.slice(0, -1), { ...last, l: trigger - 1 }];
-  r = runCycle(r.state, DEFAULT_CONFIG, { candles: broke, chain, now: now0 + 30_000 });
+  r = runCycle(r.state, WB_CONFIG, { candles: broke, chain, now: now0 + 30_000 });
   assert.equal(r.dashboard.decision.signal, 'BUY PE');
   assert.ok(r.dashboard.plan);
   assert.equal(r.state.tradesToday, 1);
@@ -124,7 +127,7 @@ test('staged decision: arm → pending → confirmed break fires once and opens 
   assert.equal(r.state.events[0].kind, 'TRADE');
 
   // Next cycle → IN POSITION, no new setups.
-  r = runCycle(r.state, DEFAULT_CONFIG, { candles: broke, chain, now: now0 + 45_000 });
+  r = runCycle(r.state, WB_CONFIG, { candles: broke, chain, now: now0 + 45_000 });
   assert.equal(r.dashboard.decision.signal, 'IN POSITION');
   st = r.state;
   assert.equal(st.pending, null);
@@ -132,7 +135,7 @@ test('staged decision: arm → pending → confirmed break fires once and opens 
 
 test('trade plan: ATR × multiplier × delta risk, sized to max risk per trade', () => {
   const t = computeTechnical(candles)!;
-  const p = buildTradePlan(chain, 'PE', 24200, t.last.atr, DEFAULT_CONFIG)!;
+  const p = buildTradePlan(chain, 'PE', 24200, t.last.atr, WB_CONFIG)!;
   // Workbook's live trade on this strike: entry 82.65 … here entry is this snapshot's LTP.
   const leg = chain.strikes.find((s) => s.strike === 24200)!.pe!;
   close(p.riskPts, t.last.atr * 1.5 * Math.abs(leg.delta));
@@ -191,14 +194,14 @@ const withPos = (p: OpenPosition): EngineState => ({
 
 test('position: T1 books half (2 lots) and trails SL to breakeven, then T2 closes the rest', () => {
   const s = withPos(pos());
-  assert.ok(checkAndCloseIfHit(s, 106.5, DEFAULT_CONFIG, 1));
+  assert.ok(checkAndCloseIfHit(s, 106.5, WB_CONFIG, 1));
   assert.equal(s.position!.partialBooked, true);
   assert.equal(s.position!.remainingQty, 65);
   assert.equal(s.position!.currentSl, 82.65);
   close(s.realizedToday, (106.03 - 82.65) * 65);
   assert.match(s.journal[0].exitReason, /^Partial: booked 65 @ 106\.03 \(\+Rs 1520\), SL trailed to breakeven 82\.65$/);
 
-  assert.ok(checkAndCloseIfHit(s, 118, DEFAULT_CONFIG, 2));
+  assert.ok(checkAndCloseIfHit(s, 118, WB_CONFIG, 2));
   assert.equal(s.position, null);
   close(s.journal[0].pnl!, (106.03 - 82.65) * 65 + (117.72 - 82.65) * 65);
   assert.match(s.journal[0].exitReason, /^TARGET 2 HIT \(remainder\)/);
@@ -206,25 +209,25 @@ test('position: T1 books half (2 lots) and trails SL to breakeven, then T2 close
 
 test('position: SL hit closes in full at the SL level; single lot exits fully at T1', () => {
   const s = withPos(pos());
-  checkAndCloseIfHit(s, 60, DEFAULT_CONFIG, 1);
+  checkAndCloseIfHit(s, 60, WB_CONFIG, 1);
   close(s.journal[0].pnl!, (70.96 - 82.65) * 130);
   assert.match(s.journal[0].exitReason, /^SL HIT \(full\)/);
 
   const one = withPos(pos({ totalQty: 65, remainingQty: 65 }));
-  checkAndCloseIfHit(one, 110, DEFAULT_CONFIG, 1);
+  checkAndCloseIfHit(one, 110, WB_CONFIG, 1);
   assert.equal(one.position, null);
   assert.match(one.journal[0].exitReason, /only 1 lot/);
 });
 
 test('daily discipline: trade limit, no-revenge rule, rupee max loss', () => {
   const s = { ...initialEngineState(), day: '2026-08-27' };
-  assert.equal(canTakeNewTrade(s, DEFAULT_CONFIG).ok, true);
-  assert.match(canTakeNewTrade({ ...s, tradesToday: 3 }, DEFAULT_CONFIG).reason, /Daily trade limit reached \(3\/3\)/);
+  assert.equal(canTakeNewTrade(s, WB_CONFIG).ok, true);
+  assert.match(canTakeNewTrade({ ...s, tradesToday: 3 }, WB_CONFIG).reason, /Daily trade limit reached \(3\/3\)/);
   const lost = withPos(pos());
   lost.position = null;
   lost.journal[0].pnl = -100;
-  assert.match(canTakeNewTrade(lost, DEFAULT_CONFIG).reason, /No-revenge/);
-  assert.match(canTakeNewTrade({ ...s, realizedToday: -3000 }, DEFAULT_CONFIG).reason, /Daily max loss/);
+  assert.match(canTakeNewTrade(lost, WB_CONFIG).reason, /No-revenge/);
+  assert.match(canTakeNewTrade({ ...s, realizedToday: -3000 }, WB_CONFIG).reason, /Daily max loss/);
 });
 
 test('IV percentile needs 20 snapshots', () => {
@@ -246,7 +249,7 @@ test('summary groups closed trades by day with cumulative P&L', () => {
 });
 
 test('backtest replays the workbook candles', () => {
-  const r = runBacktest(candles, DEFAULT_CONFIG);
+  const r = runBacktest(candles, WB_CONFIG);
   assert.equal(r.candles, 225);
   assert.ok(r.armed >= r.confirmed);
   assert.equal(r.wins + r.losses + r.timedOut, r.confirmed);

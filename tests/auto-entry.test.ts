@@ -12,6 +12,9 @@ import { EngineRunner, sanitizeConfig } from '../src/lib/engine/runner.ts';
 import { DEFAULT_CONFIG, initialEngineState, type Candle, type ChainSnapshot, type EngineConfig } from '../src/lib/engine/types.ts';
 import { FAKE_CLIENT, FAKE_TOKEN, GOLDEN_EXPIRY, startFakeDhan } from './fakeDhan.ts';
 
+/** The workbook's rule: enter on the first break after the trade level (no hold). */
+const WB_CONFIG = { ...DEFAULT_CONFIG, confirmHoldMinutes: 0 };
+
 const fx = JSON.parse(readFileSync(new URL('./fixtures/workbook-2026-08-27.json', import.meta.url), 'utf8'));
 const candles: Candle[] = fx.candles;
 const chain: ChainSnapshot = fx.chain;
@@ -29,8 +32,8 @@ function confirm(cfg: EngineConfig) {
 }
 
 test('defaults: PAPER automatic (as before), LIVE manual; switching into LIVE turns automatic off', () => {
-  assert.deepEqual([DEFAULT_CONFIG.autoEntryPaper, DEFAULT_CONFIG.autoEntryLive], [true, false]);
-  const armed = sanitizeConfig({ autoEntryLive: true }, DEFAULT_CONFIG);
+  assert.deepEqual([WB_CONFIG.autoEntryPaper, WB_CONFIG.autoEntryLive], [true, false]);
+  const armed = sanitizeConfig({ autoEntryLive: true }, WB_CONFIG);
   assert.equal(armed.autoEntryLive, true);
   assert.equal(sanitizeConfig({ tradeMode: 'LIVE' }, armed).autoEntryLive, false);
   const live = { ...armed, tradeMode: 'LIVE' as const };
@@ -39,7 +42,7 @@ test('defaults: PAPER automatic (as before), LIVE manual; switching into LIVE tu
 });
 
 test('PAPER manual: a confirmed signal waits for ENTER (alerts once)', () => {
-  const { r, next } = confirm({ ...DEFAULT_CONFIG, autoEntryPaper: false });
+  const { r, next } = confirm({ ...WB_CONFIG, autoEntryPaper: false });
   assert.equal(r.state.position, null);
   assert.match(r.dashboard.decision.decisionText, /^SIGNAL CONFIRMED - tap ENTER to trade \(/);
   assert.equal(r.state.events[0].kind, 'SIGNAL');
@@ -48,16 +51,16 @@ test('PAPER manual: a confirmed signal waits for ENTER (alerts once)', () => {
 });
 
 test('PAPER automatic: unchanged, the signal is traded on paper', () => {
-  const { r } = confirm(DEFAULT_CONFIG);
+  const { r } = confirm(WB_CONFIG);
   assert.ok(r.state.position);
   assert.equal(r.state.liveAutoRequest, null);
 });
 
 test('LIVE manual: no order request; LIVE automatic: one request for the cycle that confirmed', () => {
-  const manual = confirm({ ...DEFAULT_CONFIG, tradeMode: 'LIVE' });
+  const manual = confirm({ ...WB_CONFIG, tradeMode: 'LIVE' });
   assert.equal(manual.r.state.liveAutoRequest, null);
   assert.match(manual.r.dashboard.decision.decisionText, /tap ENTER to trade live/);
-  const auto = confirm({ ...DEFAULT_CONFIG, tradeMode: 'LIVE', autoEntryLive: true });
+  const auto = confirm({ ...WB_CONFIG, tradeMode: 'LIVE', autoEntryLive: true });
   assert.equal(auto.r.state.position, null); // the engine never fakes a live position
   assert.match(auto.r.state.liveAutoRequest!, /^2026-08-27\|PE\|/);
   assert.match(auto.r.dashboard.decision.decisionText, /placing the LIVE order automatically/);

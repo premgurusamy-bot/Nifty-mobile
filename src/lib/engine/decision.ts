@@ -38,6 +38,8 @@ import { calibrationFor, NO_CALIBRATION, type Calibration } from './calibration.
 
 const IV_HISTORY_MAX = 20000;
 const EVENTS_MAX = 100;
+/** Score points a held setup may slip (refresh-to-refresh noise) before it counts as fading. */
+export const FADE_TOLERANCE = 0.5;
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const ist = (ms: number) => new Date(ms + 5.5 * 3600_000);
@@ -599,6 +601,8 @@ function stagedDecision(
   } else if (confidence < cfg.confHigh) {
     signal = 'WAIT';
     decisionText = `WATCH - CONFIRMATION BUILDING (${label})`;
+    // Fell below the trade level: a running hold has to start again.
+    if (s.pending) s.pending.holdFrom = null;
   } else {
     const gate = canTakeNewTrade(s, cfg, now);
     if (!gate.ok) {
@@ -609,16 +613,39 @@ function stagedDecision(
     } else {
       const last = candles[candles.length - 1];
       const same = s.pending && s.pending.direction === direction && Math.abs(s.pending.strike - selectedStrike) < 0.01;
+      const holdMs = Math.max(0, cfg.confirmHoldMinutes ?? 0) * 60_000;
       if (!same) {
         const trigger = bullish ? last.h : last.l;
-        s.pending = { direction, trigger, strike: selectedStrike, setAt: now };
+        s.pending = { direction, trigger, strike: selectedStrike, setAt: now, holdFrom: now, holdConf: confidence };
         signal = 'WAIT';
-        decisionText = `SETUP ARMED - waiting for break of ${fmt2(trigger)} (${label})`;
+        decisionText = holdMs
+          ? `SETUP ARMED - score ${confidence.toFixed(1)}, holding ${cfg.confirmHoldMinutes} min before entry, then break of ${fmt2(trigger)} (${label})`
+          : `SETUP ARMED - waiting for break of ${fmt2(trigger)} (${label})`;
       } else {
-        const trig = s.pending!.trigger;
+        const p = s.pending!;
+        // Back at the trade level after a dip (or a setup from before this rule): the hold starts now.
+        if (p.holdFrom == null) {
+          p.holdFrom = now;
+          p.holdConf = confidence;
+        }
+        const trig = p.trigger;
         const confirmed = bullish ? last.h > trig : last.l < trig;
         const key = `${istDate(now)}|${direction}|${selectedStrike}`;
-        if (!confirmed) {
+        const heldMs = now - p.holdFrom;
+        const startConf = p.holdConf ?? confidence;
+        if (holdMs > 0 && heldMs < holdMs) {
+          const trend =
+            confidence > startConf + FADE_TOLERANCE ? 'rising' : confidence < startConf - FADE_TOLERANCE ? 'falling' : 'steady';
+          signal = 'WAIT';
+          // A fixed check time (not a countdown), so the text — and the decision log — only change when it matters.
+          decisionText = `SETUP HOLDING - score ${trend} since ${startConf.toFixed(1)}, entry check at ${istTime(p.holdFrom + holdMs)} (${label})`;
+        } else if (holdMs > 0 && cfg.confirmRising !== false && confidence < startConf - FADE_TOLERANCE) {
+          // Held above the trade level but weaker than when it started: not convincing — watch again.
+          signal = 'WAIT';
+          decisionText = `SETUP FADING - score ${confidence.toFixed(1)} is below ${startConf.toFixed(1)} where the hold started; holding again (${label})`;
+          p.holdFrom = now;
+          p.holdConf = confidence;
+        } else if (!confirmed) {
           signal = 'WAIT';
           decisionText = `SETUP PENDING - waiting for break of ${fmt2(trig)} (${label})`;
         } else if (key === s.lastFiredKey) {

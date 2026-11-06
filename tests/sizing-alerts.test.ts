@@ -21,21 +21,24 @@ import {
   type EngineEvent,
 } from '../src/lib/engine/types.ts';
 
+/** The workbook's rule: enter on the first break after the trade level (no hold). */
+const WB_CONFIG = { ...DEFAULT_CONFIG, confirmHoldMinutes: 0 };
+
 const fx = JSON.parse(readFileSync(new URL('./fixtures/workbook-2026-08-27.json', import.meta.url), 'utf8'));
 const candles: Candle[] = fx.candles;
 const chain: ChainSnapshot = fx.chain;
 const atr = computeTechnical(candles)!.last.atr;
 const pe = chain.strikes.find((s) => s.strike === 24200)!.pe!;
 const capital = (over: Partial<EngineConfig>): EngineConfig =>
-  sanitizeConfig({ sizingMode: 'CAPITAL', maxLots: 0, ...over }, DEFAULT_CONFIG);
+  sanitizeConfig({ sizingMode: 'CAPITAL', maxLots: 0, ...over }, WB_CONFIG);
 
 test('sizing settings are validated', () => {
-  const c = sanitizeConfig({ sizingMode: 'CAPITAL', capitalPaper: 50000, capitalLive: 0, capitalPct: 100 }, DEFAULT_CONFIG);
+  const c = sanitizeConfig({ sizingMode: 'CAPITAL', capitalPaper: 50000, capitalLive: 0, capitalPct: 100 }, WB_CONFIG);
   assert.deepEqual([c.sizingMode, c.capitalPaper, c.capitalLive, c.capitalPct], ['CAPITAL', 50000, 0, 100]);
-  assert.throws(() => sanitizeConfig({ capitalPct: 0 }, DEFAULT_CONFIG), /capitalPct/);
-  assert.throws(() => sanitizeConfig({ capitalPct: 101 }, DEFAULT_CONFIG), /capitalPct/);
-  assert.throws(() => sanitizeConfig({ sizingMode: 'ALL' as never }, DEFAULT_CONFIG), /sizingMode/);
-  assert.equal(DEFAULT_CONFIG.sizingMode, 'RISK'); // the workbook's sizing stays the default
+  assert.throws(() => sanitizeConfig({ capitalPct: 0 }, WB_CONFIG), /capitalPct/);
+  assert.throws(() => sanitizeConfig({ capitalPct: 101 }, WB_CONFIG), /capitalPct/);
+  assert.throws(() => sanitizeConfig({ sizingMode: 'ALL' as never }, WB_CONFIG), /sizingMode/);
+  assert.equal(WB_CONFIG.sizingMode, 'RISK'); // the workbook's sizing stays the default
 });
 
 test('capital sizing (options): 100% of paper capital ÷ premium × lot size', () => {
@@ -68,7 +71,7 @@ test('capital sizing (LIVE): live capital, else the Dhan available balance', () 
 
 test('capital sizing (MCX futures): margin per lot, entered or estimated', () => {
   const gold = (over: Partial<EngineConfig>) => ({
-      ...sanitizeConfig({ symbol: 'GOLDM' }, DEFAULT_CONFIG),
+      ...sanitizeConfig({ symbol: 'GOLDM' }, WB_CONFIG),
       sizingMode: 'CAPITAL' as const,
       maxLots: 0,
       ...over,
@@ -95,7 +98,7 @@ test('a capital-blocked confirmed signal does not paper-trade', () => {
 });
 
 test('LIVE: a confirmed signal raises one SIGNAL event (alerts once, no auto trade)', () => {
-  const cfg = { ...DEFAULT_CONFIG, tradeMode: 'LIVE' as const };
+  const cfg = { ...WB_CONFIG, tradeMode: 'LIVE' as const };
   const now0 = Date.UTC(2026, 7, 27, 6, 10, 27);
   let r = runCycle({ ...initialEngineState(), ivHistory: fx.ivHistoryBefore }, cfg, { candles, chain, now: now0 });
   const trig = r.state.pending!.trigger;
