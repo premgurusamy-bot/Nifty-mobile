@@ -7,6 +7,7 @@
  * app away). If it is closed, the service notices the missing heartbeat, posts a
  * "stopped" alert and shuts down rather than pretending to watch.
  */
+import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { notifyNow } from './notify';
 
@@ -64,7 +65,7 @@ export async function startBackground(desc: string): Promise<void> {
         await sleep(10_000);
         if (Date.now() - lastBeat > STALE_MS) {
           await notifyNow({
-            title: 'Nifty Trader stopped watching',
+            title: `${Constants.expoConfig?.name ?? 'Nifty Trader'} stopped watching`,
             body: 'The app was closed, so signals and stops are no longer monitored. Tap to open it again.',
             category: 'error',
           }).catch(() => {});
@@ -75,11 +76,12 @@ export async function startBackground(desc: string): Promise<void> {
     },
     {
       taskName: 'NiftyWatch',
-      taskTitle: 'Nifty Trader is watching the market',
+      taskTitle: `${Constants.expoConfig?.name ?? 'Nifty Trader'} is watching the market`,
       taskDesc: desc,
       taskIcon: { name: 'notification_icon', type: 'drawable' },
       color: '#3B82F6',
-      linkingURI: 'niftytrader://',
+      // Opens this app (v2 has its own link scheme, so v1 installed alongside isn't opened instead).
+      linkingURI: `${(Constants.expoConfig?.scheme as string | undefined) ?? 'niftytraderv2'}://`,
       foregroundServiceType: ['specialUse'],
     },
   );

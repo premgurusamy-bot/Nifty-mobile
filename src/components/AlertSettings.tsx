@@ -1,3 +1,4 @@
+import Constants from 'expo-constants';
 import { startActivityAsync, ActivityAction } from 'expo-intent-launcher';
 import { useState } from 'react';
 import { Platform, StyleSheet, Switch, Text, View } from 'react-native';
@@ -34,7 +35,8 @@ export function AlertSettingsCard() {
     setMsg(null);
     try {
       await startActivityAsync(ActivityAction.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, {
-        data: 'package:com.premgurusamy.niftytrader',
+        // This app's own package (v1 and v2 are separate apps).
+        data: `package:${Constants.expoConfig?.android?.package ?? 'com.premgurusamy.niftytrader.v2'}`,
       });
     } catch {
       // Some phones don't offer the direct prompt: open the full list instead.

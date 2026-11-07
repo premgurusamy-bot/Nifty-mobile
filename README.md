@@ -20,6 +20,12 @@ log export; Portfolio strategy results.
 - APK: https://github.com/premgurusamy-bot/Nifty-mobile/releases/download/v1.0/nifty-trader.apk
 - New work continues on the development branch; the "latest" link keeps pointing at the newest build.
 
+**v2 (in development) is a separate app**: name "Nifty Trader v2", Android package
+`com.premgurusamy.niftytrader.v2`, link scheme `niftytraderv2`. It installs **next to** v1 (package
+`com.premgurusamy.niftytrader`) instead of replacing it, with its own login, settings and journal — so v1
+stays exactly as it is and can be used on its own if v2 misbehaves. Never run both in LIVE (especially with
+Automatic entries) on the same Dhan account at the same time: each would place its own orders.
+
 ## What's in the app
 
 | Tab | Workbook equivalent |

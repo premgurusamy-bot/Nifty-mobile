@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "Nifty Trader",
+    "name": "Nifty Trader v2",
     "slug": "nifty-mobile",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -17,7 +17,7 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.premgurusamy.niftytrader",
+      "package": "com.premgurusamy.niftytrader.v2",
       "versionCode": 1
     },
     "web": {
@@ -25,7 +25,7 @@
       "bundler": "metro",
       "output": "single"
     },
-    "scheme": "niftytrader",
+    "scheme": "niftytraderv2",
     "backgroundColor": "#0B0F14",
     "plugins": [
       "expo-router",
