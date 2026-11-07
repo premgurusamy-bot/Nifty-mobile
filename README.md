@@ -6,6 +6,20 @@ The workbook's decision engine was ported rule for rule to TypeScript. A golden 
 
 > Decision-support tool, like the workbook. The engine only **signals** and paper-tracks its position; it never places orders by itself. Confidence and R:R are a filter, not a prediction.
 
+## Versions
+
+**v1.0** (tag `v1.0`, 7 Nov 2026) — the first version marked as working, frozen as-is:
+NIFTY / BANK NIFTY / FIN NIFTY options and MCX mini futures on Dhan (phone only, no server); login with
+client ID + PIN (TOTP made by the app) and logout; PAPER / LIVE with pre-flight check and static IP;
+Manual / Automatic entries; 3-minute hold before entry; entry cutoff 14:35; cheap-premium filters; sizing
+by risk, capital % or fixed lots (own stop %); Day plan lock and profit lock; live P&L; Screener for indexes
+and MCX; calibrated scoring (NIFTY unchanged); alerts with sound, background running; journal / decision
+log export; Portfolio strategy results.
+
+- Code: `git checkout v1.0`
+- APK: https://github.com/premgurusamy-bot/Nifty-mobile/releases/download/v1.0/nifty-trader.apk
+- New work continues on the development branch; the "latest" link keeps pointing at the newest build.
+
 ## What's in the app
 
 | Tab | Workbook equivalent |
