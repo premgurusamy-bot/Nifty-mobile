@@ -153,6 +153,8 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
     logins: 0,
     orders: [] as any[],
     nextId: 5000,
+    /** Market orders: null = fill at once; a number = stay OPEN with that quantity filled (0 = none). */
+    marketFill: null as number | null,
     cash: 250000.5,
     /** Tokens the fake accepts; RenewToken adds a new one. */
     tokens: new Set<string>([FAKE_TOKEN, FAKE_LONG_TOKEN]),
@@ -392,10 +394,11 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
       if (req.method === 'POST' && path === '/orders') {
         const orderId = String(state.nextId++);
         const isMarket = body.orderType === 'MARKET';
+        const hang = isMarket && state.marketFill != null;
         state.orders.push({
           dhanClientId: FAKE_CLIENT,
           orderId,
-          orderStatus: isMarket ? 'TRADED' : 'PENDING',
+          orderStatus: hang ? (state.marketFill! > 0 ? 'PART_TRADED' : 'TRANSIT') : isMarket ? 'TRADED' : 'PENDING',
           transactionType: body.transactionType,
           exchangeSegment: body.exchangeSegment,
           productType: body.productType,
@@ -407,11 +410,11 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
           price: body.price,
           triggerPrice: body.triggerPrice,
           averageTradedPrice: isMarket ? ltpOf(body.exchangeSegment, body.securityId) : 0,
-          filledQty: isMarket ? body.quantity : 0,
+          filledQty: hang ? state.marketFill : isMarket ? body.quantity : 0,
           createTime: istStamp(),
           updateTime: istStamp(),
         });
-        return send(200, { orderId, orderStatus: isMarket ? 'TRADED' : 'PENDING' });
+        return send(200, { orderId, orderStatus: hang ? 'TRANSIT' : isMarket ? 'TRADED' : 'PENDING' });
       }
       if (req.method === 'DELETE' && one) {
         const o = state.orders.find((x) => x.orderId === one[1]);

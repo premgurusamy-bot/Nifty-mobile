@@ -99,11 +99,16 @@ export interface EngineConfig {
   /** PAPER: the engine trades its signals on paper (like the workbook). LIVE: real Dhan orders, entries only via ENTER. */
   tradeMode: TradeMode;
   /**
-   * Multi-index: watch several index-option instruments at once (each with its own setup, hold and
-   * IV history), one trade at a time, the highest score wins; limits and the day plan are shared.
+   * Multi-index: watch several index-option instruments at once (each with its own setup, hold,
+   * IV history and open trade). Several indexes may be in a trade at the same time; when they
+   * qualify in the same cycle the higher score enters first (trade 1). Limits and the day plan are shared.
    */
   multiIndex: boolean;
   watchSymbols: string[];
+  /** Multi-index size while several index trades are open: SPLIT = each gets 1/N of the normal lots; FULL = each full size. */
+  multiSize: 'SPLIT' | 'FULL';
+  /** LIVE market entries: seconds to wait for the fill; not filled by then → the order is cancelled. */
+  entryFillSeconds: number;
   /** Runtime only (never saved): blocks new entries with this reason (multi-index: another index is in a trade). */
   watchOnly?: string;
   /** PAPER: the engine takes confirmed signals by itself (true) or waits for ENTER (false). */
@@ -208,6 +213,8 @@ export const DEFAULT_CONFIG: EngineConfig = {
   tradeMode: 'PAPER',
   multiIndex: false,
   watchSymbols: ['NIFTY', 'BANKNIFTY'],
+  multiSize: 'SPLIT',
+  entryFillSeconds: 5,
   autoEntryPaper: true,
   autoEntryLive: false,
   liveProduct: 'INTRADAY',
@@ -423,6 +430,8 @@ export const SYMBOL_STATE_KEYS = [
   'blockedReason',
   'liveAutoRequest',
   'lastFiredKey',
+  'position',
+  'pendingEntry',
 ] as const;
 export type SymbolState = Pick<EngineState, (typeof SYMBOL_STATE_KEYS)[number]>;
 

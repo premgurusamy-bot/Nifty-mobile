@@ -12,7 +12,19 @@ import { formatINR } from '../format.ts';
 import { EST_MARGIN_PCT, type EngineConfig } from './types.ts';
 
 /** Engine config plus the live account balance the runner fetched (CAPITAL sizing in LIVE). */
-export type SizingConfig = EngineConfig & { availableFunds?: number | null };
+export type SizingConfig = EngineConfig & {
+  availableFunds?: number | null;
+  /** Multi-index split sizing: share of the normal size this trade gets (1 = full; 0.5 = two trades open). */
+  sizeFactor?: number;
+};
+
+/** Multi-index: scale lots by the split factor (never below 1 lot). */
+function split(lots: number, cfg: SizingConfig): { lots: number; note: string } {
+  const f = cfg.sizeFactor;
+  if (!(f != null && f > 0 && f < 1) || lots < 1) return { lots, note: '' };
+  const n = Math.round(1 / f);
+  return { lots: Math.max(1, Math.floor(lots * f)), note: ` · split 1/${n} (${n} index trades)` };
+}
 
 const inr = (n: number) => formatINR(n, 0);
 
@@ -46,7 +58,7 @@ export function futuresMarginPerLot(price: number, cfg: EngineConfig): { margin:
  * Lots for one trade. riskPerLot = ₹ lost per lot at the stop; costPerLot = ₹ one lot
  * needs (premium × lot size, or margin). lots 0 + blocked when capital can't buy one lot.
  */
-export function sizeLots(
+function sizeLotsFull(
   cfg: SizingConfig,
   riskPerLot: number,
   costPerLot: number,
@@ -95,4 +107,16 @@ export function sizeLots(
     lots,
     sizing: `${what} ÷ ${inr(costPerLot)} ${costLabel} → ${lots} lot(s)${lots < raw ? ` (max ${cfg.maxLots})` : ''}`,
   };
+}
+
+export function sizeLots(
+  cfg: SizingConfig,
+  riskPerLot: number,
+  costPerLot: number,
+  costLabel = 'per lot',
+): { lots: number; sizing: string; blocked?: string } {
+  const r = sizeLotsFull(cfg, riskPerLot, costPerLot, costLabel);
+  if (r.blocked) return r;
+  const sp = split(r.lots, cfg);
+  return sp.note ? { lots: sp.lots, sizing: `${r.sizing}${sp.note} → ${sp.lots} lot(s)` } : r;
 }

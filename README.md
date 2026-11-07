@@ -250,17 +250,24 @@ Settings → Instrument → **Watch several indexes at once** (off by default; d
 NIFTY, FIN NIFTY optional). Every refresh loads and scores each watched index with its own setup, hold timer,
 IV history and calibrated score (`src/lib/engine/multi.ts`), against **one shared account**:
 
-- **One trade at a time.** The index in a trade manages it with its own prices; the others keep being scored
-  and alert, but entries are blocked ("In a NIFTY trade — watching only").
-- **Highest score wins** when several would enter in the same refresh; the others show "… taken instead" and
-  keep their setups.
+- **Each index has its own trade.** Several indexes can be in a trade at the same time; each manages its
+  position with its own prices (stops, T1, profit lock). If one loses, the other keeps running — the
+  no-revenge rule then stops new entries.
+- **Same-refresh signals all enter, no waiting for each other.** The higher score goes first and is trade 1
+  of the day plan; every gate (trades per day, cutoff, daily loss, day plan) is checked again for the next.
+- **Size** (Settings → Instrument): **Split** (default) — while N index trades are open, each new one gets
+  1/N of the normal lots (at least 1); **Full each** — every trade its normal size (the risk adds up).
+- **LIVE fill window** (Settings → Live order product, default 5 s): a market entry not filled within it is
+  cancelled at Dhan — no trade. If part of it filled, that part is kept as the position and gets its
+  exchange stop-loss. The orders go one right after the other (higher score first), so the second waits at
+  most the fill window.
 - **Shared limits:** trades per day, the no-revenge rule, daily max loss, the entry cutoff and the day plan
-  (trade 1 / trade 2) count across all indexes.
-- The Dashboard shows every watched index at the top; the details below and the ENTER button follow the index
-  in a trade, otherwise the one you tapped, otherwise the highest score. PAPER / LIVE, Manual / Automatic
-  behave as before (LIVE orders go to the active index's contract).
-- Dhan allows one option chain per 3 s, so with two indexes each refreshes about every 6 s; an open trade's
-  P&L is still quoted every 2 s.
+  count across all indexes.
+- The Dashboard shows every watched index at the top, each with its trade and P&L; tap one to see its details
+  and ENTER / EXIT on it. Today's P&L includes the other indexes' open trades. Multi-index can't be switched
+  off while another index still has a trade open.
+- Dhan allows one option chain per 3 s, so with two indexes each refreshes about every 6 s; the trade shown
+  on the Dashboard is still quoted every 2 s.
 
 ## Day plan lock
 

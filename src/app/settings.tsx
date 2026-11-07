@@ -506,10 +506,19 @@ export default function SettingsScreen() {
                     );
                   })}
                 </View>
+                <Text style={s.label}>Size while several index trades are open</Text>
+                <Segmented
+                  options={[
+                    { label: 'Split', value: 'SPLIT' as const },
+                    { label: 'Full each', value: 'FULL' as const },
+                  ]}
+                  value={cfg.multiSize ?? 'SPLIT'}
+                  onChange={(v) => void updateConfig({ multiSize: v }).catch((e) => setInstMsg((e as Error).message))}
+                />
                 <Text style={[ui.muted, { fontSize: 12 }]}>
                   {isFut
-                    ? 'Multi-index works with index options: pick NIFTY 50, BANK NIFTY or FIN NIFTY above to use it.'
-                    : `Each watched index gets its own setup, ${cfg.confirmHoldMinutes}-minute hold, IV history and calibrated score. One trade at a time: if two are ready together, the higher score enters and the other keeps watching. Trades per day, the no-revenge rule, daily max loss, the cutoff and the day plan count across all of them. Dhan allows one option chain per 3 s, so with ${cfg.watchSymbols.length} indexes each refreshes about every ${cfg.watchSymbols.length * 3} s; an open trade is still priced every 2 s.`}
+                    ? 'Multi-index works with index options: pick NIFTY 50 or BANK NIFTY above to use it.'
+                    : `Each watched index gets its own setup, ${cfg.confirmHoldMinutes}-minute hold, IV history, calibrated score and its own trade. If several are ready in the same refresh, all enter at once — the higher score first (it is trade 1 of the day plan). ${(cfg.multiSize ?? 'SPLIT') === 'SPLIT' ? 'Split: with 2 trades open each gets half the lots (at least 1).' : 'Full each: every trade gets its normal lots — the risk adds up.'} If one trade loses, the other keeps running; the no-revenge rule then stops new entries. Trades per day, daily max loss, the cutoff and the day plan count across all of them. Dhan allows one option chain per 3 s, so with ${cfg.watchSymbols.length} indexes each refreshes about every ${cfg.watchSymbols.length * 3} s.`}
                 </Text>
               </>
             ) : null}
@@ -602,6 +611,18 @@ export default function SettingsScreen() {
                 value={cfg.liveProduct}
                 onChange={(v) => void updateConfig({ liveProduct: v }).catch((e) => setIpMsg(`Failed: ${e.message}`))}
               />
+              <Text style={s.label}>Entry fill window (market orders)</Text>
+              <Segmented
+                options={['3', '5', '10', '15'].map((n) => ({ label: `${n} s`, value: n }))}
+                value={String(cfg.entryFillSeconds ?? 5)}
+                onChange={(v) =>
+                  void updateConfig({ entryFillSeconds: Number(v) }).catch((e) => setIpMsg(`Failed: ${e.message}`))
+                }
+              />
+              <Text style={[ui.muted, { fontSize: 12 }]}>
+                An entry not filled within this time is cancelled at Dhan — no trade. If part of it filled, that part
+                is kept as the position and gets its stop-loss.
+              </Text>
             </>
           ) : null}
         </Card>

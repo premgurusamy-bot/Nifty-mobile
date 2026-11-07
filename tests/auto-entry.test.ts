@@ -116,3 +116,49 @@ test('LIVE automatic respects the gates; switched off → nothing is sent', asyn
   assert.equal(ordersSent().length, n);
   assert.equal(m.runner.state.position, null);
 });
+
+test('LIVE entry not filled within the fill window → cancelled at Dhan, no position', async () => {
+  const { runner, trader } = await liveRunner({ autoEntryLive: true, entryFillSeconds: 5 });
+  fake.state.marketFill = 0; // the market order sits there unfilled
+  try {
+    const n = ordersSent().length;
+    runner.state = { ...runner.state, liveAutoRequest: 'no-fill' };
+    await trader.afterCycle(runner, runner.state, runner.state);
+    const sent = ordersSent().slice(n);
+    assert.equal(sent.length, 1); // the buy only: no stop for a trade that didn't happen
+    const order = fake.state.orders.at(-1);
+    assert.equal(order.orderStatus, 'CANCELLED');
+    assert.ok(fake.requests.some((q) => q.method === 'DELETE' && q.path === `/orders/${order.orderId}`));
+    assert.equal(runner.state.position, null);
+    assert.match(runner.status, /not filled in 5 s — cancelled, no trade/);
+  } finally {
+    fake.state.marketFill = null;
+  }
+});
+
+test('LIVE entry partly filled in the window → the rest is cancelled, the filled part is kept with its stop', async () => {
+  const { runner, trader } = await liveRunner({ sizingMode: 'FIXED', fixedLots: 2 });
+  const lot = runner.config.lotSize;
+  fake.state.marketFill = lot; // 1 of the 2 lots fills
+  try {
+    const n = ordersSent().length;
+    const pos = await trader.enter(runner);
+    const [buy, stop] = ordersSent().slice(n);
+    assert.equal(buy.quantity, 2 * lot);
+    assert.equal(fake.state.orders.find((o: any) => o.orderType === 'MARKET' && o.quantity === 2 * lot)?.orderStatus, 'CANCELLED');
+    assert.equal(pos!.remainingQty, lot);
+    assert.deepEqual([stop.orderType, stop.quantity], ['STOP_LOSS', lot]);
+    assert.match(runner.status, /^Entry partly filled \(\d+ of \d+\)/);
+  } finally {
+    fake.state.marketFill = null;
+  }
+});
+
+test('settings: entry fill window 1–30 s (default 5); multi-index size SPLIT (default) or FULL', () => {
+  assert.equal(DEFAULT_CONFIG.entryFillSeconds, 5);
+  assert.equal(DEFAULT_CONFIG.multiSize, 'SPLIT');
+  assert.equal(sanitizeConfig({ entryFillSeconds: 10 }, DEFAULT_CONFIG).entryFillSeconds, 10);
+  assert.throws(() => sanitizeConfig({ entryFillSeconds: 0 }, DEFAULT_CONFIG), /1–30 seconds/);
+  assert.equal(sanitizeConfig({ multiSize: 'FULL' }, DEFAULT_CONFIG).multiSize, 'FULL');
+  assert.throws(() => sanitizeConfig({ multiSize: 'X' as never }, DEFAULT_CONFIG), /SPLIT or FULL/);
+});

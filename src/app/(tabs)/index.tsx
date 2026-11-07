@@ -212,8 +212,15 @@ export default function DashboardScreen() {
               <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
                 <Text style={ui.title}>
                   {w.label}
-                  {w.inTrade ? '  · IN TRADE' : w.active ? '  · shown below' : ''}
+                  {w.inTrade ? '  · IN TRADE' : w.pendingEntry ? '  · ORDER PENDING' : ''}
+                  {w.active ? '  · shown below' : ''}
                 </Text>
+                {w.trade ? (
+                  <Text style={{ fontWeight: '700', color: w.trade.pnl == null ? colors.muted : pnlColor(w.trade.pnl) }}>
+                    {w.trade.label} × {w.trade.qty} @ {formatNumber(w.trade.entry)}
+                    {w.trade.pnl == null ? '' : `  ${w.trade.pnl >= 0 ? '+' : '−'}${formatINR(Math.abs(w.trade.pnl), 0)}`}
+                  </Text>
+                ) : null}
                 <Text style={[ui.muted, { fontSize: 12 }]} numberOfLines={2}>
                   {w.error ? `Error: ${w.error}` : w.decision}
                 </Text>
@@ -228,7 +235,7 @@ export default function DashboardScreen() {
               </View>
             </Pressable>
           ))}
-          <Text style={[ui.muted, { fontSize: 11 }]}>Tap an index to see its details and ENTER on it (not while a trade is open).</Text>
+          <Text style={[ui.muted, { fontSize: 11 }]}>Tap an index to see its details and ENTER / EXIT on it. Each index can be in its own trade.</Text>
         </Card>
       ) : null}
       {snap.live ? (

@@ -2,7 +2,8 @@
  * Live order execution for the option-buying engine (LIVE mode).
  *
  * Safety model:
- *  - Entries are never automatic: only `enter()` (the app's ENTER button) buys.
+ *  - Entries: the app's ENTER button, or the LIVE automatic switch. A market entry that isn't
+ *    filled within the fill window (default 5 s) is cancelled; a part that filled is kept.
  *  - Every live entry gets an exchange-side STOP_LOSS sell order at the plan's
  *    SL, so the position stays protected even when the app is closed.
  *  - While the app runs, the engine's T1 (book half, trail SL to breakeven),
@@ -21,6 +22,8 @@ import { underlyingFor, type DhanService } from './service.ts';
 
 const FILL_TIMEOUT_MS = 15_000;
 const FILL_POLL_MS = 1000;
+/** Entries poll faster: the fill window is short (Settings, default 5 s). */
+const ENTRY_POLL_MS = 500;
 
 export interface Fill {
   orderId: string;
@@ -80,8 +83,9 @@ export class LiveTrader {
   }
 
   /** Poll until the order is TRADED (or definitively not). */
-  async waitFill(orderId: string, timeoutMs = FILL_TIMEOUT_MS): Promise<Fill> {
+  async waitFill(orderId: string, timeoutMs = FILL_TIMEOUT_MS, pollMs = FILL_POLL_MS): Promise<Fill> {
     const until = Date.now() + timeoutMs;
+    let waited = 0; // also counted, so an injected (test) sleep ends the wait too
     for (;;) {
       const o = await this.order(orderId);
       const status = upper(o?.orderStatus);
@@ -96,9 +100,10 @@ export class LiveTrader {
       if (status === 'REJECTED' || status === 'CANCELLED' || status === 'EXPIRED') {
         throw new Error(`Order ${orderId} ${status}${o?.omsErrorDescription ? `: ${o.omsErrorDescription}` : ''}`);
       }
-      if (Date.now() > until)
+      if (Date.now() > until || waited >= timeoutMs)
         throw new Error(`Order ${orderId} not filled yet (${status || 'unknown'}) — check Dhan → Orders`);
-      await this.sleep(FILL_POLL_MS);
+      await this.sleep(pollMs);
+      waited += pollMs;
     }
   }
 
@@ -138,6 +143,35 @@ export class LiveTrader {
       price: 0,
     });
     return this.waitFill(String(res.orderId));
+  }
+
+  /**
+   * Market entry with a fill window: filled within `seconds` → keep it. Not (fully) filled by
+   * then → cancel the order at Dhan; a part that did fill is kept (it is a real position and
+   * gets its stop), nothing filled → throws, no position.
+   */
+  private async marketEntry(securityId: string, side: 'BUY' | 'SELL', qty: number, c: OrderCtx, seconds: number): Promise<Fill> {
+    const res = await this.dhan.placeOrder({
+      securityId,
+      exchangeSegment: c.segment,
+      transactionType: side,
+      quantity: qty,
+      orderType: 'MARKET',
+      productType: c.product,
+      price: 0,
+    });
+    const orderId = String(res.orderId);
+    try {
+      return await this.waitFill(orderId, seconds * 1000, ENTRY_POLL_MS);
+    } catch (e) {
+      if (!/not filled yet/.test((e as Error).message)) throw e; // rejected / cancelled: nothing to undo
+    }
+    await this.cancelQuietly(orderId);
+    const o = await this.order(orderId).catch(() => null);
+    const f = this.fillOf(orderId, o);
+    if (f.filledQty > 0) return f; // filled (fully, or partly) before the cancel landed
+    if (!o) throw new Error(`Order ${orderId} not filled in ${seconds} s — cancel sent, but its status couldn't be read: check Dhan → Orders`);
+    throw new Error(`Order ${orderId} not filled in ${seconds} s — cancelled, no trade`);
   }
 
   /** Protective stop for a position of `posSide` (+1 long → SELL stop below; -1 short → BUY stop above). */
@@ -184,8 +218,11 @@ export class LiveTrader {
       const securityId = await this.securityIdFor(cfg, plan, expiry);
       const side = sideOf(plan.direction);
       if (limit == null) {
-        const fill = await this.marketOrder(securityId, openSide(side), plan.qty, c);
-        return await this.opened(runner, plan, securityId, fill, opts.auto);
+        const fill = await this.marketEntry(securityId, openSide(side), plan.qty, c, cfg.entryFillSeconds ?? 5);
+        const pos = await this.opened(runner, plan, securityId, fill, opts.auto);
+        if (fill.filledQty < plan.qty)
+          runner.status = `Entry partly filled (${fill.filledQty} of ${plan.qty}) — the rest was cancelled; stop placed for ${fill.filledQty}`;
+        return pos;
       }
       validateLimit(limit, c.tick);
       const res = await this.dhan.placeOrder({
@@ -330,7 +367,8 @@ export class LiveTrader {
           // Same path as tapping ENTER at market: every gate (time cutoff, daily limits, premium
           // filters, lot cap, capital) is checked again, and the exchange stop-loss goes in on fill.
           const pos = await this.enter(runner, undefined, { auto: true });
-          if (pos) runner.status = `Automatic LIVE entry filled: ${pos.remainingQty} @ ${pos.entry.toFixed(2)}`;
+          if (pos && !/^Entry partly filled/.test(runner.status))
+            runner.status = `Automatic LIVE entry filled: ${pos.remainingQty} @ ${pos.entry.toFixed(2)}`;
         } catch (e) {
           runner.status = `Live order error - automatic entry failed: ${(e as Error).message}`;
         }

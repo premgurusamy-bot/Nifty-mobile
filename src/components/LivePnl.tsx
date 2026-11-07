@@ -72,13 +72,25 @@ export function LivePnlCard({
         </>
       ) : null}
 
+      {live.othersCount ? (
+        <Text style={st.small}>
+          Other index trade(s): {signedINR(live.othersPnl ?? 0)} open (last refresh)
+        </Text>
+      ) : null}
+
       <View style={st.row}>
         <View style={{ flex: 1 }}>
           <Text style={st.small}>Booked today</Text>
           <Text style={[st.mid, { color: pnlColor(live.realizedToday) }]}>{signedINR(live.realizedToday)}</Text>
         </View>
         <View style={{ flex: 1, alignItems: 'flex-end' }}>
-          <Text style={st.small}>{position ? 'Today incl. open trade' : 'No open trade'}</Text>
+          <Text style={st.small}>
+            {live.othersCount
+              ? `Today incl. ${position ? live.othersCount + 1 : live.othersCount} open trade(s)`
+              : position
+                ? 'Today incl. open trade'
+                : 'No open trade'}
+          </Text>
           <Text accessibilityLabel="Today total P&L" style={[st.mid, { color: pnlColor(live.dayPnl) }]}>
             {signedINR(live.dayPnl)}
           </Text>
