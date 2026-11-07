@@ -477,6 +477,42 @@ export default function SettingsScreen() {
                 <Chip key={c.symbol} label={c.label} active={cfg.symbol === c.symbol} onPress={() => pick(c.symbol)} />
               ))}
             </View>
+            <View style={s.switchRow}>
+              <Text style={s.label}>Watch several indexes at once (multi-index)</Text>
+              <Switch
+                value={cfg.multiIndex}
+                onValueChange={(v) =>
+                  void updateConfig({ multiIndex: v }).catch((e) => setInstMsg((e as Error).message))
+                }
+                accessibilityLabel="Multi-index"
+              />
+            </View>
+            {cfg.multiIndex ? (
+              <>
+                <Text style={s.label}>Watch</Text>
+                <View style={s.chips}>
+                  {INDEXES.map((c) => {
+                    const on = cfg.watchSymbols.includes(c.symbol);
+                    return (
+                      <Chip
+                        key={c.symbol}
+                        label={`${on ? '✓ ' : ''}${c.label}`}
+                        active={on}
+                        onPress={() => {
+                          const next = on ? cfg.watchSymbols.filter((x) => x !== c.symbol) : [...cfg.watchSymbols, c.symbol];
+                          void updateConfig({ watchSymbols: next }).catch((e) => setInstMsg((e as Error).message));
+                        }}
+                      />
+                    );
+                  })}
+                </View>
+                <Text style={[ui.muted, { fontSize: 12 }]}>
+                  {isFut
+                    ? 'Multi-index works with index options: pick NIFTY 50, BANK NIFTY or FIN NIFTY above to use it.'
+                    : `Each watched index gets its own setup, ${cfg.confirmHoldMinutes}-minute hold, IV history and calibrated score. One trade at a time: if two are ready together, the higher score enters and the other keeps watching. Trades per day, the no-revenge rule, daily max loss, the cutoff and the day plan count across all of them. Dhan allows one option chain per 3 s, so with ${cfg.watchSymbols.length} indexes each refreshes about every ${cfg.watchSymbols.length * 3} s; an open trade is still priced every 2 s.`}
+                </Text>
+              </>
+            ) : null}
             <Text style={s.label}>MCX futures — mini contracts (long / short)</Text>
             <View style={s.chips}>
               {MCX.map((c) => (

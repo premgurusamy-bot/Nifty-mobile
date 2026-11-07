@@ -63,6 +63,8 @@ export interface PhoneTrading {
   /** Register (or replace) the PRIMARY whitelisted IP at Dhan. */
   registerStaticIp: (ip: string) => Promise<string[]>;
   dhanIps: () => Promise<string[]>;
+  /** Multi-index: make a watched index the one shown / entered on (no trade or limit order open). */
+  engineSetActive: (symbol: string) => Promise<EngineSnapshot>;
   /** Screen the indexes (~10 s: one option chain per 3 s) or the MCX minis on live data. */
   screener: (group?: ScreenGroup) => Promise<ScreenReport>;
 }
@@ -221,6 +223,10 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
       return extractIps(await dhan.getIP());
     },
     dhanIps: async () => extractIps(await dhan.getIP()),
+    engineSetActive: async (symbol: string) => {
+      await engine.setActive(symbol);
+      return engine.snapshot();
+    },
     screener: (group?: ScreenGroup) =>
       screenAll({
         group,

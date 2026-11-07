@@ -23,8 +23,8 @@ function nextSessionStart(t: number): number {
   return istToEpoch(d.toISOString().slice(0, 10), 9, 15);
 }
 
-export class SimEngineSource implements EngineDataSource {
-  alwaysOpen = true;
+/** One simulated instrument (its own random market and clock). */
+class SymbolSim {
   private rand: () => number = mulberry32(1);
   private candles: Candle[] = [];
   private drift = 0;
@@ -39,10 +39,21 @@ export class SimEngineSource implements EngineDataSource {
   private seed: number;
   private startDay: string;
 
-  constructor(seed = 7, startDay = '2026-08-24') {
+  constructor(seed: number, startDay: string, symbol: string, price: number, tick: number) {
     this.seed = seed;
     this.startDay = startDay;
-    this.reseed('NIFTY', 24200);
+    this.tick = tick;
+    this.reseed(symbol, price);
+  }
+
+  /** Bring a newly opened instrument up to the other instruments' clock. */
+  catchUp(t: number) {
+    for (let i = 0; i < BARS_PER_DAY * 60 && this.now() < t; i++) {
+      const last = this.candles[this.candles.length - 1];
+      this.candles.push(this.makeCandle(this.nextT, last.c));
+      this.nextT = this.advance(this.nextT);
+      if (this.candles.length > BARS_PER_DAY * 4) this.candles = this.candles.slice(-BARS_PER_DAY * 4);
+    }
   }
 
   /** (Re)build three sessions of history at this instrument's price level. */
@@ -139,10 +150,6 @@ export class SimEngineSource implements EngineDataSource {
   }
 
   async load(cfg: EngineConfig) {
-    if (cfg.symbol !== this.symbol) {
-      this.tick = cfg.instrumentKind === 'MCX_FUTURES' ? cfg.tickSize || 0.05 : 0.05;
-      this.reseed(cfg.symbol, catalogEntry(cfg.symbol)?.demoPrice ?? 24200);
-    }
     if (cfg.instrumentKind === 'MCX_FUTURES') {
       const last = this.candles[this.candles.length - 1];
       this.candles.push(this.makeCandle(this.nextT, last.c));
@@ -166,3 +173,45 @@ export class SimEngineSource implements EngineDataSource {
     return { candles, chain: this.chain(spot, this.now(), cfg) };
   }
 }
+
+/**
+ * Demo data source: one simulated market per instrument (so several indexes can be watched at
+ * once), all on one shared clock. Every load of an instrument advances it by one 5-min candle.
+ */
+export class SimEngineSource implements EngineDataSource {
+  alwaysOpen = true;
+  private sims = new Map<string, SymbolSim>();
+  private seed: number;
+  private startDay: string;
+  private lastNow = 0;
+
+  constructor(seed = 7, startDay = '2026-08-24') {
+    this.seed = seed;
+    this.startDay = startDay;
+  }
+
+  private sim(cfg: EngineConfig): SymbolSim {
+    let sim = this.sims.get(cfg.symbol);
+    if (!sim) {
+      const tick = cfg.instrumentKind === 'MCX_FUTURES' ? cfg.tickSize || 0.05 : 0.05;
+      // A different but repeatable market per instrument (NIFTY keeps the original seed).
+      const salt = cfg.symbol === 'NIFTY' ? 0 : [...cfg.symbol].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) % 9973, 0);
+      sim = new SymbolSim(this.seed + salt, this.startDay, cfg.symbol, catalogEntry(cfg.symbol)?.demoPrice ?? 24200, tick);
+      if (this.lastNow) sim.catchUp(this.lastNow - FIVE_MIN);
+      this.sims.set(cfg.symbol, sim);
+    }
+    return sim;
+  }
+
+  now() {
+    return this.lastNow || this.sim({ symbol: 'NIFTY', instrumentKind: 'INDEX_OPTIONS' } as EngineConfig).now();
+  }
+
+  async load(cfg: EngineConfig) {
+    const sim = this.sim(cfg);
+    const out = await sim.load(cfg);
+    this.lastNow = Math.max(this.lastNow, sim.now());
+    return out;
+  }
+}
+

@@ -100,6 +100,7 @@ export function pastEntryCutoff(cfg: EngineConfig, now: number): boolean {
 
 /** CanTakeNewTrade: entry cutoff time, max trades/day, no-revenge-trade, rupee daily max loss. */
 export function canTakeNewTrade(s: EngineState, cfg: EngineConfig, now?: number): { ok: boolean; reason: string } {
+  if (cfg.watchOnly) return { ok: false, reason: cfg.watchOnly };
   if (now != null && pastEntryCutoff(cfg, now)) {
     return { ok: false, reason: `No new trades after ${entryCutoff(cfg).trim()} IST` };
   }

@@ -35,6 +35,8 @@ interface EngineValue {
   /** Returns the pre-flight result when switching to LIVE (null otherwise); LIVE only applies if it passed. */
   setTradeMode: (mode: TradeMode) => Promise<PreflightResult | null>;
   preflight: () => Promise<PreflightResult>;
+  /** Multi-index: show / ENTER on this watched index. */
+  setActive: (symbol: string) => Promise<void>;
   /** Screen the indexes or the MCX minis now (live in phone mode, simulated in demo). */
   screener: (group?: ScreenGroup) => Promise<ScreenReport>;
 }
@@ -241,6 +243,18 @@ export function EngineProvider({ children }: { children: ReactNode }) {
     return phoneApi.preflight();
   }, [phoneApi]);
 
+  const setActive = useCallback(
+    (symbol: string) =>
+      run(async () => {
+        if (phoneApi) return phoneApi.engineSetActive(symbol);
+        if (api) throw new Error('Multi-index runs on the phone (not through a server).');
+        const r = demo.current!;
+        await r.setActive(symbol);
+        return r.snapshot(true);
+      }),
+    [api, phoneApi, run],
+  );
+
   // Demo screener: one simulated market per index, kept between scans so it moves on.
   const demoSims = useRef<Record<string, SimEngineSource>>({});
   const screener = useCallback(async (group: ScreenGroup = 'INDEX'): Promise<ScreenReport> => {
@@ -285,6 +299,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
       setTradeMode,
       preflight,
       screener,
+      setActive,
     }),
     [
       mode,
@@ -303,6 +318,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
       setTradeMode,
       preflight,
       screener,
+      setActive,
     ],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

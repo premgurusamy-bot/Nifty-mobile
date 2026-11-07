@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Platform,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -46,7 +47,7 @@ const time = (ms: number | null) => {
 };
 
 export default function DashboardScreen() {
-  const { snap, busy, error, refresh, updateConfig, mode, phone, enter, cancelEntry, exit, setTradeMode } = useEngine();
+  const { snap, busy, error, refresh, updateConfig, mode, phone, enter, cancelEntry, exit, setTradeMode, setActive } = useEngine();
   // null = follow the market premium; a string = the price you typed.
   const [priceEdit, setPriceText] = useState<string | null>(null);
   const [toggling, setToggling] = useState(false);
@@ -197,6 +198,39 @@ export default function DashboardScreen() {
           <Switch value={cfg.autoRefresh} disabled={toggling} onValueChange={toggleAuto} />
         </View>
       </View>
+      {snap.watch ? (
+        <Card style={{ gap: 8 }}>
+          <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Watching {snap.watch.length} indexes</Text>
+          {snap.watch.map((w) => (
+            <Pressable
+              key={w.symbol}
+              onPress={() => (w.active ? undefined : void setActive(w.symbol).catch((e) => setTradeMsg((e as Error).message)))}
+              accessibilityRole="button"
+              accessibilityLabel={`${w.label} ${w.confidence ?? ''}`}
+              style={[s.watchRow, w.active && { borderColor: colors.accent }]}
+            >
+              <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                <Text style={ui.title}>
+                  {w.label}
+                  {w.inTrade ? '  · IN TRADE' : w.active ? '  · shown below' : ''}
+                </Text>
+                <Text style={[ui.muted, { fontSize: 12 }]} numberOfLines={2}>
+                  {w.error ? `Error: ${w.error}` : w.decision}
+                </Text>
+              </View>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={[s.watchScore, { color: signalColor(w.signal as never) }]}>
+                  {w.confidence == null ? '—' : w.confidence.toFixed(1)}
+                </Text>
+                <Text style={[ui.muted, { fontSize: 11 }]}>
+                  {w.direction} {w.strike || ''}
+                </Text>
+              </View>
+            </Pressable>
+          ))}
+          <Text style={[ui.muted, { fontSize: 11 }]}>Tap an index to see its details and ENTER on it (not while a trade is open).</Text>
+        </Card>
+      ) : null}
       {snap.live ? (
         <LivePnlCard
           live={snap.live}
@@ -611,6 +645,16 @@ const s = StyleSheet.create({
   signal: { fontSize: 34, fontWeight: '800', letterSpacing: 0.5 },
   banner: { color: '#fff', backgroundColor: '#7F1D1D', padding: 10, borderRadius: 10, fontWeight: '600' },
   label: { color: colors.muted, fontSize: 12 },
+  watchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    padding: 10,
+  },
+  watchScore: { fontSize: 20, fontWeight: '800', fontVariant: ['tabular-nums'] },
   input: {
     backgroundColor: colors.cardAlt,
     borderColor: colors.border,

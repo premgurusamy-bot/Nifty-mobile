@@ -17,6 +17,7 @@ import { findStrike, legOf } from './indicators.ts';
 import { catalogEntry, CATALOG } from './catalog.ts';
 import { buildFuturesPlan } from './futures.ts';
 import { sizingCapital, type SizingConfig } from './sizing.ts';
+import { blankSymbolState, pickSymbolState, runMultiCycle } from './multi.ts';
 import {
   DEFAULT_CONFIG,
   MAX_FIXED_STOP_PCT,
@@ -36,6 +37,7 @@ import {
   type CycleLogRow,
   type JournalRow,
   type OpenPosition,
+  type SymbolState,
 } from './types.ts';
 
 /** The MCX futures contract the engine is trading (current month, rolled before expiry). */
@@ -82,6 +84,20 @@ export interface EngineExport {
   tradesToday: number;
 }
 
+export interface WatchItem {
+  symbol: string;
+  label: string;
+  active: boolean;
+  inTrade: boolean;
+  confidence: number | null;
+  signal: string;
+  direction: string;
+  strike: number;
+  decision: string;
+  spot: number | null;
+  error?: string;
+}
+
 export interface LivePnl {
   /** Latest price of the open position (fast ticker, else the last refresh). */
   ltp: number | null;
@@ -120,6 +136,8 @@ export interface EngineSnapshot {
   demo: boolean;
   /** Running P&L: today's realized, the open trade at the latest price, and their total. */
   live: LivePnl;
+  /** Multi-index: every watched index at a glance (absent when off). */
+  watch?: WatchItem[];
   /** Capital-based sizing: the capital a trade may use now (CAPITAL mode only). */
   capital?: { capital: number; base: number; source: string; funds: number | null };
 }
@@ -182,6 +200,15 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   num('refreshSeconds', MIN_REFRESH_SECONDS, 3600);
   if (patch.autoRefresh !== undefined) next.autoRefresh = !!patch.autoRefresh;
   if (patch.autoEntryPaper !== undefined) next.autoEntryPaper = !!patch.autoEntryPaper;
+  if (patch.multiIndex !== undefined) next.multiIndex = !!patch.multiIndex;
+  if (patch.watchSymbols !== undefined) {
+    const list = [...new Set((patch.watchSymbols ?? []).map((x) => String(x).toUpperCase()))];
+    for (const x of list)
+      if (catalogEntry(x)?.kind !== 'INDEX_OPTIONS') throw new Error(`${x} can't be watched in multi-index mode (index options only)`);
+    if (!list.length) throw new Error('Watch at least one index');
+    next.watchSymbols = list;
+  }
+  delete next.watchOnly; // runtime only
   if (patch.autoEntryLive !== undefined) next.autoEntryLive = !!patch.autoEntryLive;
   if (patch.alertsEnabled !== undefined) next.alertsEnabled = !!patch.alertsEnabled;
   if (patch.tradeMode !== undefined) {
@@ -288,6 +315,12 @@ export class EngineRunner {
   mark: { ltp: number; at: number; key: string } | null = null;
   private lastLoggedCandle = 0;
   private lastSaveAt = 0;
+  /** Multi-index: the latest dashboard / data of every watched index, and load errors. */
+  multiDash: Record<string, Dashboard> = {};
+  private multiData: Record<string, { candles: Candle[]; chain: ChainSnapshot }> = {};
+  multiErrors: Record<string, string> = {};
+  /** Multi-index: the index you picked to look at / ENTER on (until a trade opens). */
+  private pinnedActive: string | null = null;
   private lastSaveKey = '';
   /** Fetches the live account balance (phone / server with Dhan); null in demo. */
   fundsSource: (() => Promise<number>) | null = null;
@@ -311,6 +344,139 @@ export class EngineRunner {
     const saved = await this.store.load().catch(() => null);
     if (saved?.state) this.state = { ...initialEngineState(), ...saved.state };
     if (saved?.config) this.config = migrateConfig({ ...DEFAULT_CONFIG, ...saved.config }, saved.config);
+  }
+
+  // ---------------------------------------------------------------- multi-index
+
+  /** Multi-index is on and there are several index-option instruments to watch. */
+  multiActive(): boolean {
+    const c = this.config;
+    return !!c.multiIndex && c.instrumentKind === 'INDEX_OPTIONS' && this.watchList().length >= 2;
+  }
+
+  watchList(): string[] {
+    return (this.config.watchSymbols ?? []).filter((s) => catalogEntry(s)?.kind === 'INDEX_OPTIONS');
+  }
+
+  /** The engine settings for one watched index: its own contract preset, your strategy settings. */
+  private cfgFor(symbol: string): SizingConfig {
+    const base = symbol === this.config.symbol ? this.config : sanitizeConfig({ symbol }, this.config);
+    return { ...base, availableFunds: this.funds };
+  }
+
+  /** Make a watched index the active one (its per-index state mirrored into the main state). */
+  private useWatched(symbol: string) {
+    const w = this.state.watch ?? {};
+    const own = w[symbol] ?? blankSymbolState(this.state.ivBank?.[symbol] ?? []);
+    this.state = { ...this.state, ...own, watch: { ...w, [symbol]: own } };
+    if (symbol !== this.config.symbol) this.config = sanitizeConfig({ symbol }, this.config);
+    this.dashboard = this.multiDash[symbol] ?? null;
+    this.lastChain = this.multiData[symbol]?.chain ?? null;
+    this.candles = this.multiData[symbol]?.candles ?? [];
+  }
+
+  /** Back to one index: the others' IV histories go to the bank, the per-index map is dropped. */
+  private leaveMulti(keep: string) {
+    const w = this.state.watch ?? {};
+    const bank = { ...(this.state.ivBank ?? {}) };
+    for (const [sym, st] of Object.entries(w)) if (sym !== keep) bank[sym] = st.ivHistory;
+    const own = w[keep];
+    delete bank[keep];
+    const { watch: _w, ...rest } = this.state;
+    this.state = { ...rest, ...(own ?? {}), ivBank: bank } as EngineState;
+    this.multiDash = {};
+    this.multiData = {};
+    this.multiErrors = {};
+    this.pinnedActive = null;
+  }
+
+  /** Multi-index: look at / ENTER on this watched index (not while a trade or limit order is open). */
+  async setActive(symbol: string) {
+    if (!this.multiActive() || !this.watchList().includes(symbol)) throw new Error(`${symbol} is not being watched`);
+    if (this.state.position) throw new Error('A trade is open — its index stays active until it exits.');
+    if (this.state.pendingEntry) throw new Error('Cancel the pending entry order first.');
+    this.useWatched(symbol);
+    this.pinnedActive = symbol;
+    await this.store.save(this.state, this.config);
+  }
+
+  private async doMultiRefresh(now: number) {
+    const symbols = this.watchList();
+    if (!this.state.watch) {
+      // Starting multi-index: the current index keeps its state, the others start from their IV banks.
+      const w: Record<string, SymbolState> = {};
+      for (const sym of symbols)
+        w[sym] = sym === this.config.symbol ? pickSymbolState(this.state) : blankSymbolState(this.state.ivBank?.[sym] ?? []);
+      this.state = { ...this.state, watch: w };
+    }
+    const data: Record<string, { candles: Candle[]; chain: ChainSnapshot }> = {};
+    const loadErr: Record<string, string> = {};
+    for (const sym of symbols) {
+      try {
+        const d = await this.source.load(this.cfgFor(sym), now);
+        data[sym] = { candles: d.candles, chain: d.chain };
+      } catch (e) {
+        loadErr[sym] = (e as Error).message;
+      }
+    }
+    if (!Object.keys(data).length) {
+      const msg = Object.values(loadErr)[0] ?? 'no data';
+      this.status = `Error - ${msg}`;
+      this.logCycle(now, 'ERROR');
+      if (/token|DH-901|401/i.test(msg)) {
+        this.banner =
+          'Dhan unavailable - token likely expired (tokens expire every 24h). Regenerate in Dhan Web > Profile > DhanHQ Trading APIs.';
+      }
+      return;
+    }
+    this.banner = '';
+    try {
+      const before = this.state;
+      await this.refreshFunds();
+      const res = runMultiCycle(this.state, this.state.watch!, symbols, (s) => this.cfgFor(s), data, now);
+      // Which index the Dashboard and ENTER use.
+      let active = this.config.symbol;
+      const conf = (s: string) => res.dashboards[s]?.decision.confidence ?? -1;
+      if (res.shared.position) active = res.shared.position.symbol ?? active;
+      else if (res.shared.pendingEntry) active = this.config.symbol;
+      else if (res.winner) active = res.winner;
+      else if (this.pinnedActive && res.dashboards[this.pinnedActive]) active = this.pinnedActive;
+      else {
+        const best = symbols.filter((s) => res.dashboards[s]).sort((a, b) => conf(b) - conf(a))[0];
+        // Small hysteresis so the view doesn't flip on every refresh.
+        if (best && (!res.dashboards[active] || conf(best) >= conf(active) + 2)) active = best;
+      }
+      if (res.winner || res.shared.position) this.pinnedActive = null;
+      this.multiDash = res.dashboards;
+      this.multiData = data;
+      this.multiErrors = { ...loadErr, ...res.errors };
+      this.state = { ...res.shared, ...res.watch[active], watch: res.watch };
+      if (active !== this.config.symbol) this.config = sanitizeConfig({ symbol: active }, this.config);
+      this.dashboard = res.dashboards[active] ?? null;
+      this.candles = data[active]?.candles ?? [];
+      this.lastChain = data[active]?.chain ?? null;
+      await this.fillPaperEntry();
+      this.status = Object.keys(this.multiErrors).length
+        ? `Ready · ${Object.entries(this.multiErrors).map(([s, m]) => `${s}: ${m}`).join(' · ')}`
+        : 'Ready';
+      if (this.afterCycle) {
+        try {
+          await this.afterCycle(before, this.state);
+        } catch (e) {
+          this.status = `Live order error - ${(e as Error).message}`;
+        }
+      }
+      // fillPaperEntry / live orders may have changed the active index's state: keep its map entry in step.
+      if (this.state.watch) this.state = { ...this.state, watch: { ...this.state.watch, [active]: pickSymbolState(this.state) } };
+      this.lastRefresh = now;
+      this.logCycle(now, 'OK');
+      const fresh = this.state.events.filter((e) => e.at === now);
+      if (fresh.length) this.onEvents(fresh, this.config);
+      await this.saveAfterCycle(now);
+    } catch (e) {
+      this.status = `Error - ${(e as Error).message}`;
+      this.logCycle(now, 'ERROR');
+    }
   }
 
   /** Identifies the open position, so a quote for an old one is never shown. */
@@ -353,6 +519,25 @@ export class EngineRunner {
     };
   }
 
+  watchItems(): WatchItem[] {
+    return this.watchList().map((sym) => {
+      const d = this.multiDash[sym];
+      return {
+        symbol: sym,
+        label: catalogEntry(sym)?.label ?? sym,
+        active: sym === this.config.symbol,
+        inTrade: this.state.position?.symbol === sym,
+        confidence: d ? round2(d.decision.confidence) : null,
+        signal: d?.decision.signal ?? '',
+        direction: d?.decision.direction ?? '',
+        strike: d?.decision.selectedStrike ?? 0,
+        decision: d?.decision.decisionText ?? 'Waiting for the first refresh',
+        spot: d?.market.spot ?? null,
+        ...(this.multiErrors[sym] ? { error: this.multiErrors[sym] } : {}),
+      };
+    });
+  }
+
   /** Config the plan builders size with (adds the fetched account balance). */
   sizingConfig(): SizingConfig {
     return { ...this.config, availableFunds: this.funds };
@@ -390,6 +575,7 @@ export class EngineRunner {
   private async doRefresh() {
     this.status = 'Refreshing...';
     const now = this.clock();
+    if (this.multiActive()) return this.doMultiRefresh(now);
     let data: { candles: Candle[]; chain: ChainSnapshot; contract?: FuturesContract };
     try {
       data = await this.source.load(this.config, now);
@@ -508,7 +694,15 @@ export class EngineRunner {
 
   async updateConfig(patch: Partial<EngineConfig>) {
     const next = sanitizeConfig(patch, this.config);
-    if (next.symbol !== this.config.symbol) {
+    const multiOn = this.state.watch && next.multiIndex && next.instrumentKind === 'INDEX_OPTIONS';
+    if (this.state.watch && !multiOn) this.leaveMulti(next.symbol);
+    if (multiOn && next.symbol !== this.config.symbol) {
+      // Multi-index: picking an index just makes it the one you look at / ENTER on.
+      if (this.state.position) throw new Error('Exit the open position before switching instrument.');
+      if (this.state.pendingEntry) throw new Error('Cancel the pending entry order before switching instrument.');
+      this.useWatched(next.symbol);
+      this.pinnedActive = next.symbol;
+    } else if (next.symbol !== this.config.symbol) {
       if (this.state.position) throw new Error('Exit the open position before switching instrument.');
       if (this.state.pendingEntry) throw new Error('Cancel the pending entry order before switching instrument.');
       // Each instrument keeps its own IV history; the pending setup belongs to the old one.
@@ -787,7 +981,7 @@ export class EngineRunner {
 
   snapshot(demo = false): EngineSnapshot {
     // The decision log is exported on request, not shipped with every poll.
-    const { ivHistory, cycleLog: _log, ...rest } = this.state;
+    const { ivHistory, cycleLog: _log, watch: _watch, ...rest } = this.state;
     return {
       config: this.config,
       state: { ...rest, ivSnapshots: ivHistory.length },
@@ -799,6 +993,7 @@ export class EngineRunner {
       marketOpen: this.marketOpen(),
       demo,
       live: this.livePnl(),
+      ...(this.multiActive() ? { watch: this.watchItems() } : {}),
       ...(this.config.sizingMode === 'CAPITAL'
         ? { capital: { ...sizingCapital(this.sizingConfig()), funds: this.funds } }
         : {}),

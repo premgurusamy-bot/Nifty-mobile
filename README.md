@@ -244,6 +244,24 @@ total including the open trade. Connected to Dhan, the phone quotes the open pos
 between engine refreshes (green dot = live price); stops, targets and the profit lock still act on each refresh
 (and in LIVE the exchange stop at Dhan acts on its own).
 
+## Multi-index engine (v2)
+
+Settings → Instrument → **Watch several indexes at once** (off by default; default watch list NIFTY 50 + BANK
+NIFTY, FIN NIFTY optional). Every refresh loads and scores each watched index with its own setup, hold timer,
+IV history and calibrated score (`src/lib/engine/multi.ts`), against **one shared account**:
+
+- **One trade at a time.** The index in a trade manages it with its own prices; the others keep being scored
+  and alert, but entries are blocked ("In a NIFTY trade — watching only").
+- **Highest score wins** when several would enter in the same refresh; the others show "… taken instead" and
+  keep their setups.
+- **Shared limits:** trades per day, the no-revenge rule, daily max loss, the entry cutoff and the day plan
+  (trade 1 / trade 2) count across all indexes.
+- The Dashboard shows every watched index at the top; the details below and the ENTER button follow the index
+  in a trade, otherwise the one you tapped, otherwise the highest score. PAPER / LIVE, Manual / Automatic
+  behave as before (LIVE orders go to the active index's contract).
+- Dhan allows one option chain per 3 s, so with two indexes each refreshes about every 6 s; an open trade's
+  P&L is still quoted every 2 s.
+
 ## Day plan lock
 
 Settings → **Day plan lock** (on by default; Target 2 off, Target 1 still books half):

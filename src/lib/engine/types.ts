@@ -98,6 +98,14 @@ export interface EngineConfig {
   autoRefresh: boolean;
   /** PAPER: the engine trades its signals on paper (like the workbook). LIVE: real Dhan orders, entries only via ENTER. */
   tradeMode: TradeMode;
+  /**
+   * Multi-index: watch several index-option instruments at once (each with its own setup, hold and
+   * IV history), one trade at a time, the highest score wins; limits and the day plan are shared.
+   */
+  multiIndex: boolean;
+  watchSymbols: string[];
+  /** Runtime only (never saved): blocks new entries with this reason (multi-index: another index is in a trade). */
+  watchOnly?: string;
   /** PAPER: the engine takes confirmed signals by itself (true) or waits for ENTER (false). */
   autoEntryPaper: boolean;
   /** LIVE: place real entry orders automatically on confirmed signals. Off by default, and
@@ -198,6 +206,8 @@ export const DEFAULT_CONFIG: EngineConfig = {
   maxDailyLoss: 3000,
   autoRefresh: false,
   tradeMode: 'PAPER',
+  multiIndex: false,
+  watchSymbols: ['NIFTY', 'BANKNIFTY'],
   autoEntryPaper: true,
   autoEntryLive: false,
   liveProduct: 'INTRADAY',
@@ -359,6 +369,8 @@ export interface EngineState {
   lastDecisionText: string;
   /** A manual limit entry waiting for the premium to reach its price. */
   pendingEntry: PendingEntry | null;
+  /** Multi-index: each watched index's own setup / hold / IV state (see SYMBOL_STATE_KEYS). */
+  watch?: Record<string, SymbolState>;
   /** Decision log for export: a row whenever the decision changes, each new candle, and every error. */
   cycleLog?: CycleLogRow[];
 }
@@ -400,6 +412,19 @@ export interface PendingEntry {
   /** Set when the limit order was placed with Dhan (LIVE mode). */
   live?: { securityId: string; orderId: string };
 }
+
+/** The parts of the engine state that belong to one index (the rest is the shared account). */
+export const SYMBOL_STATE_KEYS = [
+  'pending',
+  'ivHistory',
+  'ivLastAt',
+  'lastSignalKey',
+  'lastDecisionText',
+  'blockedReason',
+  'liveAutoRequest',
+  'lastFiredKey',
+] as const;
+export type SymbolState = Pick<EngineState, (typeof SYMBOL_STATE_KEYS)[number]>;
 
 export const initialEngineState = (): EngineState => ({
   day: '',
