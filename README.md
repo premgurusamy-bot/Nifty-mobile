@@ -4,7 +4,7 @@ Your **NIFTY Option Buying System** (the `NIFTY_Option_System_v4` Excel/VBA work
 
 The workbook's decision engine was ported rule for rule to TypeScript. A golden test checks it against the workbook's own last refresh (27-Aug-2026 11:40 IST): fed the same candles, option chain and IV history, the app reproduces Excel's EMA20/EMA50/VWAP/ATR on all 225 candles. It also matches PCR, Max Pain, OI support/resistance, swing levels, the **88.898 confidence score with all 10 factor scores**, the Greeks and the IV snapshot.
 
-> Decision-support tool, like the workbook. The engine only **signals** and paper-tracks its position; it never places orders by itself. Confidence and R:R are a filter, not a prediction.
+> Decision-support tool, like the workbook. In PAPER it paper-trades its signals; in LIVE it places real Dhan orders only when you tap ENTER, or by itself only if you switch LIVE entries to **Automatic** (off by default, reset on every switch to LIVE and every login). Confidence and R:R are a filter, not a prediction.
 
 ## Versions
 
