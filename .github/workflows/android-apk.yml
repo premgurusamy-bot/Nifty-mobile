@@ -2,8 +2,9 @@
 # Android SDK) and publishes it on the repo's Releases page.
 # Phone download link (always the newest build):
 #   https://github.com/premgurusamy-bot/Nifty-mobile/releases/latest/download/nifty-trader.apk
-# Pushing a version tag (v1.0, v2.0, …) builds that exact code as a named, permanent
-# release, e.g. https://github.com/premgurusamy-bot/Nifty-mobile/releases/download/v1.0/nifty-trader.apk
+# A version release (v1.0, v2.0, …) — from a pushed v* tag, or "Run workflow" with a version —
+# builds that exact code as a named, permanent release, e.g.
+#   https://github.com/premgurusamy-bot/Nifty-mobile/releases/download/v1.0/nifty-trader.apk
 name: Android APK
 
 on:
@@ -12,6 +13,11 @@ on:
     tags: ['v*']
     paths-ignore: ['**.md', 'server/**', 'scripts/**']
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Publish as a named version release (e.g. v1.0); blank = a normal build'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -75,10 +81,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           # Version tags publish under their own name and never replace "latest" (the newest build).
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('apk-{0}', github.run_number) }}
+          tag_name: ${{ inputs.version != '' && inputs.version || (github.ref_type == 'tag' && github.ref_name || format('apk-{0}', github.run_number)) }}
           target_commitish: ${{ github.sha }}
-          name: ${{ github.ref_type == 'tag' && format('Nifty Trader {0}', github.ref_name) || format('Nifty Trader APK (build {0})', github.run_number) }}
-          make_latest: ${{ github.ref_type == 'tag' && 'false' || 'true' }}
+          name: ${{ (inputs.version != '' || github.ref_type == 'tag') && format('Nifty Trader {0}', inputs.version != '' && inputs.version || github.ref_name) || format('Nifty Trader APK (build {0})', github.run_number) }}
+          make_latest: ${{ (inputs.version != '' || github.ref_type == 'tag') && 'false' || 'true' }}
           files: out/nifty-trader.apk
           body: |
             Android APK built from ${{ github.sha }}.
