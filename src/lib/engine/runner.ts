@@ -281,6 +281,12 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
     throw new Error('Day plan: the secured amounts must not fall from one step to the next');
   for (const [at, lock] of [[next.dl1At, next.dl1Lock], [next.dl2At, next.dl2Lock], [next.dl3At, next.dl3Lock]])
     if (lock >= at) throw new Error('Day plan: each secured amount must be below its best-profit step');
+  if (patch.lossTrail !== undefined) next.lossTrail = !!patch.lossTrail;
+  for (const k of ['lt1At', 'lt1Loss', 'lt2At', 'lt2Loss'] as const) num(k, 0, 1e10);
+  if (!(next.lt1At > 0 && next.lt1At < next.lt2At))
+    throw new Error('Loss trail: step 2 profit must be above step 1 (e.g. 5,000 < 8,500)');
+  if (next.lt2Loss > next.lt1Loss)
+    throw new Error('Loss trail: the allowed loss must not grow from step 1 to step 2');
   if (next.lockRideFrom > 0 && next.lockRideFrom < next.lockStart)
     throw new Error('The ride level must be at least the lock start (or 0 to keep stepping)');
   num('rollDays', 0, 30);

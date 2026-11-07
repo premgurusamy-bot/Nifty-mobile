@@ -55,8 +55,8 @@ test('trade 1: +12.5k best → 7k secured → falls back → exits with 7k', () 
   s.day = '2026-11-06';
   enter(s, T);
   assert.equal(s.position!.dayPlan, 'FIRST');
-  checkAndCloseIfHit(s, 108.5, cfg, T + 1); // +8.5k: below the first step, normal SL
-  assert.equal(s.position!.currentSl, 90);
+  checkAndCloseIfHit(s, 108.5, cfg, T + 1); // +8.5k: below the first lock step; the loss trail cuts the loss to 7k
+  assert.deepEqual([s.position!.lossCap, s.position!.currentSl], [7000, 93]);
   checkAndCloseIfHit(s, 109.2, cfg, T + 2); // +9.2k → 5k secured → stop 105
   assert.deepEqual([s.position!.lockedPnl, s.position!.currentSl], [5000, 105]);
   checkAndCloseIfHit(s, 112.5, cfg, T + 3); // +12.5k → 7k → stop 107

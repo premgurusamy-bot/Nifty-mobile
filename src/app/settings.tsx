@@ -58,7 +58,11 @@ type NumKey =
   | 'dl2Lock'
   | 'dl3At'
   | 'dl3Lock'
-  | 'dayFloor';
+  | 'dayFloor'
+  | 'lt1At'
+  | 'lt1Loss'
+  | 'lt2At'
+  | 'lt2Loss';
 
 /** Strategy / discipline settings — shared by every instrument. */
 const ENGINE_FIELDS: [NumKey, string][] = [
@@ -118,12 +122,20 @@ const DAYPLAN_FIELDS: [NumKey, string][] = [
   ['dl3Lock', 'Step 3: secure (₹)'],
   ['dayFloor', 'Trade 2: keep the day total at least (₹)'],
 ];
+/** Loss trail: best profit → the most the trade may still lose. */
+const LOSS_FIELDS: [NumKey, string][] = [
+  ['lt1At', 'Step 1: best profit (₹)'],
+  ['lt1Loss', 'Step 1: may lose at most (₹)'],
+  ['lt2At', 'Step 2: best profit (₹)'],
+  ['lt2Loss', 'Step 2: may lose at most (₹)'],
+];
 const CHEAP_FIELDS: [NumKey, string][] = [
   ['minPremium', 'Minimum option premium (₹, 0 = off)'],
   ['maxStopPct', 'Maximum stop-loss as % of premium (0 = off)'],
 ];
 const FIELDS: [NumKey, string][] = [
   ...DAYPLAN_FIELDS,
+  ...LOSS_FIELDS,
   ...FIXED_FIELDS,
   ...CHEAP_FIELDS,
   ...ENGINE_FIELDS,
@@ -732,7 +744,42 @@ export default function SettingsScreen() {
 
         {cfg ? (
           <Card style={{ gap: 12 }}>
-            <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Day plan lock</Text>
+            <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Loss trail</Text>
+            <View style={s.switchRow}>
+              <Text style={s.label}>Cut the possible loss as the trade gains (before the profit lock starts)</Text>
+              <Switch
+                value={cfg.lossTrail}
+                onValueChange={(v) => void save({ lossTrail: v }, setLockMsg)}
+                accessibilityLabel="Loss trail"
+              />
+            </View>
+            {cfg.lossTrail ? (
+              <>
+                <Text style={ui.muted}>
+                  Once the trade&apos;s best profit reaches a step, the stop-loss moves up so the trade can lose at most
+                  that step&apos;s amount. A step only moves the stop when it is tighter than the stop already there
+                  (a small stop-loss is kept), and the stop never moves back. From the day plan / profit lock&apos;s
+                  first step on, those take over. In LIVE the stop order at Dhan is moved too.
+                </Text>
+                {[
+                  ['lt1At', 'lt1Loss'],
+                  ['lt2At', 'lt2Loss'],
+                ].map(([a, b]) => (
+                  <View key={a} style={{ flexDirection: 'row', gap: 10 }}>
+                    {([a, b] as NumKey[]).map((k) => (
+                      <View key={k} style={{ flex: 1 }}>
+                        <Field
+                          label={LOSS_FIELDS.find(([x]) => x === k)![1]}
+                          value={draft[k] ?? ''}
+                          onChange={(v) => setDraft((d) => ({ ...d, [k]: v }))}
+                        />
+                      </View>
+                    ))}
+                  </View>
+                ))}
+              </>
+            ) : null}
+            <Text style={[ui.sectionTitle]}>Day plan lock</Text>
             <View style={s.switchRow}>
               <Text style={s.label}>Trade 1 ladder, trade 2 day floor, then the profit lock</Text>
               <Switch
@@ -806,7 +853,7 @@ export default function SettingsScreen() {
               </View>
             ) : null}
             {lockMsg ? <Text style={{ color: lockMsg === 'Saved' ? colors.up : colors.down }}>{lockMsg}</Text> : null}
-            <Button label="Save profit lock" onPress={() => void save({}, setLockMsg)} />
+            <Button label="Save loss trail, day plan & profit lock" onPress={() => void save({}, setLockMsg)} />
           </Card>
         ) : null}
 

@@ -38,7 +38,7 @@ export const CATEGORY_LABELS: Record<AlertCategory, string> = {
   signal: 'Signal confirmed (LIVE — waits for ENTER)',
   entry: 'Trade entered (incl. limit order filled)',
   target: 'Target 1 hit (partial booked)',
-  lock: 'Profit locked / raised',
+  lock: 'Profit locked / loss trail raised',
   stop: 'Stop-loss hit',
   exit: 'Target 2 / other exits',
   error: 'Order errors',
@@ -76,9 +76,9 @@ export function categoryOf(e: Pick<EngineEvent, 'kind' | 'message'>): AlertCateg
     case 'PARTIAL':
       return 'target';
     case 'INFO':
-      return /profit lock|day plan/i.test(e.message) ? 'lock' : null;
+      return /profit lock|day plan|loss trail/i.test(e.message) ? 'lock' : null;
     case 'EXIT':
-      if (/PROFIT LOCK|DAY FLOOR/i.test(e.message)) return 'lock';
+      if (/PROFIT LOCK|DAY FLOOR|LOSS TRAIL/i.test(e.message)) return 'lock';
       if (/\bSL\b|stop/i.test(e.message)) return 'stop';
       return /TARGET 1/i.test(e.message) ? 'target' : 'exit';
     case 'ERROR':
@@ -92,7 +92,7 @@ export const ALERT_TITLES: Record<AlertCategory, string> = {
   signal: 'Signal confirmed',
   entry: 'Trade entered',
   target: 'Target hit',
-  lock: 'Profit lock',
+  lock: 'Profit lock / loss trail',
   stop: 'Stop-loss hit',
   exit: 'Position closed',
   error: 'Order problem',

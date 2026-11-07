@@ -482,6 +482,16 @@ export default function DashboardScreen() {
                       ],
                     ] as [string, string | number, string?][])
                   : []),
+                ...(cfg.lossTrail && !(p.lockedPnl != null && p.lockedPnl >= 0)
+                  ? ([
+                      [
+                        'Loss trail',
+                        p.lossCap != null
+                          ? `may lose ${formatINR(p.lossCap, 0)} at most`
+                          : `from ${formatINR(cfg.lt1At, 0)} profit: may lose ${formatINR(cfg.lt1Loss, 0)} at most`,
+                      ],
+                    ] as [string, string | number, string?][])
+                  : []),
                 ['Quantity (remaining / total)', `${p.remainingQty} / ${p.totalQty}`],
                 ['Partial booked', p.partialBooked ? `${p.partialQty} @ T1 (${formatSigned(p.partialPnl, 0)})` : 'No'],
                 [

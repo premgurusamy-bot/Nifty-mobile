@@ -60,6 +60,9 @@ export function LivePnlCard({
             {pct != null ? ` · ${formatSigned(pct, 1)}%` : ''}
             {position.partialBooked ? ` · incl. ${signedINR(position.partialPnl)} booked at T1` : ''}
           </Text>
+          {position.lossCap != null && !(position.lockedPnl != null && position.lockedPnl >= 0) ? (
+            <Text style={st.small}>Loss trail: this trade may lose {formatINR(position.lossCap, 0)} at most</Text>
+          ) : null}
           {profitLock ? (
             <Text style={[st.small, { color: position.lockedPnl != null ? colors.up : colors.muted }]}>
               {position.lockedPnl != null

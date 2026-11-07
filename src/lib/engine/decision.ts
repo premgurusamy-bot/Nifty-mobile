@@ -33,7 +33,7 @@ import { FACTOR_LABELS, IV_SNAPSHOT_MS, sideOf } from './types.ts';
 import { sessionOpen, type Session } from './catalog.ts';
 import { evaluateFutures, buildFuturesPlan } from './futures.ts';
 import { sizeLots, type SizingConfig } from './sizing.ts';
-import { dayPlanFor, lockFor } from './profitLock.ts';
+import { dayPlanFor, lockFor, lossCapFor } from './profitLock.ts';
 import { calibrationFor, NO_CALIBRATION, type Calibration } from './calibration.ts';
 
 const IV_HISTORY_MAX = 20000;
@@ -356,14 +356,17 @@ export function checkAndCloseIfHit(s: EngineState, ltp: number, cfg: EngineConfi
   const stopped = () => side * (ltp - p.currentSl) <= 0;
   // Profit lock or day plan on: the lock trails the trade and Target 2 is off.
   const lockOn = !!cfg.profitLock || !!cfg.dayPlanLock;
+  if (cfg.lossTrail) applyLossTrail(s, p, ltp, cfg, now);
   if (lockOn) applyProfitLock(s, p, ltp, cfg, now);
-  // A stop raised by the profit lock exits as "PROFIT LOCK" (with the ₹ it secured).
+  // A stop raised by the profit lock exits as "PROFIT LOCK" (with the ₹ it secured), by the loss trail as "LOSS TRAIL".
   const lockReason = () =>
     p.lockedPnl != null && p.lockPrice != null && side * (p.currentSl - p.lockPrice) <= 1e-9
       ? p.lockedPnl > 0
         ? `PROFIT LOCK HIT (Rs ${Math.round(p.lockedPnl)} secured)`
         : `DAY FLOOR HIT (today kept at least Rs ${Math.round(cfg.dayFloor)})`
-      : null;
+      : p.lossCap != null && p.lossCapPrice != null && Math.abs(p.currentSl - p.lossCapPrice) <= 1e-9
+        ? `LOSS TRAIL HIT (loss kept to Rs ${Math.round(p.lossCap)} at most)`
+        : null;
   if (!p.partialBooked) {
     if (stopped()) {
       finalize(s, p, p.currentSl, p.totalQty, 0, lockReason() ?? 'SL HIT (full)', now);
@@ -411,6 +414,47 @@ export function checkAndCloseIfHit(s: EngineState, ltp: number, cfg: EngineConfi
     return true;
   }
   return false;
+}
+
+/** Total profit of the trade at `ltp` (booked half + open part), and the open quantity. */
+function tradePnlAt(p: OpenPosition, ltp: number) {
+  const qty = p.partialBooked ? p.remainingQty : p.totalQty;
+  const booked = p.partialBooked ? p.partialPnl : 0;
+  return { qty, booked, pnl: booked + sideP(p) * (ltp - p.entry) * qty * pvP(p) };
+}
+
+/** Stop price at which the trade's total ends at `total` ₹ (on the tick, rounded the safe way). */
+function stopForTotal(p: OpenPosition, total: number, qty: number, booked: number, cfg: EngineConfig) {
+  const side = sideP(p);
+  const tick = cfg.tickSize || 0.05;
+  const raw = p.entry + (side * (total - booked)) / (qty * pvP(p));
+  return Number(((side > 0 ? Math.ceil(raw / tick - 1e-9) : Math.floor(raw / tick + 1e-9)) * tick).toFixed(4));
+}
+
+/**
+ * Loss trail: before the profit lock engages, cut how much the trade may lose as its best profit
+ * grows (5,000 → may lose 15,000 at most; 8,500 → 7,000). Only tightens the stop, never loosens it.
+ */
+function applyLossTrail(s: EngineState, p: OpenPosition, ltp: number, cfg: EngineConfig, now: number) {
+  const { qty, booked, pnl } = tradePnlAt(p, ltp);
+  if (!(qty > 0)) return;
+  p.peakPnl = Math.max(p.peakPnl ?? 0, pnl);
+  const cap = lossCapFor(p.peakPnl, cfg);
+  if (cap == null || (p.lossCap != null && p.lossCap <= cap)) return;
+  const side = sideP(p);
+  const price = stopForTotal(p, -cap, qty, booked, cfg);
+  p.lossCap = cap;
+  if (side * (price - p.currentSl) <= 1e-9) return; // your stop is already tighter
+  p.currentSl = price;
+  p.lossCapPrice = price;
+  pushEvent(
+    s,
+    {
+      kind: 'INFO',
+      message: `${positionLabel(p)} - loss trail: best profit Rs ${Math.round(p.peakPnl)}, may now lose Rs ${Math.round(cap)} at most, stop ${fmt2(price)}`,
+    },
+    now,
+  );
 }
 
 /**

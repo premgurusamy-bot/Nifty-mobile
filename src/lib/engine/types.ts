@@ -169,6 +169,16 @@ export interface EngineConfig {
   dl3At: number;
   dl3Lock: number;
   dayFloor: number;
+  /**
+   * Loss trail (before the profit lock engages): best profit lt1At → the trade may lose lt1Loss at
+   * most, lt2At → lt2Loss at most. A step only moves the stop when it is tighter than the stop already
+   * there; the stop never moves back.
+   */
+  lossTrail: boolean;
+  lt1At: number;
+  lt1Loss: number;
+  lt2At: number;
+  lt2Loss: number;
 }
 
 export type SizingMode = 'RISK' | 'CAPITAL' | 'FIXED';
@@ -244,6 +254,11 @@ export const DEFAULT_CONFIG: EngineConfig = {
   dl3At: 14000,
   dl3Lock: 10000,
   dayFloor: 10000,
+  lossTrail: true,
+  lt1At: 5000,
+  lt1Loss: 15000,
+  lt2At: 8500,
+  lt2Loss: 7000,
 };
 
 /** Index presets from Moddhanapi.ApplyIndexPreset (security ids confirmed in the workbook). */
@@ -301,6 +316,9 @@ export interface OpenPosition {
   /** Profit lock: best total profit (₹) seen, and the profit currently secured. */
   peakPnl?: number;
   lockedPnl?: number;
+  /** Loss trail: the most this trade may now lose (₹), and the stop price that set it. */
+  lossCap?: number;
+  lossCapPrice?: number;
   /** Day plan: which rule this trade follows (set when it opens). */
   dayPlan?: 'FIRST' | 'SECOND' | 'NORMAL';
   /** Day plan, trade 2: profit already booked today when it opened. */

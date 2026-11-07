@@ -269,6 +269,19 @@ IV history and calibrated score (`src/lib/engine/multi.ts`), against **one share
 - Dhan allows one option chain per 3 s, so with two indexes each refreshes about every 6 s; the trade shown
   on the Dashboard is still quoted every 2 s.
 
+## Loss trail
+
+Settings → **Loss trail** (on by default). Before the day plan / profit lock's first step, the possible loss
+shrinks as the trade gains:
+
+- best profit **₹5,000** → the trade may lose **₹15,000** at most;
+- best profit **₹8,500** → it may lose **₹7,000** at most;
+- from ₹9,000 the day plan takes over (₹5,000 secured, …).
+
+A step only moves the stop when it is tighter than the stop already there (a small stop-loss is kept), the
+stop never moves back, and in LIVE the exchange stop order at Dhan is moved too. Exits show as
+`LOSS TRAIL HIT`. All four amounts are editable.
+
 ## Day plan lock
 
 Settings → **Day plan lock** (on by default; Target 2 off, Target 1 still books half):

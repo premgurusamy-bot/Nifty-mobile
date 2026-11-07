@@ -51,6 +51,16 @@ export function lockFor(p: Pick<OpenPosition, 'dayPlan' | 'dayBooked'>, peak: nu
   return ladder;
 }
 
+type LossCfg = Pick<EngineConfig, 'lossTrail' | 'lt1At' | 'lt1Loss' | 'lt2At' | 'lt2Loss'>;
+
+/** Loss trail: the most (₹) a trade whose best profit so far is `peak` may still lose; null = no step reached. */
+export function lossCapFor(peak: number, c: LossCfg): number | null {
+  if (!c.lossTrail) return null;
+  if (c.lt2At > 0 && peak >= c.lt2At) return Math.max(0, c.lt2Loss);
+  if (c.lt1At > 0 && peak >= c.lt1At) return Math.max(0, c.lt1Loss);
+  return null;
+}
+
 /** Which day-plan rule a new trade follows: by how many trades came before it today and what they booked. */
 export function dayPlanFor(tradesBefore: number, bookedToday: number, c: Pick<EngineConfig, 'dayPlanLock' | 'dayFloor'>) {
   if (!c.dayPlanLock) return undefined;
