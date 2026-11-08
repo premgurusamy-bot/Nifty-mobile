@@ -20,6 +20,7 @@
 import { validateLimit, type EngineRunner } from '../src/lib/engine/runner.ts';
 import { catalogEntry } from '../src/lib/engine/catalog.ts';
 import { sideOf, type EngineConfig, type EngineState, type LiveLegs, type OpenPosition, type TradePlan } from '../src/lib/engine/types.ts';
+import { orderBroker } from '../src/lib/engine/sizing.ts';
 import { DhanGateway, isRefused, isUnclear, type BrokerName, type Instrument, type OrderGateway, type PlaceArgs } from './brokers.ts';
 import type { DhanClient } from './dhan.ts';
 import { roundToTick } from './mapping.ts';
@@ -100,7 +101,7 @@ export class LiveTrader {
 
   /** The index's broker first, then (switch on) the other one. */
   brokersFor(cfg: EngineConfig): BrokerName[] {
-    const own: BrokerName = (cfg.angelOrderSymbols ?? []).includes(cfg.symbol) && cfg.instrumentKind === 'INDEX_OPTIONS' ? 'ANGEL' : 'DHAN';
+    const own: BrokerName = orderBroker(cfg);
     const other: BrokerName = own === 'ANGEL' ? 'DHAN' : 'ANGEL';
     const canOther = cfg.brokerFailover !== false && !!this.gateways[other] && (other === 'DHAN' || cfg.instrumentKind === 'INDEX_OPTIONS');
     return canOther ? [own, other] : [own];

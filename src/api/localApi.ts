@@ -16,7 +16,7 @@ import { DhanClient } from '../../server/dhan.ts';
 import { mapFunds } from '../../server/mapping.ts';
 import { screenAll, type ScreenGroup, type ScreenReport } from '../lib/screener.ts';
 import { DhanEngineSource, dhanQuoteSource } from '../../server/engineSource.ts';
-import { AngelClient, type AngelSession } from '../../server/angel.ts';
+import { AngelClient, angelFunds, type AngelSession } from '../../server/angel.ts';
 import { AngelEngineSource } from '../../server/angelSource.ts';
 import { RoutedEngineSource, routedQuoteSource } from '../../server/routedSource.ts';
 import { AngelGateway } from '../../server/brokers.ts';
@@ -121,7 +121,9 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
     since: angel.session?.at ?? null,
     error: routed.angelError,
   });
-  engine.fundsSource = async () => mapFunds(await dhan.fundLimit());
+  // CAPITAL sizing in LIVE (live capital 0): the balance at the broker the index's order goes to.
+  engine.fundsSource = async (b) => (b === 'ANGEL' ? angelFunds(await angel.rms()) : mapFunds(await dhan.fundLimit()));
+  engine.brokerReady = (b) => (b === 'ANGEL' ? angel.connected : true);
   // The screener's own data source (same Dhan client, so it shares the rate limits).
   const screenSource = new DhanEngineSource(dhan);
 

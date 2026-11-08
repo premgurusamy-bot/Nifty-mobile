@@ -12,8 +12,19 @@ import { formatINR } from '../format.ts';
 import { EST_MARGIN_PCT, type EngineConfig } from './types.ts';
 
 /** Engine config plus the live account balance the runner fetched (CAPITAL sizing in LIVE). */
+export type BrokerName = 'DHAN' | 'ANGEL';
+export const brokerLabel = (b: BrokerName | undefined) => (b === 'ANGEL' ? 'Angel One' : 'Dhan');
+
+/** The broker an instrument's LIVE orders go to first (Settings → Angel One, per index). */
+export function orderBroker(cfg: Pick<EngineConfig, 'angelOrderSymbols' | 'symbol' | 'instrumentKind'>): BrokerName {
+  return cfg.instrumentKind === 'INDEX_OPTIONS' && (cfg.angelOrderSymbols ?? []).includes(cfg.symbol) ? 'ANGEL' : 'DHAN';
+}
+
 export type SizingConfig = EngineConfig & {
+  /** Available balance (₹) at the broker this trade's order goes to (CAPITAL sizing, LIVE, live capital 0). */
   availableFunds?: number | null;
+  /** Which broker that balance is from. */
+  fundsBroker?: BrokerName;
   /** Multi-index split sizing: share of the normal size this trade gets (1 = full; 0.5 = two trades open). */
   sizeFactor?: number;
 };
@@ -39,7 +50,8 @@ export function sizingCapital(cfg: SizingConfig): { capital: number; base: numbe
       source = 'live capital';
     } else {
       base = cfg.availableFunds ?? 0;
-      source = cfg.availableFunds == null ? 'Dhan balance (not fetched yet)' : 'Dhan available balance';
+      const who = brokerLabel(cfg.fundsBroker);
+      source = cfg.availableFunds == null ? `${who} balance (not fetched yet)` : `${who} available balance`;
     }
   } else {
     base = cfg.capitalPaper ?? 0;

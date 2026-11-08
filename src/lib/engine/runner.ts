@@ -16,7 +16,7 @@ import {
 import { findStrike, legOf } from './indicators.ts';
 import { catalogEntry, CATALOG } from './catalog.ts';
 import { buildFuturesPlan } from './futures.ts';
-import { sizingCapital, type SizingConfig } from './sizing.ts';
+import { orderBroker, sizingCapital, type BrokerName, type SizingConfig } from './sizing.ts';
 import { applyTick, tickRequests, type QuoteSource } from './ticks.ts';
 import { blankSymbolState, isBusy, normalizeSymbolState, pickSymbolState, runMultiCycle, splitFactor } from './multi.ts';
 import {
@@ -351,8 +351,10 @@ export class EngineRunner {
    * live trading uses it to mirror partial bookings / exits with real orders.
    */
   afterCycle: ((before: EngineState, after: EngineState) => Promise<void>) | null = null;
-  /** Dhan available balance (₹), used by CAPITAL sizing in LIVE when live capital is 0. */
-  funds: number | null = null;
+  /** Available balance (₹) per broker, used by CAPITAL sizing in LIVE when live capital is 0. */
+  fundsBy: Partial<Record<BrokerName, number>> = {};
+  /** Whether a broker can take orders now (Angel One logged in); null = Dhan only. */
+  brokerReady: ((b: BrokerName) => boolean) | null = null;
   /** Latest quote of the open position between refreshes (fast P&L ticker). */
   mark: { ltp: number; at: number; key: string } | null = null;
   private lastLoggedCandle = 0;
@@ -370,7 +372,7 @@ export class EngineRunner {
   lastTick: number | null = null;
   private runningKind: 'refresh' | 'tick' | null = null;
   /** Fetches the live account balance (phone / server with Dhan); null in demo. */
-  fundsSource: (() => Promise<number>) | null = null;
+  fundsSource: ((broker: BrokerName) => Promise<number>) | null = null;
   private running: Promise<void> | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private source: EngineDataSource;
@@ -408,7 +410,23 @@ export class EngineRunner {
   /** The engine settings for one watched index: its own contract preset, your strategy settings. */
   private cfgFor(symbol: string): SizingConfig {
     const base = symbol === this.config.symbol ? this.config : sanitizeConfig({ symbol }, this.config);
-    return { ...base, availableFunds: this.funds };
+    const b = this.brokerFor(base);
+    return { ...base, availableFunds: this.fundsBy[b] ?? null, fundsBroker: b };
+  }
+
+  /**
+   * The broker an instrument's next LIVE order will go to: its own (Settings), or — when that one
+   * isn't logged in and "never miss an entry" is on — the other one. Its balance sizes the trade.
+   */
+  brokerFor(cfg: EngineConfig = this.config): BrokerName {
+    const own = orderBroker(cfg);
+    if (own === 'ANGEL' && this.brokerReady && !this.brokerReady('ANGEL') && cfg.brokerFailover !== false) return 'DHAN';
+    return own;
+  }
+
+  /** Balance at the broker the shown index's orders go to (CAPITAL sizing in LIVE). */
+  get funds(): number | null {
+    return this.fundsBy[this.brokerFor()] ?? null;
   }
 
   /** Save, with the active index's per-index state written back into the watch map first. */
@@ -655,7 +673,8 @@ export class EngineRunner {
 
   /** Config the plan builders size with (adds the fetched account balance). */
   sizingConfig(): SizingConfig {
-    const base: SizingConfig = { ...this.config, availableFunds: this.funds };
+    const b = this.brokerFor();
+    const base: SizingConfig = { ...this.config, availableFunds: this.fundsBy[b] ?? null, fundsBroker: b };
     if (!this.state.watch || !this.multiActive()) return base;
     // SPLIT: this trade shares the size with the other indexes' open trades / entries going in now.
     const others = Object.entries(this.state.watch).filter(
@@ -672,11 +691,16 @@ export class EngineRunner {
   /** Refresh the account balance for capital sizing (keeps the last value on failure). */
   async refreshFunds(): Promise<void> {
     if (!this.needsFunds()) return;
-    try {
-      const f = await this.fundsSource!();
-      if (Number.isFinite(f)) this.funds = f;
-    } catch {
-      /* keep the last balance; sizing shows "not fetched yet" if there never was one */
+    // Every broker the watched indexes' orders go to (multi-index: NIFTY at one, BANK NIFTY at the other).
+    const syms = this.multiActive() ? this.watchList() : [this.config.symbol];
+    const brokers = new Set(syms.map((sym) => this.brokerFor(sym === this.config.symbol ? this.config : sanitizeConfig({ symbol: sym }, this.config))));
+    for (const b of brokers) {
+      try {
+        const f = await this.fundsSource!(b);
+        if (Number.isFinite(f)) this.fundsBy = { ...this.fundsBy, [b]: f };
+      } catch {
+        /* keep the last balance; sizing shows "not fetched yet" if there never was one */
+      }
     }
   }
 

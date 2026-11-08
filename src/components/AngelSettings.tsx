@@ -3,9 +3,18 @@ import { StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { useAngel } from '../state/AngelContext';
 import { useEngine } from '../state/EngineContext';
 import { colors } from '../theme';
-import { Button, Card, styles as ui } from './ui';
+import { Button, Card, Segmented, styles as ui } from './ui';
 import { ScanQrButton } from './QrScanner';
 import { otpauthInfo, parseTotpKey } from '../lib/totp';
+
+const INDEXES = [
+  { sym: 'NIFTY', label: 'NIFTY 50' },
+  { sym: 'BANKNIFTY', label: 'BANK NIFTY' },
+];
+const BROKERS = [
+  { label: 'Dhan', value: 'DHAN' as const },
+  { label: 'Angel One', value: 'ANGEL' as const },
+];
 
 function Input(p: { label: string; value: string; onChange: (v: string) => void; secure?: boolean; numeric?: boolean }) {
   return (
@@ -28,7 +37,7 @@ function Input(p: { label: string; value: string; onChange: (v: string) => void;
 
 const time = (ms: number | null) => (ms ? new Date(ms).toLocaleTimeString() : '—');
 
-/** Settings card: Angel One as the market-data feed for BANK NIFTY (PAPER for now). */
+/** Settings card: Angel One login, and per index which broker gives the data and takes the orders. */
 export function AngelSettingsCard() {
   const a = useAngel();
   const { snap, updateConfig } = useEngine();
@@ -40,14 +49,13 @@ export function AngelSettingsCard() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const cfg = snap?.config;
-  const onBank = !!cfg?.angelSymbols?.includes('BANKNIFTY');
-  const ordersBank = !!cfg?.angelOrderSymbols?.includes('BANKNIFTY');
-  const toggle = (key: 'angelSymbols' | 'angelOrderSymbols', on: boolean) =>
+  const feeds = snap?.feeds;
+  const anyAngelOrders = (cfg?.angelOrderSymbols ?? []).length > 0;
+  const setFor = (key: 'angelSymbols' | 'angelOrderSymbols', sym: string, on: boolean) =>
     void run(async () => {
-      const rest = (cfg?.[key] ?? []).filter((x) => x !== 'BANKNIFTY');
-      await updateConfig({ [key]: on ? [...rest, 'BANKNIFTY'] : rest });
+      const rest = (cfg?.[key] ?? []).filter((x) => x !== sym);
+      await updateConfig({ [key]: on ? [...rest, sym] : rest });
     });
-  const feed = snap?.feeds?.BANKNIFTY;
 
   const run = async (fn: () => Promise<string | void>) => {
     setBusy(true);
@@ -64,7 +72,7 @@ export function AngelSettingsCard() {
 
   return (
     <Card style={{ gap: 12 }}>
-      <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Angel One (BANK NIFTY)</Text>
+      <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Angel One · brokers per index</Text>
       {!a.available ? (
         <Text style={ui.muted}>Connect your Dhan account on this phone first — Angel One runs alongside it.</Text>
       ) : (
@@ -147,26 +155,38 @@ export function AngelSettingsCard() {
             </>
           ) : null}
 
-          {cfg ? (
-            <View style={st.row}>
-              <Text style={st.label}>Use Angel One data for BANK NIFTY</Text>
-              <Switch
-                value={onBank}
-                onValueChange={(v) => toggle('angelSymbols', v)}
-                accessibilityLabel="Use Angel One data for BANK NIFTY"
-              />
-            </View>
-          ) : null}
-          {cfg ? (
-            <View style={st.row}>
-              <Text style={st.label}>Place BANK NIFTY LIVE orders through Angel One (NIFTY stays with Dhan)</Text>
-              <Switch
-                value={ordersBank}
-                onValueChange={(v) => toggle('angelOrderSymbols', v)}
-                accessibilityLabel="Place BANK NIFTY orders through Angel One"
-              />
-            </View>
-          ) : null}
+          {cfg
+            ? INDEXES.map(({ sym, label }) => (
+                <View key={sym} style={{ gap: 6 }}>
+                  <Text style={[st.label, { color: colors.text, fontWeight: '700' }]}>{label}</Text>
+                  <View style={st.row}>
+                    <Text style={[st.label, { width: 56 }]}>Data</Text>
+                    <View style={{ flex: 1 }}>
+                      <Segmented
+                        options={BROKERS}
+                        value={cfg.angelSymbols?.includes(sym) ? 'ANGEL' : 'DHAN'}
+                        onChange={(v) => setFor('angelSymbols', sym, v === 'ANGEL')}
+                      />
+                    </View>
+                  </View>
+                  <View style={st.row}>
+                    <Text style={[st.label, { width: 56 }]}>Orders &amp; balance</Text>
+                    <View style={{ flex: 1 }}>
+                      <Segmented
+                        options={BROKERS}
+                        value={cfg.angelOrderSymbols?.includes(sym) ? 'ANGEL' : 'DHAN'}
+                        onChange={(v) => setFor('angelOrderSymbols', sym, v === 'ANGEL')}
+                      />
+                    </View>
+                  </View>
+                  {feeds?.[sym] && (cfg.angelSymbols?.includes(sym) || feeds[sym].note) ? (
+                    <Text style={{ fontSize: 12, color: feeds[sym].feed === 'ANGEL' ? colors.up : colors.down }}>
+                      Data now: {feeds[sym].feed === 'ANGEL' ? 'Angel One' : feeds[sym].note ?? 'Dhan'}
+                    </Text>
+                  ) : null}
+                </View>
+              ))
+            : null}
           {cfg ? (
             <View style={st.row}>
               <Text style={st.label}>Never miss an entry: switch to the other broker when one can&apos;t take it</Text>
@@ -177,15 +197,12 @@ export function AngelSettingsCard() {
               />
             </View>
           ) : null}
-          {ordersBank && !a.status?.connected ? (
+          {anyAngelOrders && !a.status?.connected ? (
             <Text style={{ color: colors.down }}>
               Not logged in to Angel One:{' '}
-              {cfg?.brokerFailover !== false ? 'BANK NIFTY entries go to Dhan until you log in.' : 'BANK NIFTY LIVE entries will fail.'}
-            </Text>
-          ) : null}
-          {onBank && feed ? (
-            <Text style={{ color: feed.feed === 'ANGEL' ? colors.up : colors.down }}>
-              BANK NIFTY data now: {feed.feed === 'ANGEL' ? 'Angel One' : feed.note ?? 'Dhan'}
+              {cfg?.brokerFailover !== false
+                ? 'entries set to Angel One go to Dhan (sized on the Dhan balance) until you log in.'
+                : 'LIVE entries set to Angel One will fail.'}
             </Text>
           ) : null}
 
@@ -206,15 +223,15 @@ export function AngelSettingsCard() {
             </View>
           ) : null}
           <Text style={[ui.muted, { fontSize: 12 }]}>
-            Data: BANK NIFTY&apos;s candles, option chain (prices, OI, IV, Greeks) and live quotes come from Angel
-            One, so Dhan&apos;s option-chain limit is left to NIFTY. If one broker&apos;s data fails, that refresh
-            uses the other. Orders: BANK NIFTY&apos;s entry, its stop-loss and every exit go to Angel One (a trade
-            always stays with the broker that opened it). With &quot;never miss an entry&quot; on, an entry Angel One
-            certainly didn&apos;t take — not logged in, refused, rejected, or not filled in the fill window and
-            cancelled — is placed with Dhan at once (and NIFTY the other way round). If it is unclear whether an order
-            went through (no reply), it does not switch, so you never get two orders. Angel One orders need your
-            static IP registered on the SmartAPI app (the same as Dhan&apos;s). Angel&apos;s sessions end each day:
-            log in each morning. &quot;Change in OI&quot; counts from the first quote the app saw today.
+            Per index: Data = where its candles, option chain (prices, OI, IV, Greeks) and live quotes come
+            from. Orders &amp; balance = where its LIVE entry, stop-loss and exits go, and whose available
+            balance sizes it (Capital mode with live capital 0). A trade always stays with the broker that opened
+            it. If one broker&apos;s data fails, that refresh uses the other. With &quot;never miss an entry&quot; on,
+            an entry the chosen broker certainly didn&apos;t take — not logged in, refused, rejected, or not filled
+            in the fill window and cancelled — goes to the other broker at once; if it&apos;s unclear whether an
+            order went through, it doesn&apos;t switch, so you never get two orders. Orders at either broker need
+            your static IP&apos;s network. Angel&apos;s sessions end each day: log in each morning. With Angel One
+            data, &quot;change in OI&quot; counts from the first quote the app saw today.
           </Text>
         </>
       )}

@@ -30,6 +30,8 @@ export function startFakeAngel(
     orderMode: 'fill' as 'fill' | 'reject' | 'hang',
     orders: [] as any[],
     nextId: 260000000001,
+    /** Angel One RMS: net available margin. */
+    rmsNet: 123456.5,
   };
   const strikes = Array.from({ length: grid.count }, (_, i) => grid.first + i * grid.step);
   const token = (k: number, t: string) => String((t === 'CE' ? 600000 : 700000) + Math.round((k - grid.first) / grid.step));
@@ -71,7 +73,7 @@ export function startFakeAngel(
       if (path === '/rest/secure/angelbroking/user/v1/getProfile')
         return send({ status: true, message: 'SUCCESS', data: { clientcode: ANGEL_CLIENT, name: 'Fake', exchanges: ['NSE', 'NFO'] } });
       if (path === '/rest/secure/angelbroking/user/v1/getRMS')
-        return send({ status: true, message: 'SUCCESS', data: { net: '250000.00', availablecash: '250000.00' } });
+        return send({ status: true, message: 'SUCCESS', data: { net: String(state.rmsNet), availablecash: String(state.rmsNet) } });
       if (path === '/rest/secure/angelbroking/order/v1/placeOrder') {
         const c = byToken.get(String(body.symboltoken));
         if (!c || c.tradingsymbol !== body.tradingsymbol) return fail('Invalid symbol', 'AB1019');

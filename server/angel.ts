@@ -272,6 +272,14 @@ export class AngelClient {
   }
 }
 
+/** Angel One RMS → the balance available to trade (₹): net available margin, else available cash. */
+export function angelFunds(rms: any): number {
+  const net = Number(rms?.net);
+  if (Number.isFinite(net) && net > 0) return net;
+  const cash = Number(rms?.availablecash);
+  return Number.isFinite(cash) ? cash : 0;
+}
+
 /** End the session at Angel One (best effort: the phone forgets it either way). */
 export async function angelLogout(s: AngelSession, baseUrl?: string): Promise<void> {
   await call(

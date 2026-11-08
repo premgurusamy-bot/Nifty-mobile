@@ -95,7 +95,7 @@ const FUTURES_FIELDS: [NumKey, string][] = [
 ];
 const SIZING_FIELDS: [NumKey, string][] = [
   ['capitalPaper', 'Paper trading capital (₹)'],
-  ['capitalLive', 'Live trading capital (₹, 0 = Dhan available balance)'],
+  ['capitalLive', 'Live trading capital (₹, 0 = available balance at the index’s broker)'],
   ['capitalPct', 'Use this % of capital per trade (1–100)'],
   ['marginPerLot', 'MCX margin per lot (₹, 0 = estimate 12% of contract value)'],
 ];
@@ -694,7 +694,7 @@ export default function SettingsScreen() {
                   ? `Every trade takes the lots you set. MCX keeps its ATR-based stop. Max lots per trade still caps it (now ${cfg.maxLots || 'no cap'}).`
                   : `Every trade takes the lots you set, with the stop-loss at your % below the entry premium (up to 40%); targets are 2× and 3× that distance. The "maximum stop %" premium filter doesn't apply in this mode; the minimum premium does. Max lots per trade still caps it (now ${cfg.maxLots || 'no cap'}).`
                 : cfg.sizingMode === 'CAPITAL'
-                ? `Lots = capital × % ÷ cost of 1 lot (${isFut ? 'margin per lot' : 'premium × lot size'}). PAPER uses the paper capital, LIVE the live capital (or your Dhan balance). Max lots per trade still applies — set it to 0 for no cap.`
+                ? `Lots = capital × % ÷ cost of 1 lot (${isFut ? 'margin per lot' : 'premium × lot size'}). PAPER uses the paper capital, LIVE the live capital (or, at 0, the available balance at the broker the index's orders go to — Dhan or Angel One). Max lots per trade still applies — set it to 0 for no cap.`
                 : `Lots are sized so the stop-loss costs at most the max risk per trade (₹${cfg.maxRisk}). Switch to Capital % to size by money instead.`}
             </Text>
             {cfg.sizingMode === 'FIXED' ? (

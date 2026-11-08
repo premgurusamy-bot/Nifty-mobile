@@ -192,3 +192,27 @@ test('data: Dhan fails → an index Angel One can serve uses Angel One for that 
   assert.match(d.chain.feedNote!, /Dhan error \(Dhan down\) — using Angel One/);
   await assert.rejects(r.load({ ...bank, brokerFailover: false }, Date.UTC(2099, 11, 29, 6, 0)), /Dhan down/);
 });
+
+test('Capital sizing (LIVE, live capital 0): each index sized from its broker’s balance', async () => {
+  const api = await phone({ sizingMode: 'CAPITAL', capitalLive: 0, capitalPct: 100, maxLots: 0, multiIndex: true, symbol: 'NIFTY', angelOrderSymbols: ['BANKNIFTY'] });
+  try {
+    await api.engineRefresh();
+    const r = api.runner;
+    assert.equal(r.fundsBy.ANGEL, 123456.5); // Angel One RMS net
+    assert.equal(r.fundsBy.DHAN, 250000.5); // Dhan available balance
+    await r.setActive('NIFTY');
+    assert.equal(r.snapshot().capital!.source, 'Dhan available balance');
+    await r.setActive('BANKNIFTY');
+    assert.deepEqual([r.snapshot().capital!.capital, r.snapshot().capital!.source], [123456.5, 'Angel One available balance']);
+    // NIFTY's orders (and balance) can be at Angel One too.
+    await r.updateConfig({ angelOrderSymbols: ['BANKNIFTY', 'NIFTY'] });
+    await r.setActive('NIFTY');
+    assert.equal(r.snapshot().capital!.source, 'Angel One available balance');
+    // Angel One logged out (switch on): orders go to Dhan, so Dhan's balance sizes them.
+    api.angelSetSession(null);
+    assert.equal(r.brokerFor(), 'DHAN');
+    assert.equal(r.snapshot().capital!.source, 'Dhan available balance');
+  } finally {
+    api.dispose();
+  }
+});

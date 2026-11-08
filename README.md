@@ -278,7 +278,7 @@ IV history and calibrated score (`src/lib/engine/multi.ts`), against **one share
 - Dhan allows one option chain per 3 s, so with two indexes each full refresh lands about every 6 s; in
   between, the live quotes update both indexes' prices and premiums about every second.
 
-## Angel One for BANK NIFTY (data + orders)
+## Angel One: brokers per index (data, orders, balance)
 
 Settings → **Angel One (BANK NIFTY)**, phone (direct) mode. One-time setup: the SmartAPI app's API key, your
 Angel One client code and the TOTP key — saved only on the phone (secure storage). Each morning **Log in**
@@ -294,6 +294,13 @@ other one (`server/routedSource.ts`) and the Dashboard says why.
 **Orders** (`config.angelOrderSymbols`): BANK NIFTY's LIVE entry, its exchange stop-loss and every exit
 (T1, trailing / profit-lock stop moves, EXIT) go to Angel One (`server/brokers.ts`); NIFTY's go to Dhan. A
 trade always stays with the broker that opened it (`position.live.broker`).
+
+**Per index, either broker** (Settings → Angel One · brokers per index): NIFTY 50 and BANK NIFTY each choose
+**Data** (Dhan / Angel One) and **Orders & balance** (Dhan / Angel One). In Capital sizing with live capital 0,
+an index is sized from the available balance at the broker its order goes to (Dhan's fund limit, or Angel
+One's RMS net margin); multi-index fetches both when the indexes use different brokers. When the chosen
+broker is Angel One but it isn't logged in (and "never miss an entry" is on), the order — and so the
+balance — is Dhan's.
 
 **Never miss an entry** (`config.brokerFailover`, on by default): an entry the index's broker certainly
 didn't take — not logged in, refused (error reply), rejected, or not filled within the fill window and
