@@ -26,7 +26,8 @@ type Side = 'ce' | 'pe';
 const sideOf = (d: string): Side | null => (d === 'CE' ? 'ce' : d === 'PE' ? 'pe' : null);
 
 /** What the spot / future price is quoted as. */
-function spotReq(cfg: EngineConfig): QuoteReq | null {
+function spotReq(cfg: EngineConfig, chain?: ChainSnapshot): QuoteReq | null {
+  if (chain?.quoteSpot) return chain.quoteSpot;
   if (cfg.instrumentKind === 'MCX_FUTURES')
     return cfg.futSecurityId ? { segment: cfg.tradeSegment || 'MCX_COMM', securityId: String(cfg.futSecurityId) } : null;
   return cfg.underlyingSecurityId ? { segment: cfg.underlyingSegment, securityId: String(cfg.underlyingSecurityId) } : null;
@@ -43,7 +44,8 @@ function legsOf(data: Data, st: Partial<SymbolState>): { row: ChainStrike; side:
     if (side && row) out.push({ row, side, id });
   };
   const p = st.position;
-  if (p) add(p.strike, p.direction, p.live?.securityId);
+  // The chain's own id first (it matches the feed the chain came from), else the live order's.
+  if (p) add(p.strike, p.direction, chain.feed === 'ANGEL' ? undefined : p.live?.securityId);
   if (st.pending) add(st.pending.strike, st.pending.direction);
   if (st.pendingEntry) add(st.pendingEntry.plan.strike, st.pendingEntry.plan.direction, st.pendingEntry.live?.securityId);
   const atm = findStrike(chain, chain.spot);
@@ -56,16 +58,17 @@ function legsOf(data: Data, st: Partial<SymbolState>): { row: ChainStrike; side:
   return out;
 }
 
-const legId = (l: { row: ChainStrike; side: Side; id?: string }) => l.id ?? l.row[l.side]?.securityId;
+const legId = (l: { row: ChainStrike; side: Side; id?: string }) => l.row[l.side]?.securityId ?? l.id;
 
 /** The quotes one index needs this second. */
 export function tickRequests(cfg: EngineConfig, data: Data, st: Partial<SymbolState>): QuoteReq[] {
   const reqs: QuoteReq[] = [];
-  const s = spotReq(cfg);
+  const s = spotReq(cfg, data.chain);
   if (s) reqs.push(s);
+  const seg = data.chain.legSegment || cfg.tradeSegment || 'NSE_FNO';
   for (const l of legsOf(data, st)) {
     const id = legId(l);
-    if (id) reqs.push({ segment: cfg.tradeSegment || 'NSE_FNO', securityId: String(id) });
+    if (id) reqs.push({ segment: seg, securityId: String(id) });
   }
   const seen = new Set<string>();
   return reqs.filter((r) => !seen.has(quoteKey(r)) && !!seen.add(quoteKey(r)));
@@ -82,9 +85,9 @@ export function tickCandles(candles: Candle[], price: number, now: number): Cand
 
 /** One index's data with this second's quotes applied (unchanged where nothing was quoted). */
 export function applyTick(cfg: EngineConfig, data: Data, st: Partial<SymbolState>, quotes: QuoteMap, now: number): Data {
-  const s = spotReq(cfg);
+  const s = spotReq(cfg, data.chain);
   const spot = s ? quotes[quoteKey(s)] : undefined;
-  const seg = cfg.tradeSegment || 'NSE_FNO';
+  const seg = data.chain.legSegment || cfg.tradeSegment || 'NSE_FNO';
   const patch = new Map<ChainStrike, Partial<Record<Side, number>>>();
   for (const l of legsOf(data, st)) {
     const id = legId(l);

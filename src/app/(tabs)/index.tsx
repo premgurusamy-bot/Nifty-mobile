@@ -185,7 +185,11 @@ export default function DashboardScreen() {
             {cfg.symbol} {isFut ? 'FUTURES (MCX)' : 'OPTION BUYING'}
           </Text>
           <Text style={ui.muted}>
-            {snap.demo ? 'DEMO · accelerated simulation · ' : 'Dhan live · '}
+            {snap.demo
+              ? 'DEMO · accelerated simulation · '
+              : snap.feeds?.[cfg.symbol]?.feed === 'ANGEL'
+                ? 'Angel One data · Dhan orders · '
+                : 'Dhan live · '}
             {snap.marketOpen ? 'market open' : 'market closed'}
           </Text>
           <Text style={ui.muted}>
@@ -218,6 +222,11 @@ export default function DashboardScreen() {
                   {w.inTrade ? '  · IN TRADE' : w.pendingEntry ? '  · ORDER PENDING' : ''}
                   {w.active ? '  · shown below' : ''}
                 </Text>
+                {snap.feeds?.[w.symbol] && (snap.feeds[w.symbol].feed === 'ANGEL' || snap.feeds[w.symbol].note) ? (
+                  <Text style={{ fontSize: 11, color: snap.feeds[w.symbol].feed === 'ANGEL' ? colors.accent : colors.down }}>
+                    {snap.feeds[w.symbol].feed === 'ANGEL' ? 'Data: Angel One' : snap.feeds[w.symbol].note}
+                  </Text>
+                ) : null}
                 {w.trade ? (
                   <Text style={{ fontWeight: '700', color: w.trade.pnl == null ? colors.muted : pnlColor(w.trade.pnl) }}>
                     {w.trade.label} × {w.trade.qty} @ {formatNumber(w.trade.entry)}

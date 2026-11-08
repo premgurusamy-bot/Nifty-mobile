@@ -278,6 +278,26 @@ IV history and calibrated score (`src/lib/engine/multi.ts`), against **one share
 - Dhan allows one option chain per 3 s, so with two indexes each full refresh lands about every 6 s; in
   between, the live quotes update both indexes' prices and premiums about every second.
 
+## Angel One data for BANK NIFTY (PAPER)
+
+Settings → **Angel One (data for BANK NIFTY)**, phone (direct) mode only. One-time setup: the SmartAPI app's
+API key, your Angel One client code and the TOTP key — saved only on the phone (secure storage). Then each
+morning **Log in** with the MPIN (the TOTP code is made by the app); the session is kept for the day.
+
+With **Use Angel One data for BANK NIFTY** on (`config.angelSymbols`), BANK NIFTY loads from Angel One
+(`server/angel.ts`, `server/angelSource.ts`): 5-min index candles, and an option chain built from the
+contract search (expiries + strike tokens, cached for the day), FULL quotes for ATM ± 20 strikes (LTP, OI,
+volume; 50 tokens per call) and optionGreek (IV + Greeks, every 15 s). The 1-second live quotes for BANK
+NIFTY go to Angel One too (LTP mode); NIFTY stays on Dhan, and Dhan's option-chain limit is left to it.
+
+- Not logged in, Angel error, or session ended → that refresh uses Dhan, and the Dashboard / Settings say why
+  (`server/routedSource.ts`). A session Angel ends is forgotten, so the app asks to log in again.
+- **PAPER only for now:** orders stay on Dhan, and ENTER (manual or automatic) in LIVE is refused for an index
+  on Angel One data.
+- Angel's quote has no previous-day OI, so the "change in OI" figure (display only) counts from the first
+  quote the app saw that day. "Test Angel One data" loads BANK NIFTY once and shows what came back.
+- Routes and headers follow Angel's official SmartAPI client; tests run against `tests/fakeAngel.ts`.
+
 ## Loss trail
 
 Settings → **Loss trail** (on by default). Before the day plan / profit lock's first step, the possible loss

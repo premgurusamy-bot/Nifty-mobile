@@ -15,7 +15,7 @@ export class DhanError extends Error {
 }
 
 /** Serialises calls so consecutive requests are at least `minGapMs` apart (Dhan per-API rate limits). */
-class Throttle {
+export class Throttle {
   private chain: Promise<unknown> = Promise.resolve();
   private last = 0;
   private minGapMs: number;

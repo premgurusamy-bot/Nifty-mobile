@@ -16,12 +16,15 @@ import { DhanClient } from '../../server/dhan.ts';
 import { mapFunds } from '../../server/mapping.ts';
 import { screenAll, type ScreenGroup, type ScreenReport } from '../lib/screener.ts';
 import { DhanEngineSource, dhanQuoteSource } from '../../server/engineSource.ts';
+import { AngelClient, type AngelSession } from '../../server/angel.ts';
+import { AngelEngineSource } from '../../server/angelSource.ts';
+import { RoutedEngineSource, routedQuoteSource } from '../../server/routedSource.ts';
 import { LiveTrader } from '../../server/liveTrader.ts';
 import { extractIps, isIPv4, runPreflight, type PreflightResult } from '../../server/preflight.ts';
 import { DhanService, underlyingFor } from '../../server/service.ts';
 import { TokenKeeper } from '../../server/tokenKeeper.ts';
 import type { StatusResponse } from '../lib/apiTypes';
-import { EngineRunner, type EngineSnapshot, type EngineStore } from '../lib/engine/runner.ts';
+import { EngineRunner, sanitizeConfig, type EngineSnapshot, type EngineStore } from '../lib/engine/runner.ts';
 import type { EngineConfig, TradeMode } from '../lib/engine/types';
 import type { Api } from './client';
 
@@ -42,6 +45,21 @@ export interface LocalApiOptions {
   positionTickMs?: number;
   /** Tests only: tick even outside market hours. */
   tickAlways?: boolean;
+  /** Angel One session saved on the phone (data for the indexes set to Angel One). */
+  angelSession?: AngelSession | null;
+  /** Called when Angel One ends the session (the phone forgets it). */
+  onAngelSessionLost?: () => void;
+  /** Tests only: point at a fake Angel One. */
+  angelBaseUrl?: string;
+}
+
+export interface AngelStatus {
+  connected: boolean;
+  clientCode: string;
+  /** When the session was made (ms). */
+  since: number | null;
+  /** Latest Angel One problem ('' when fine). */
+  error: string;
 }
 
 export const DIRECT_ORDERS_MESSAGE =
@@ -67,6 +85,11 @@ export interface PhoneTrading {
   engineSetActive: (symbol: string) => Promise<EngineSnapshot>;
   /** Screen the indexes (~10 s: one option chain per 3 s) or the MCX minis on live data. */
   screener: (group?: ScreenGroup) => Promise<ScreenReport>;
+  /** Use (or drop) an Angel One session for the Angel-fed indexes. */
+  angelSetSession: (s: AngelSession | null) => AngelStatus;
+  angelStatus: () => AngelStatus;
+  /** Load BANK NIFTY (or `symbol`) once from Angel One and summarise it. */
+  angelTest: (symbol?: string) => Promise<{ symbol: string; spot: number; expiry: string; strikes: number; candles: number; withOi: number; withIv: number }>;
 }
 
 export type LocalApi = Api & PhoneTrading & {
@@ -80,11 +103,20 @@ export const isLocalApi = (a: Api | null): a is LocalApi => !!a && 'engineEnter'
 export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
   const dhan = new DhanClient({ clientId: o.clientId, accessToken: o.accessToken, baseUrl: o.baseUrl });
   const service = new DhanService(dhan, { liveOrders: false, maxOrderValue: 0 });
-  const engine = new EngineRunner(new DhanEngineSource(dhan), o.store);
+  const angel = new AngelClient({ baseUrl: o.angelBaseUrl, session: o.angelSession ?? null });
+  const routed = new RoutedEngineSource(new DhanEngineSource(dhan), angel);
+  routed.onAngelSessionLost = () => o.onAngelSessionLost?.();
+  const engine = new EngineRunner(routed, o.store);
   await engine.init();
   const trader = new LiveTrader(dhan, service, { sleep: o.sleep });
   engine.afterCycle = (before, after) => trader.afterCycle(engine, before, after);
-  engine.quoteSource = dhanQuoteSource(dhan);
+  engine.quoteSource = routedQuoteSource(dhanQuoteSource(dhan), angel);
+  const angelStatus = (): AngelStatus => ({
+    connected: angel.connected,
+    clientCode: angel.session?.clientCode ?? '',
+    since: angel.session?.at ?? null,
+    error: routed.angelError,
+  });
   engine.fundsSource = async () => mapFunds(await dhan.fundLimit());
   // The screener's own data source (same Dhan client, so it shares the rate limits).
   const screenSource = new DhanEngineSource(dhan);
@@ -241,6 +273,25 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
         config: engine.config,
         state: engine.state,
       }),
+    angelSetSession: (s) => {
+      angel.session = s;
+      routed.angelError = '';
+      return angelStatus();
+    },
+    angelStatus,
+    angelTest: async (symbol = 'BANKNIFTY') => {
+      const cfg = sanitizeConfig({ symbol }, engine.config);
+      const d = await new AngelEngineSource(angel).load(cfg, Date.now());
+      return {
+        symbol,
+        spot: d.chain.spot,
+        expiry: d.chain.expiry,
+        strikes: d.chain.strikes.length,
+        candles: d.candles.length,
+        withOi: d.chain.strikes.filter((s) => (s.ce?.oi ?? 0) > 0 || (s.pe?.oi ?? 0) > 0).length,
+        withIv: d.chain.strikes.filter((s) => (s.ce?.iv ?? 0) > 0 || (s.pe?.iv ?? 0) > 0).length,
+      };
+    },
     runner: engine,
     dispose: () => {
       if (ticker) clearInterval(ticker);

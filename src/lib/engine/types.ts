@@ -56,6 +56,13 @@ export interface ChainSnapshot {
   expiry: string;
   /** Sorted ascending by strike. */
   strikes: ChainStrike[];
+  /** Where the data came from (absent = Dhan). */
+  feed?: 'DHAN' | 'ANGEL';
+  /** Why the data isn't from the feed you chose (e.g. Angel One not logged in → Dhan). */
+  feedNote?: string;
+  /** Fast ticks: how to quote the spot and the option legs when not through Dhan. */
+  quoteSpot?: { segment: string; securityId: string };
+  legSegment?: string;
 }
 
 /** Editable thresholds — 05_DecisionEngine + 09_Settings in the workbook. */
@@ -130,6 +137,8 @@ export interface EngineConfig {
   lastEntryTimeMcx: string;
   /** Seconds between automatic refreshes (min 3: Dhan allows one option-chain request per 3 s). */
   refreshSeconds: number;
+  /** Index options whose market data comes from Angel One instead of Dhan (PAPER only for now). */
+  angelSymbols: string[];
   /** Between refreshes, update spot and premiums from Dhan quotes every second (stops / breaks act on them). */
   fastTicks: boolean;
   alertsEnabled: boolean;
@@ -238,6 +247,7 @@ export const DEFAULT_CONFIG: EngineConfig = {
   lastEntryTimeMcx: '',
   refreshSeconds: 15,
   fastTicks: true,
+  angelSymbols: [],
   alertsEnabled: true,
   sizingMode: 'RISK',
   capitalPaper: 100000,

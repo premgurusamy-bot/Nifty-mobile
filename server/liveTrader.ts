@@ -211,6 +211,8 @@ export class LiveTrader {
     try {
       const cfg = runner.config;
       if (!catalogEntry(cfg.symbol)) throw new Error(`Live trading isn't set up for ${cfg.symbol}`);
+      if (runner.lastChain?.feed === 'ANGEL' || cfg.angelSymbols?.includes(cfg.symbol))
+        throw new Error(`${cfg.symbol} runs on Angel One data — PAPER only for now (Settings → Angel One to switch it back to Dhan)`);
       const c = ctxOf(cfg);
       const plan = runner.entryPlan();
       const expiry = runner.dashboard?.expiry || cfg.futExpiry;

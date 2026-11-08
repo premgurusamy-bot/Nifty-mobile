@@ -17,6 +17,7 @@ import { CATALOG, catalogEntry, sessionLabel } from '../lib/engine/catalog';
 import { formatINR, formatNumber } from '../lib/format';
 import { lockedProfit } from '../lib/engine/profitLock';
 import { AlertSettingsCard } from '../components/AlertSettings';
+import { AngelSettingsCard } from '../components/AngelSettings';
 import { Button, Card, Segmented, styles as ui } from '../components/ui';
 import type { EngineConfig } from '../lib/engine/types';
 import { useEngine } from '../state/EngineContext';
@@ -856,6 +857,8 @@ export default function SettingsScreen() {
             <Button label="Save loss trail, day plan & profit lock" onPress={() => void save({}, setLockMsg)} />
           </Card>
         ) : null}
+
+        <AngelSettingsCard />
 
         <AlertSettingsCard />
 

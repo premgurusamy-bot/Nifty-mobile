@@ -39,7 +39,7 @@ const directEngineStore: EngineStore = {
 };
 
 // SecureStore (Keychain/Keystore) on device; web falls back to AsyncStorage.
-const secret = {
+export const secret = {
   get: (k: string) => (Platform.OS === 'web' ? AsyncStorage.getItem(k) : SecureStore.getItemAsync(k)),
   set: (k: string, v: string) => (Platform.OS === 'web' ? AsyncStorage.setItem(k, v) : SecureStore.setItemAsync(k, v)),
   del: (k: string) => (Platform.OS === 'web' ? AsyncStorage.removeItem(k) : SecureStore.deleteItemAsync(k)),
@@ -132,6 +132,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       clientId: direct.clientId,
       accessToken: direct.token,
       baseUrl: DHAN_BASE_URL,
+      angelBaseUrl: process.env.EXPO_PUBLIC_ANGEL_BASE_URL || undefined,
       staticIp: () => staticIpRef.current,
       publicIp: () => fetchPublicIp(PUBLIC_IP_URL),
       store: directEngineStore,

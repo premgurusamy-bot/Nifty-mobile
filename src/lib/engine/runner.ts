@@ -137,6 +137,8 @@ export interface EngineSnapshot {
   /** Persistent warning banner (Dashboard F4), e.g. expired Dhan token. */
   banner: string;
   lastRefresh: number | null;
+  /** Where each index's data came from (Dhan / Angel One, and why not the chosen one). */
+  feeds?: Record<string, { feed: 'DHAN' | 'ANGEL'; note?: string }>;
   /** Last fast tick (Dhan quotes between refreshes) while they are running, else null. */
   lastTick?: number | null;
   /** Latest 5-min closes for the chart. */
@@ -227,6 +229,13 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
     next.tradeMode = patch.tradeMode;
   }
   if (patch.fastTicks !== undefined) next.fastTicks = !!patch.fastTicks;
+  if (patch.angelSymbols !== undefined) {
+    const ok = ['NIFTY', 'BANKNIFTY', 'FINNIFTY'];
+    const list = [...new Set((patch.angelSymbols ?? []).map((x) => String(x).toUpperCase()))];
+    const bad = list.find((x) => !ok.includes(x));
+    if (bad) throw new Error(`${bad} can't use Angel One data yet (index options: ${ok.join(', ')})`);
+    next.angelSymbols = list;
+  }
   if (patch.multiSize !== undefined) {
     if (patch.multiSize !== 'SPLIT' && patch.multiSize !== 'FULL') throw new Error('multiSize must be SPLIT or FULL');
     next.multiSize = patch.multiSize;
@@ -677,6 +686,17 @@ export class EngineRunner {
       this.runningKind = null;
     });
     return this.running;
+  }
+
+  /** Where each index's latest data came from. */
+  feeds(): Record<string, { feed: 'DHAN' | 'ANGEL'; note?: string }> {
+    const chains: Record<string, ChainSnapshot | null | undefined> = this.multiActive()
+      ? Object.fromEntries(Object.entries(this.multiData).map(([k, v]) => [k, v.chain]))
+      : { [this.config.symbol]: this.lastChain };
+    const out: Record<string, { feed: 'DHAN' | 'ANGEL'; note?: string }> = {};
+    for (const [sym, c] of Object.entries(chains))
+      if (c) out[sym] = { feed: c.feed ?? 'DHAN', ...(c.feedNote ? { note: c.feedNote } : {}) };
+    return out;
   }
 
   /** Fast ticks are possible: switched on, a quote feed, and data from a full refresh to build on. */
@@ -1160,6 +1180,7 @@ export class EngineRunner {
       banner: this.banner,
       lastRefresh: this.lastRefresh,
       lastTick: this.fastTicking() ? this.lastTick : null,
+      feeds: this.feeds(),
       closes: this.candles.slice(-150).map((c) => c.c),
       marketOpen: this.marketOpen(),
       demo,
