@@ -14,8 +14,18 @@ export function parseTotpKey(input: string): string {
   }
   s = s.replace(/[\s-]/g, '').replace(/=+$/, '').toUpperCase();
   if (s.length < 16 || !/^[A-Z2-7]+$/.test(s))
-    throw new Error('The TOTP key is the letters-and-digits code (A–Z, 2–7) Dhan shows when you set up TOTP.');
+    throw new Error('The TOTP key is the letters-and-digits code (A–Z, 2–7) shown when you set up TOTP.');
   return s;
+}
+
+/** From an otpauth:// QR: the account name (often your client ID / code) and the issuer. */
+export function otpauthInfo(uri: string): { account: string; issuer: string } | null {
+  const m = /^otpauth:\/\/totp\/([^?]*)(\?.*)?$/i.exec(uri.trim());
+  if (!m) return null;
+  const label = decodeURIComponent(m[1]);
+  const issuerQ = /[?&]issuer=([^&]+)/i.exec(m[2] ?? '');
+  const [pre, acc] = label.includes(':') ? label.split(':', 2) : ['', label];
+  return { account: acc.trim(), issuer: (issuerQ ? decodeURIComponent(issuerQ[1]) : pre).trim() };
 }
 
 export function base32Decode(key: string): Uint8Array {

@@ -18,6 +18,8 @@ import { formatINR, formatNumber } from '../lib/format';
 import { lockedProfit } from '../lib/engine/profitLock';
 import { AlertSettingsCard } from '../components/AlertSettings';
 import { AngelSettingsCard } from '../components/AngelSettings';
+import { ScanQrButton } from '../components/QrScanner';
+import { otpauthInfo, parseTotpKey } from '../lib/totp';
 import { Button, Card, Segmented, styles as ui } from '../components/ui';
 import type { EngineConfig } from '../lib/engine/types';
 import { useEngine } from '../state/EngineContext';
@@ -440,9 +442,25 @@ export default function SettingsScreen() {
                         keyboard="default"
                         secure
                       />
+                      <ScanQrButton
+                        title="Scan Dhan's TOTP QR code"
+                        onScan={(data) => {
+                          try {
+                            parseTotpKey(data);
+                          } catch (e) {
+                            setDirectMsg(`Failed: that QR isn't a TOTP setup code (${(e as Error).message})`);
+                            return;
+                          }
+                          setTotpKey(data);
+                          const acc = otpauthInfo(data)?.account ?? '';
+                          if (!clientId.trim() && /^\d{6,}$/.test(acc)) setClientId(acc);
+                          setDirectMsg('TOTP key scanned — enter your PIN and log in');
+                        }}
+                      />
                       <Text style={[ui.muted, { fontSize: 12 }]}>
-                        Once only: web.dhan.co → Profile → DhanHQ Trading APIs → Set up TOTP. Copy the key Dhan shows
-                        (letters A–Z and digits 2–7) — or the otpauth:// link from its QR code — and paste it here.
+                        Once only: web.dhan.co → Profile → DhanHQ Trading APIs → Set up TOTP. Tap Scan QR code and
+                        point the camera at the QR Dhan shows (or pick a screenshot of it), or copy the key (letters
+                        A–Z and digits 2–7) and paste it here.
                         After that you log in with just your client ID and PIN. The key is kept encrypted on this
                         phone; your PIN is not stored.
                       </Text>

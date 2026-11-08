@@ -4,6 +4,8 @@ import { useAngel } from '../state/AngelContext';
 import { useEngine } from '../state/EngineContext';
 import { colors } from '../theme';
 import { Button, Card, styles as ui } from './ui';
+import { ScanQrButton } from './QrScanner';
+import { otpauthInfo, parseTotpKey } from '../lib/totp';
 
 function Input(p: { label: string; value: string; onChange: (v: string) => void; secure?: boolean; numeric?: boolean }) {
   return (
@@ -79,12 +81,28 @@ export function AngelSettingsCard() {
           {!a.hasKeys || editKeys ? (
             <>
               <Text style={ui.muted}>
-                One-time setup, from smartapi.angelone.in (your SmartAPI app) and Angel One&apos;s TOTP setup. Saved
-                only on this phone, in secure storage.
+                One-time setup, from smartapi.angelone.in (your SmartAPI app) and Angel One&apos;s TOTP setup
+                (smartapi.angelone.in/enable-totp — tap Scan QR code and point the camera at the QR, or pick a
+                screenshot of it). Saved only on this phone, in secure storage.
               </Text>
               <Input label="SmartAPI API key" value={apiKey} onChange={setApiKey} secure />
               <Input label="Angel One client code" value={code} onChange={setCode} />
               <Input label="TOTP key (the code under the QR, or the otpauth:// link)" value={totpKey} onChange={setTotpKey} secure />
+              <ScanQrButton
+                title="Scan Angel One's TOTP QR code"
+                onScan={(data) => {
+                  try {
+                    parseTotpKey(data);
+                  } catch (e) {
+                    setMsg(`Failed: that QR isn't a TOTP setup code (${(e as Error).message})`);
+                    return;
+                  }
+                  setTotpKey(data);
+                  const acc = otpauthInfo(data)?.account ?? '';
+                  if (!code.trim() && /^[A-Za-z0-9]{4,}$/.test(acc)) setCode(acc.toUpperCase());
+                  setMsg('TOTP key scanned');
+                }}
+              />
               <Button
                 label="Save Angel One keys"
                 disabled={busy}
