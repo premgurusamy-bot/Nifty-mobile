@@ -830,6 +830,30 @@ export class EngineRunner {
     return this.running;
   }
 
+  /**
+   * Run a manual action (ENTER / EXIT / cancel / pick an index / settings) between engine cycles, never
+   * in the middle of one: a multi-index cycle focuses each index in turn, so an action landing inside
+   * it could otherwise act on the wrong index.
+   */
+  exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    return this.serial(fn);
+  }
+
+  /** An index (any watched one) with an open trade or entry order, if any. */
+  busySymbol(): string | null {
+    if (this.state.position || this.state.pendingEntry) return this.config.symbol;
+    for (const [sym, w] of Object.entries(this.watchStates())) if (isBusy(w)) return sym;
+    return null;
+  }
+
+  /** Raise an alert (ERROR event) right away, e.g. a live exit that couldn't be placed. */
+  async alert(message: string) {
+    const ev = { kind: 'ERROR' as const, message, at: this.clock() };
+    this.state = { ...this.state, events: [ev, ...this.state.events].slice(0, 100) };
+    this.onEvents([ev], this.config);
+    await this.persist();
+  }
+
   /** Run an engine cycle after any other in progress (state changes never interleave). */
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const next = this.proc.then(fn, fn);

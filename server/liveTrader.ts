@@ -20,7 +20,7 @@
 import { validateLimit, type EngineRunner } from '../src/lib/engine/runner.ts';
 import { catalogEntry } from '../src/lib/engine/catalog.ts';
 import { sideOf, type EngineConfig, type EngineState, type LiveLegs, type OpenPosition, type TradePlan } from '../src/lib/engine/types.ts';
-import { orderBroker } from '../src/lib/engine/sizing.ts';
+import { brokerLabel, orderBroker } from '../src/lib/engine/sizing.ts';
 import { DhanGateway, isRefused, isUnclear, type BrokerName, type Instrument, type OrderGateway, type PlaceArgs } from './brokers.ts';
 import type { DhanClient } from './dhan.ts';
 import { roundToTick } from './mapping.ts';
@@ -41,9 +41,18 @@ export interface Fill {
 /** The entry certainly didn't happen at this broker (nothing open there): safe to try the other one. */
 class NoEntry extends Error {}
 
+/** A closing order that didn't (fully) fill and was cancelled: `filled` units did go. */
+class ExitShort extends Error {
+  filled: number;
+  constructor(message: string, filled: number) {
+    super(message);
+    this.filled = filled;
+  }
+}
+const filledOf = (e: unknown) => (e instanceof ExitShort ? e.filled : 0);
+
 const upper = (s: unknown) => String(s ?? '').toUpperCase();
 const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
-const brokerLabel = (b: BrokerName) => (b === 'ANGEL' ? 'Angel One' : 'Dhan');
 
 /**
  * Stop-loss limit price beyond the trigger, so it still fills on a fast move.
@@ -148,7 +157,16 @@ export class LiveTrader {
    */
   private async marketOrder(gw: OrderGateway, inst: Instrument, side: 'BUY' | 'SELL', qty: number, c: OrderCtx): Promise<Fill> {
     const id = await gw.place(this.args(inst, side, qty, c, 'MARKET'));
-    return this.waitFill(gw, id);
+    try {
+      return await this.waitFill(gw, id);
+    } catch (e) {
+      if (!/not filled yet/.test((e as Error).message)) throw e;
+      // Never leave a closing order working at the broker while the app puts a stop back.
+      await this.cancelQuietly(gw, id);
+      const f = this.fillOf(id, await gw.order(id).catch(() => null));
+      if (f.filledQty >= qty) return f;
+      throw new ExitShort(`Order ${id} not filled in time — cancelled (${f.filledQty} of ${qty} filled)`, f.filledQty);
+    }
   }
 
   /**
@@ -195,6 +213,32 @@ export class LiveTrader {
     return gw.place(
       this.args(inst, closeSide(posSide), qty, c, 'STOP_LOSS', stopLimitPrice(t, { side: posSide, tick: c.tick, futures: c.futures }), t),
     );
+  }
+
+  /**
+   * An exit / T1 / stop-move order failed after the stop-loss was cancelled: the position is still at
+   * the broker, so put a protective stop back at once and raise an alert. Returns the new stop id.
+   */
+  private async reprotect(
+    runner: EngineRunner,
+    gw: OrderGateway,
+    inst: Instrument,
+    qty: number,
+    trigger: number,
+    side: 1 | -1,
+    c: OrderCtx,
+    what: string,
+    err: unknown,
+  ): Promise<string | null> {
+    if (!(qty > 0)) return null; // nothing left open
+    const sl = await this.placeStop(gw, inst, qty, trigger, side, c).catch(() => null);
+    const who = brokerLabel(gw.name);
+    const msg = `${what} FAILED at ${who}: ${(err as Error)?.message ?? err} — ${qty} still open at ${who}; ${
+      sl ? `stop-loss put back at ${trigger.toFixed(2)}` : `NO stop-loss could be placed — exit it in the ${who} app NOW`
+    }`;
+    runner.status = `Live order error - ${msg}`;
+    await runner.alert(msg).catch(() => {});
+    return sl;
   }
 
   private async cancelQuietly(gw: OrderGateway, orderId: string | null) {
@@ -360,7 +404,16 @@ export class LiveTrader {
       const stopFill = await this.stopFilled(gw, p.live.slOrderId);
       if (stopFill) return runner.manualExit({ price: stopFill.avgPrice, reason: 'SL HIT (exchange stop order)' });
       await this.cancelQuietly(gw, p.live.slOrderId);
-      const fill = await this.marketOrder(gw, instOf(p.live), closeSide(p.side ?? 1), p.remainingQty, ctxOf(runner.config));
+      const c = ctxOf(runner.config);
+      let fill: Fill;
+      try {
+        fill = await this.marketOrder(gw, instOf(p.live), closeSide(p.side ?? 1), p.remainingQty, c);
+      } catch (e) {
+        // Still holding it: never leave it without a stop.
+        const sl = await this.reprotect(runner, gw, instOf(p.live), p.remainingQty - filledOf(e), p.currentSl, p.side ?? 1, c, 'EXIT', e);
+        if (sl) await runner.patchPosition({ live: { ...p.live, slOrderId: sl } });
+        throw e;
+      }
       await runner.manualExit({ price: fill.avgPrice, reason: `${reason} (live fill)` });
     } finally {
       this.busy = false;
@@ -432,7 +485,14 @@ export class LiveTrader {
           return;
         }
         await this.cancelQuietly(gw, live.slOrderId);
-        const fill = await this.marketOrder(gw, inst, closeSide(side), prev.remainingQty, c);
+        let fill: Fill;
+        try {
+          fill = await this.marketOrder(gw, inst, closeSide(side), prev.remainingQty, c);
+        } catch (e) {
+          // The engine booked the exit but the broker didn't take it: the position is still open there.
+          await this.reprotect(runner, gw, inst, prev.remainingQty - filledOf(e), prev.currentSl, side, c, 'EXIT', e);
+          return;
+        }
         await runner.amendExit(prev, fill.avgPrice, 'live fill');
         return;
       }
@@ -440,9 +500,21 @@ export class LiveTrader {
       if (!prev.partialBooked && cur.partialBooked) {
         // T1: book half at market, re-protect the rest at breakeven.
         await this.cancelQuietly(gw, live.slOrderId);
-        await this.marketOrder(gw, inst, closeSide(side), cur.partialQty, c);
-        const sl = await this.placeStop(gw, inst, cur.remainingQty, cur.currentSl, side, c);
-        await runner.patchPosition({ live: { ...live, slOrderId: sl } });
+        try {
+          await this.marketOrder(gw, inst, closeSide(side), cur.partialQty, c);
+        } catch (e) {
+          // Half not booked at the broker: protect the whole quantity again.
+          const sl = await this.reprotect(runner, gw, inst, prev.remainingQty - filledOf(e), prev.currentSl, side, c, 'TARGET 1 booking', e);
+          if (sl) await runner.patchPosition({ live: { ...live, slOrderId: sl } });
+          return;
+        }
+        try {
+          const sl = await this.placeStop(gw, inst, cur.remainingQty, cur.currentSl, side, c);
+          await runner.patchPosition({ live: { ...live, slOrderId: sl } });
+        } catch (e) {
+          const sl = await this.reprotect(runner, gw, inst, cur.remainingQty, cur.currentSl, side, c, 'Stop-loss after Target 1', e);
+          if (sl) await runner.patchPosition({ live: { ...live, slOrderId: sl } });
+        }
         return;
       }
       // Still open: did the exchange stop fire while we weren't looking?
@@ -456,8 +528,14 @@ export class LiveTrader {
           await runner.manualExit({ price: late.avgPrice, reason: 'SL HIT (exchange stop order)' });
           return;
         }
-        const sl = await this.placeStop(gw, inst, cur.remainingQty, cur.currentSl, side, c);
-        await runner.patchPosition({ live: { ...live, slOrderId: sl } });
+        let sl: string | null;
+        try {
+          sl = await this.placeStop(gw, inst, cur.remainingQty, cur.currentSl, side, c);
+        } catch (e) {
+          // The raised stop was refused: put one back at the old level rather than none.
+          sl = await this.reprotect(runner, gw, inst, cur.remainingQty, prev.currentSl, side, c, 'Moving the stop-loss', e);
+        }
+        if (sl) await runner.patchPosition({ live: { ...live, slOrderId: sl } });
         return;
       }
       if (filled) {

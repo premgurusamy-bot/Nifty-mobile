@@ -216,7 +216,7 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
     engineConfig: async (patch: Partial<EngineConfig>) => {
       // Trade mode changes go through setTradeMode (pre-flight gate).
       const { tradeMode: _ignored, ...rest } = patch;
-      await engine.updateConfig(rest);
+      await engine.exclusive(() => engine.updateConfig(rest));
       return engine.snapshot();
     },
     engineBacktest: async () => {
@@ -225,37 +225,43 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
     },
     engineExport: async () => engine.exportData(),
     engineResetJournal: async () => {
-      if (engine.state.position) throw new Error('Exit the open position before clearing the journal.');
-      if (engine.state.pendingEntry) throw new Error('Cancel the pending entry order before clearing the journal.');
-      await engine.resetJournal();
+      await engine.exclusive(async () => {
+        const busy = engine.busySymbol();
+        if (busy) throw new Error(`${busy} has an open trade or entry order — close it before clearing the journal.`);
+        await engine.resetJournal();
+      });
       return engine.snapshot();
     },
 
+    // Manual actions run between engine cycles (never inside one), so they act on the index you see.
     engineEnter: async (limit?: number) => {
       if (!engine.dashboard) await engine.refresh();
-      if (live()) await trader.enter(engine, limit);
-      else await engine.placeEntry(limit);
+      await engine.exclusive(() => (live() ? trader.enter(engine, limit) : engine.placeEntry(limit)));
       return engine.snapshot();
     },
     engineCancelEntry: async () => {
-      await trader.cancelEntry(engine);
+      await engine.exclusive(() => trader.cancelEntry(engine));
       return engine.snapshot();
     },
     engineExit: async () => {
-      await trader.exit(engine);
+      await engine.exclusive(() => trader.exit(engine));
       return engine.snapshot();
     },
     setTradeMode: async (mode) => {
       if (mode === engine.config.tradeMode) return { snapshot: engine.snapshot(), preflight: null };
-      if (engine.state.position) throw new Error('Exit the open position before switching between PAPER and LIVE.');
-      if (engine.state.pendingEntry)
-        throw new Error('Cancel the pending entry order before switching between PAPER and LIVE.');
+      // Every watched index, not only the one shown: a LIVE trade must never end up managed as paper.
+      const busy = engine.busySymbol();
+      if (busy) throw new Error(`${busy} has an open trade or entry order — close it before switching between PAPER and LIVE.`);
       let pf: PreflightResult | null = null;
       if (mode === 'LIVE') {
         pf = await preflight();
         if (!pf.ok) return { snapshot: engine.snapshot(), preflight: pf };
       }
-      await engine.updateConfig({ tradeMode: mode });
+      await engine.exclusive(async () => {
+        const late = engine.busySymbol(); // a trade may have opened during the pre-flight check
+        if (late) throw new Error(`${late} has an open trade or entry order — close it before switching between PAPER and LIVE.`);
+        await engine.updateConfig({ tradeMode: mode });
+      });
       service.setLiveOrders(mode === 'LIVE');
       return { snapshot: engine.snapshot(), preflight: pf };
     },
@@ -269,7 +275,7 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
     },
     dhanIps: async () => extractIps(await dhan.getIP()),
     engineSetActive: async (symbol: string) => {
-      await engine.setActive(symbol);
+      await engine.exclusive(() => engine.setActive(symbol));
       return engine.snapshot();
     },
     screener: (group?: ScreenGroup) =>

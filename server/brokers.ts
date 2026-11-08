@@ -178,7 +178,7 @@ export class AngelGateway implements OrderGateway {
     return this.book.list.find((x) => String(x.orderid) === id) ?? null;
   }
   async order(id: string) {
-    this.book = null; // a status check wants the latest
+    // The order book is read at most about once a second (cached 0.9 s; cleared after a place / cancel).
     const o = await this.raw(id);
     if (!o) return null;
     return {

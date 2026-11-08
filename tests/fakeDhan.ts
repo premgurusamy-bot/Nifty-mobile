@@ -155,6 +155,8 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
     nextId: 5000,
     /** Market orders: null = fill at once; a number = stay OPEN with that quantity filled (0 = none). */
     marketFill: null as number | null,
+    /** Reject every MARKET order of this side (e.g. 'SELL': exits fail). */
+    rejectMarket: null as 'BUY' | 'SELL' | null,
     cash: 250000.5,
     /** Tokens the fake accepts; RenewToken adds a new one. */
     tokens: new Set<string>([FAKE_TOKEN, FAKE_LONG_TOKEN]),
@@ -395,10 +397,12 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
         const orderId = String(state.nextId++);
         const isMarket = body.orderType === 'MARKET';
         const hang = isMarket && state.marketFill != null;
+        const reject = isMarket && state.rejectMarket === body.transactionType;
         state.orders.push({
           dhanClientId: FAKE_CLIENT,
           orderId,
-          orderStatus: hang ? (state.marketFill! > 0 ? 'PART_TRADED' : 'TRANSIT') : isMarket ? 'TRADED' : 'PENDING',
+          orderStatus: reject ? 'REJECTED' : hang ? (state.marketFill! > 0 ? 'PART_TRADED' : 'TRANSIT') : isMarket ? 'TRADED' : 'PENDING',
+          ...(reject ? { omsErrorDescription: 'RMS: margin shortfall' } : {}),
           transactionType: body.transactionType,
           exchangeSegment: body.exchangeSegment,
           productType: body.productType,

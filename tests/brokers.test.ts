@@ -216,3 +216,72 @@ test('Capital sizing (LIVE, live capital 0): each index sized from its broker’
     api.dispose();
   }
 });
+
+test('a LIVE exit the broker refuses: the stop-loss is put back and an alert is raised (never left unprotected)', async () => {
+  const api = await phone({ symbol: 'NIFTY' }); // Dhan
+  try {
+    await api.engineEnter();
+    const p = api.runner.state.position!;
+    const oldSl = p.live!.slOrderId;
+    fd.state.rejectMarket = 'SELL';
+    const n = dhanOrders().length;
+    await assert.rejects(api.engineExit(), /REJECTED: RMS: margin shortfall/);
+    const sent = dhanOrders().slice(n);
+    assert.deepEqual(sent.map((o) => o.body.orderType), ['MARKET', 'STOP_LOSS']); // the sell, then the stop back
+    const now = api.runner.state.position!;
+    assert.ok(now, 'still open in the app');
+    assert.notEqual(now.live!.slOrderId, oldSl); // the new stop is tracked
+    const ev = api.runner.state.events[0];
+    assert.equal(ev.kind, 'ERROR');
+    assert.match(ev.message, /^EXIT FAILED at Dhan: .* still open at Dhan; stop-loss put back at/);
+  } finally {
+    fd.state.rejectMarket = null;
+    api.dispose();
+  }
+});
+
+test('PAPER/LIVE switching and clearing the journal are refused while ANY watched index has a trade', async () => {
+  const api = await phone({ symbol: 'NIFTY', multiIndex: true, watchSymbols: ['NIFTY', 'BANKNIFTY'] });
+  try {
+    await api.engineEnter(); // NIFTY in a LIVE trade
+    await api.engineSetActive('BANKNIFTY'); // looking at the other index
+    assert.equal(api.runner.state.position, null);
+    await assert.rejects(api.setTradeMode('PAPER'), /NIFTY has an open trade or entry order/);
+    await assert.rejects(api.engineResetJournal(), /NIFTY has an open trade/);
+    assert.equal(api.runner.config.tradeMode, 'LIVE');
+  } finally {
+    api.dispose();
+  }
+});
+
+test('manual actions wait for an engine cycle in progress (never run inside one)', async () => {
+  const { EngineRunner } = await import('../src/lib/engine/runner.ts');
+  const order: string[] = [];
+  const r = new EngineRunner({ load: async () => ({}) as never } as never, { load: async () => null, save: async () => {} });
+  let release!: () => void;
+  const cycle = (r as any).serial(async () => {
+    order.push('cycle start');
+    await new Promise<void>((res) => (release = res));
+    order.push('cycle end');
+  });
+  const action = r.exclusive(async () => void order.push('action'));
+  await new Promise((res) => setTimeout(res, 20));
+  release();
+  await Promise.all([cycle, action]);
+  assert.deepEqual(order, ['cycle start', 'cycle end', 'action']);
+});
+
+test('a LIVE exit that does not fill in time is cancelled (never left working) before the stop goes back', async () => {
+  const api = await phone({ symbol: 'NIFTY' });
+  try {
+    await api.engineEnter();
+    fd.state.marketFill = 0; // the sell sits there unfilled
+    const n = dhanOrders().length;
+    await assert.rejects(api.engineExit(), /not filled in time — cancelled \(0 of \d+ filled\)/);
+    assert.equal(fd.state.orders.filter((o: any) => o.orderType === 'MARKET' && o.transactionType === 'SELL').at(-1).orderStatus, 'CANCELLED');
+    assert.equal(dhanOrders().slice(n).at(-1)!.body.orderType, 'STOP_LOSS'); // protected again
+  } finally {
+    fd.state.marketFill = null;
+    api.dispose();
+  }
+});
