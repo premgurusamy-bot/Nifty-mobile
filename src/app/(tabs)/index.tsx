@@ -460,6 +460,7 @@ export default function DashboardScreen() {
               title={`Open position · ${p.direction === 'LONG' || p.direction === 'SHORT' ? `${p.direction} ${contract}` : `${p.direction} ${p.strike}`}`}
               rows={[
                 ['Entry', p.entry],
+                ...(p.live ? ([['Broker', p.live.broker === 'ANGEL' ? 'Angel One' : 'Dhan']] as [string, string][]) : []),
                 [isFut ? 'Live price' : 'Live premium', liveLtp ?? '—'],
                 ['Current (trailing) SL', p.currentSl, colors.down],
                 ['Target 1', p.target1, colors.up],

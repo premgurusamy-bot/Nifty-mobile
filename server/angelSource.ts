@@ -29,6 +29,7 @@ const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
 export interface AngelContract {
   token: string;
+  tradingsymbol: string;
   /** ISO date, e.g. 2026-11-25. */
   expiry: string;
   strike: number;
@@ -36,7 +37,7 @@ export interface AngelContract {
 }
 
 /** BANKNIFTY25NOV2654000CE → { expiry 2026-11-25, strike 54000, CE }. */
-export function parseOptionSymbol(name: string, tradingsymbol: string): Omit<AngelContract, 'token'> | null {
+export function parseOptionSymbol(name: string, tradingsymbol: string): Omit<AngelContract, 'token' | 'tradingsymbol'> | null {
   const m = new RegExp(`^${name}(\\d{2})([A-Z]{3})(\\d{2})(\\d+(?:\\.\\d+)?)(CE|PE)$`).exec(String(tradingsymbol).toUpperCase());
   if (!m) return null;
   const mon = MONTHS.indexOf(m[2]);
@@ -76,7 +77,7 @@ export class AngelEngineSource implements EngineDataSource {
       rows
         .map((r) => {
           const p = parseOptionSymbol(name, r.tradingsymbol);
-          return p && r.symboltoken ? { ...p, token: String(r.symboltoken) } : null;
+          return p && r.symboltoken ? { ...p, token: String(r.symboltoken), tradingsymbol: String(r.tradingsymbol).toUpperCase() } : null;
         })
         .filter((x): x is AngelContract => !!x);
     let list = parse(await this.angel.searchScrip('NFO', name));
@@ -90,6 +91,13 @@ export class AngelEngineSource implements EngineDataSource {
     if (!list.length) throw new AngelError(`Angel One returned no ${name} option contracts`);
     this.contracts.set(name, { day, list });
     return list;
+  }
+
+  /** The Angel contract of one option (for orders): searched if not cached yet. */
+  async contractFor(name: string, expiry: string, strike: number, type: 'CE' | 'PE', now = Date.now()): Promise<AngelContract> {
+    const c = (await this.contractsOf(name, now)).find((x) => x.expiry === expiry && x.strike === strike && x.type === type);
+    if (!c) throw new AngelError(`No Angel One contract for ${name} ${expiry} ${strike} ${type}`, 'NO_CONTRACT');
+    return c;
   }
 
   async load(cfg: EngineConfig, now: number) {

@@ -236,6 +236,14 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
     if (bad) throw new Error(`${bad} can't use Angel One data yet (index options: ${ok.join(', ')})`);
     next.angelSymbols = list;
   }
+  if (patch.angelOrderSymbols !== undefined) {
+    const ok = ['NIFTY', 'BANKNIFTY', 'FINNIFTY'];
+    const list = [...new Set((patch.angelOrderSymbols ?? []).map((x) => String(x).toUpperCase()))];
+    const bad = list.find((x) => !ok.includes(x));
+    if (bad) throw new Error(`${bad} can't trade through Angel One yet (index options: ${ok.join(', ')})`);
+    next.angelOrderSymbols = list;
+  }
+  if (patch.brokerFailover !== undefined) next.brokerFailover = !!patch.brokerFailover;
   if (patch.multiSize !== undefined) {
     if (patch.multiSize !== 'SPLIT' && patch.multiSize !== 'FULL') throw new Error('multiSize must be SPLIT or FULL');
     next.multiSize = patch.multiSize;

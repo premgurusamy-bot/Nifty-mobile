@@ -39,6 +39,12 @@ export function AngelSettingsCard() {
   const [msg, setMsg] = useState<string | null>(null);
   const cfg = snap?.config;
   const onBank = !!cfg?.angelSymbols?.includes('BANKNIFTY');
+  const ordersBank = !!cfg?.angelOrderSymbols?.includes('BANKNIFTY');
+  const toggle = (key: 'angelSymbols' | 'angelOrderSymbols', on: boolean) =>
+    void run(async () => {
+      const rest = (cfg?.[key] ?? []).filter((x) => x !== 'BANKNIFTY');
+      await updateConfig({ [key]: on ? [...rest, 'BANKNIFTY'] : rest });
+    });
   const feed = snap?.feeds?.BANKNIFTY;
 
   const run = async (fn: () => Promise<string | void>) => {
@@ -56,7 +62,7 @@ export function AngelSettingsCard() {
 
   return (
     <Card style={{ gap: 12 }}>
-      <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Angel One (data for BANK NIFTY)</Text>
+      <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Angel One (BANK NIFTY)</Text>
       {!a.available ? (
         <Text style={ui.muted}>Connect your Dhan account on this phone first — Angel One runs alongside it.</Text>
       ) : (
@@ -114,18 +120,39 @@ export function AngelSettingsCard() {
 
           {cfg ? (
             <View style={st.row}>
-              <Text style={st.label}>Use Angel One data for BANK NIFTY (PAPER only for now)</Text>
+              <Text style={st.label}>Use Angel One data for BANK NIFTY</Text>
               <Switch
                 value={onBank}
-                onValueChange={(v) =>
-                  void run(async () => {
-                    const rest = (cfg.angelSymbols ?? []).filter((x) => x !== 'BANKNIFTY');
-                    await updateConfig({ angelSymbols: v ? [...rest, 'BANKNIFTY'] : rest });
-                  })
-                }
+                onValueChange={(v) => toggle('angelSymbols', v)}
                 accessibilityLabel="Use Angel One data for BANK NIFTY"
               />
             </View>
+          ) : null}
+          {cfg ? (
+            <View style={st.row}>
+              <Text style={st.label}>Place BANK NIFTY LIVE orders through Angel One (NIFTY stays with Dhan)</Text>
+              <Switch
+                value={ordersBank}
+                onValueChange={(v) => toggle('angelOrderSymbols', v)}
+                accessibilityLabel="Place BANK NIFTY orders through Angel One"
+              />
+            </View>
+          ) : null}
+          {cfg ? (
+            <View style={st.row}>
+              <Text style={st.label}>Never miss an entry: switch to the other broker when one can&apos;t take it</Text>
+              <Switch
+                value={cfg.brokerFailover !== false}
+                onValueChange={(v) => void run(() => updateConfig({ brokerFailover: v }))}
+                accessibilityLabel="Switch broker automatically"
+              />
+            </View>
+          ) : null}
+          {ordersBank && !a.status?.connected ? (
+            <Text style={{ color: colors.down }}>
+              Not logged in to Angel One:{' '}
+              {cfg?.brokerFailover !== false ? 'BANK NIFTY entries go to Dhan until you log in.' : 'BANK NIFTY LIVE entries will fail.'}
+            </Text>
           ) : null}
           {onBank && feed ? (
             <Text style={{ color: feed.feed === 'ANGEL' ? colors.up : colors.down }}>
@@ -150,11 +177,15 @@ export function AngelSettingsCard() {
             </View>
           ) : null}
           <Text style={[ui.muted, { fontSize: 12 }]}>
-            With the switch on, BANK NIFTY&apos;s candles, option chain (prices, OI, IV, Greeks) and live quotes come
-            from Angel One, so Dhan&apos;s option-chain limit is left to NIFTY. If Angel One isn&apos;t logged in or
-            fails, BANK NIFTY uses Dhan for that refresh. Orders still go through Dhan, and BANK NIFTY can&apos;t trade
-            LIVE while on Angel One data (PAPER only for now). Angel&apos;s sessions end each day: log in once each
-            morning. &quot;Change in OI&quot; counts from the first quote the app saw today.
+            Data: BANK NIFTY&apos;s candles, option chain (prices, OI, IV, Greeks) and live quotes come from Angel
+            One, so Dhan&apos;s option-chain limit is left to NIFTY. If one broker&apos;s data fails, that refresh
+            uses the other. Orders: BANK NIFTY&apos;s entry, its stop-loss and every exit go to Angel One (a trade
+            always stays with the broker that opened it). With &quot;never miss an entry&quot; on, an entry Angel One
+            certainly didn&apos;t take — not logged in, refused, rejected, or not filled in the fill window and
+            cancelled — is placed with Dhan at once (and NIFTY the other way round). If it is unclear whether an order
+            went through (no reply), it does not switch, so you never get two orders. Angel One orders need your
+            static IP registered on the SmartAPI app (the same as Dhan&apos;s). Angel&apos;s sessions end each day:
+            log in each morning. &quot;Change in OI&quot; counts from the first quote the app saw today.
           </Text>
         </>
       )}

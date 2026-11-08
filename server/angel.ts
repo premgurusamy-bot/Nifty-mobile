@@ -30,13 +30,13 @@ export interface AngelSession {
   at: number;
 }
 
-const headers = (apiKey: string, jwt?: string): Record<string, string> => ({
+const headers = (apiKey: string, jwt?: string, publicIp = '127.0.0.1'): Record<string, string> => ({
   'Content-Type': 'application/json',
   Accept: 'application/json',
   'X-UserType': 'USER',
   'X-SourceID': 'WEB',
   'X-ClientLocalIP': '127.0.0.1',
-  'X-ClientPublicIP': '127.0.0.1',
+  'X-ClientPublicIP': publicIp || '127.0.0.1',
   'X-MACAddress': '00:00:00:00:00:00',
   'X-PrivateKey': apiKey,
   ...(jwt ? { Authorization: `Bearer ${jwt}` } : {}),
@@ -110,9 +110,14 @@ export class AngelClient {
   private dataThrottle = new Throttle(400);
   private slowThrottle = new Throttle(1100);
 
-  constructor(o: { baseUrl?: string; session?: AngelSession | null } = {}) {
+  private tradeThrottle = new Throttle(150);
+  /** The static IP registered on the SmartAPI app (sent with orders). */
+  publicIp: () => string;
+
+  constructor(o: { baseUrl?: string; session?: AngelSession | null; publicIp?: () => string } = {}) {
     this.baseUrl = o.baseUrl || ANGEL_API_URL;
     this.session = o.session ?? null;
+    this.publicIp = o.publicIp ?? (() => '');
   }
 
   get connected() {
@@ -121,8 +126,68 @@ export class AngelClient {
 
   private post<T>(path: string, body: unknown, what: string): Promise<T> {
     const s = this.session;
-    if (!s) return Promise.reject(new AngelError('Angel One is not logged in — Settings → Angel One'));
-    return call<T>(`${this.baseUrl}${path}`, { method: 'POST', headers: headers(s.apiKey, s.jwtToken), body: JSON.stringify(body) }, what);
+    if (!s) return Promise.reject(new AngelError('Angel One is not logged in — Settings → Angel One', 'NOT_LOGGED_IN'));
+    return call<T>(
+      `${this.baseUrl}${path}`,
+      { method: 'POST', headers: headers(s.apiKey, s.jwtToken, this.publicIp()), body: JSON.stringify(body) },
+      what,
+    );
+  }
+
+  private get<T>(path: string, what: string): Promise<T> {
+    const s = this.session;
+    if (!s) return Promise.reject(new AngelError('Angel One is not logged in — Settings → Angel One', 'NOT_LOGGED_IN'));
+    return call<T>(`${this.baseUrl}${path}`, { method: 'GET', headers: headers(s.apiKey, s.jwtToken, this.publicIp()) }, what);
+  }
+
+  // ---- Orders (NFO options) ----------------------------------------------------
+
+  /** Place an order; returns Angel's order id. Values are sent as strings, like Angel's own client. */
+  async placeOrder(p: {
+    variety: 'NORMAL' | 'STOPLOSS';
+    tradingsymbol: string;
+    symboltoken: string;
+    transactiontype: 'BUY' | 'SELL';
+    exchange: string;
+    ordertype: 'MARKET' | 'LIMIT' | 'STOPLOSS_LIMIT';
+    producttype: 'INTRADAY' | 'CARRYFORWARD';
+    price: number;
+    triggerprice?: number;
+    quantity: number;
+  }): Promise<string> {
+    const body = {
+      ...p,
+      duration: 'DAY',
+      price: String(p.price),
+      triggerprice: String(p.triggerprice ?? 0),
+      quantity: String(p.quantity),
+      squareoff: '0',
+      stoploss: '0',
+    };
+    const json = await this.tradeThrottle.run(() =>
+      this.post<any>('/rest/secure/angelbroking/order/v1/placeOrder', body, 'order'),
+    );
+    const id = json?.data?.orderid;
+    if (!id) throw new AngelError(`Angel One order: no order id in the reply (${json?.message ?? 'unknown'})`, 'NO_ORDER_ID');
+    return String(id);
+  }
+
+  async cancelOrder(orderid: string, variety: string) {
+    await this.tradeThrottle.run(() =>
+      this.post<any>('/rest/secure/angelbroking/order/v1/cancelOrder', { variety, orderid }, 'cancel'),
+    );
+  }
+
+  /** Today's orders (Angel's order book). */
+  async orderBook(): Promise<any[]> {
+    const json = await this.slowThrottle.run(() => this.get<any>('/rest/secure/angelbroking/order/v1/getOrderBook', 'order book'));
+    return Array.isArray(json?.data) ? json.data : [];
+  }
+
+  /** Funds (RMS): available cash etc. */
+  async rms(): Promise<any> {
+    const json = await this.slowThrottle.run(() => this.get<any>('/rest/secure/angelbroking/user/v1/getRMS', 'funds'));
+    return json?.data ?? {};
   }
 
   /** mode 'LTP' (price only) or 'FULL' (with OI, volume, depth). */

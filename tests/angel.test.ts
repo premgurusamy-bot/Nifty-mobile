@@ -94,7 +94,7 @@ test('settings: which indexes use Angel One', () => {
   assert.throws(() => sanitizeConfig({ angelSymbols: ['GOLDM'] }, DEFAULT_CONFIG), /can't use Angel One data/);
 });
 
-test('phone: multi-index with BANK NIFTY on Angel — NIFTY from Dhan, BANK NIFTY from Angel, LIVE refused for it', async () => {
+test('phone: multi-index with BANK NIFTY on Angel — NIFTY from Dhan, BANK NIFTY from Angel', async () => {
   const { createLocalApi } = await import('../src/api/localApi.ts');
   const { FAKE_CLIENT, FAKE_TOKEN, GOLDEN_EXPIRY, startFakeDhan } = await import('./fakeDhan.ts');
   const fake = await startFakeDhan();
@@ -130,9 +130,7 @@ test('phone: multi-index with BANK NIFTY on Angel — NIFTY from Dhan, BANK NIFT
     assert.equal(ltp.length, 1);
     assert.equal(ltp[0].body.mode, 'LTP');
     assert.deepEqual(ltp[0].body.exchangeTokens.NSE, ['99926009']);
-    // LIVE orders are not wired to Angel-fed indexes yet.
-    await engine.updateConfig({ tradeMode: 'LIVE' });
-    await assert.rejects(api.engineEnter(), /BANKNIFTY runs on Angel One data — PAPER only for now/);
+
   } finally {
     api.dispose();
     fake.server.close();

@@ -12,20 +12,27 @@ export const ANGEL_KEY = 'fake-angel-api-key';
 export const ANGEL_CLIENT = 'A123456';
 export const ANGEL_PIN = '1234';
 export const ANGEL_TOTP_KEY = 'JBSWY3DPEHPK3PXP';
-export const ANGEL_EXPIRY = '2099-12-30'; // 30DEC2099 → tradingsymbol BANKNIFTY30DEC99…
-const SYM_EXP = '30DEC99';
+export const ANGEL_EXPIRY = '2099-12-29'; // 29DEC2099 (same as the fake Dhan) → BANKNIFTY29DEC99…
+const SYM_EXP = '29DEC99';
 
-export function startFakeAngel(port = 0): Promise<{ server: Server; url: string; requests: Recorded[]; state: any }> {
+export function startFakeAngel(
+  port = 0,
+  grid: { first: number; step: number; count: number; spot: number } = { first: 51000, step: 100, count: 61, spot: 54210.35 },
+): Promise<{ server: Server; url: string; requests: Recorded[]; state: any }> {
   const requests: Recorded[] = [];
   const state = {
-    spot: 54210.35,
+    spot: grid.spot,
     jwt: 'fake-angel-jwt',
     /** Make every secured call fail with this Angel error code (e.g. 'AG8001'). */
     failWith: '' as string,
     logins: 0,
+    /** Orders: 'fill' (market orders complete at once), 'reject', or 'hang' (stay open). */
+    orderMode: 'fill' as 'fill' | 'reject' | 'hang',
+    orders: [] as any[],
+    nextId: 260000000001,
   };
-  const strikes = Array.from({ length: 61 }, (_, i) => 51000 + i * 100);
-  const token = (k: number, t: string) => String((t === 'CE' ? 600000 : 700000) + (k - 51000) / 100);
+  const strikes = Array.from({ length: grid.count }, (_, i) => grid.first + i * grid.step);
+  const token = (k: number, t: string) => String((t === 'CE' ? 600000 : 700000) + Math.round((k - grid.first) / grid.step));
   const contracts = strikes.flatMap((k) =>
     ['CE', 'PE'].map((t) => ({ exchange: 'NFO', tradingsymbol: `BANKNIFTY${SYM_EXP}${k}${t}`, symboltoken: token(k, t) })),
   );
@@ -61,6 +68,35 @@ export function startFakeAngel(port = 0): Promise<{ server: Server; url: string;
       }
       if (req.headers.authorization !== `Bearer ${state.jwt}`) return fail('Invalid Token', 'AG8001');
       if (state.failWith) return fail('Invalid Token', state.failWith);
+      if (path === '/rest/secure/angelbroking/order/v1/placeOrder') {
+        const c = byToken.get(String(body.symboltoken));
+        if (!c || c.tradingsymbol !== body.tradingsymbol) return fail('Invalid symbol', 'AB1019');
+        const orderid = String(state.nextId++);
+        const m = /(\d+)(CE|PE)$/.exec(c.tradingsymbol)!;
+        const market = body.ordertype === 'MARKET';
+        const status =
+          state.orderMode === 'reject' ? 'rejected' : body.variety === 'STOPLOSS' ? 'trigger pending' : market && state.orderMode === 'fill' ? 'complete' : 'open';
+        state.orders.push({
+          ...body,
+          orderid,
+          uniqueorderid: `u-${orderid}`,
+          status,
+          orderstatus: status,
+          averageprice: status === 'complete' ? premium(Number(m[1]), m[2]) : 0,
+          filledshares: status === 'complete' ? body.quantity : '0',
+          unfilledshares: status === 'complete' ? '0' : body.quantity,
+          text: status === 'rejected' ? 'RMS: insufficient funds' : '',
+          updatetime: '',
+        });
+        return send({ status: true, message: 'SUCCESS', errorcode: '', data: { script: body.tradingsymbol, orderid, uniqueorderid: `u-${orderid}` } });
+      }
+      if (path === '/rest/secure/angelbroking/order/v1/getOrderBook') return send({ status: true, message: 'SUCCESS', data: state.orders });
+      if (path === '/rest/secure/angelbroking/order/v1/cancelOrder') {
+        const o = state.orders.find((x: any) => x.orderid === String(body.orderid));
+        if (!o) return fail('Order not found', 'AB2001');
+        o.status = o.orderstatus = 'cancelled';
+        return send({ status: true, message: 'SUCCESS', data: { orderid: o.orderid } });
+      }
       if (path === '/rest/secure/angelbroking/order/v1/searchScrip') {
         const q = String(body.searchscrip).toUpperCase();
         return send({ status: true, message: 'SUCCESS', data: contracts.filter((c) => c.tradingsymbol.startsWith(q)) });
@@ -89,12 +125,12 @@ export function startFakeAngel(port = 0): Promise<{ server: Server; url: string;
         return send({ status: true, message: 'SUCCESS', data: { fetched, unfetched: [] } });
       }
       if (path === '/rest/secure/angelbroking/marketData/v1/optionGreek') {
-        if (body.name !== 'BANKNIFTY' || body.expirydate !== '30DEC2099') return fail('No data', 'AB9019');
+        if (body.name !== 'BANKNIFTY' || body.expirydate !== '29DEC2099') return fail('No data', 'AB9019');
         return send({
           status: true,
           message: 'SUCCESS',
           data: strikes.flatMap((k) =>
-            ['CE', 'PE'].map((t) => ({ name: 'BANKNIFTY', expiry: '30DEC2099', strikePrice: `${k}.000000`, optionType: t, delta: t === 'CE' ? '0.5' : '-0.5', gamma: '0.0008', theta: '-12.5', vega: '20.1', impliedVolatility: '14.25', tradeVolume: '50000.00' })),
+            ['CE', 'PE'].map((t) => ({ name: 'BANKNIFTY', expiry: '29DEC2099', strikePrice: `${k}.000000`, optionType: t, delta: t === 'CE' ? '0.5' : '-0.5', gamma: '0.0008', theta: '-12.5', vega: '20.1', impliedVolatility: '14.25', tradeVolume: '50000.00' })),
           ),
         });
       }

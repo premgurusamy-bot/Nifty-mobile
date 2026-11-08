@@ -137,8 +137,15 @@ export interface EngineConfig {
   lastEntryTimeMcx: string;
   /** Seconds between automatic refreshes (min 3: Dhan allows one option-chain request per 3 s). */
   refreshSeconds: number;
-  /** Index options whose market data comes from Angel One instead of Dhan (PAPER only for now). */
+  /** Index options whose market data comes from Angel One instead of Dhan. */
   angelSymbols: string[];
+  /** Index options whose LIVE orders go to Angel One (the rest: Dhan). */
+  angelOrderSymbols: string[];
+  /**
+   * Never miss an entry: when the index's broker can't take the entry (not logged in, refused,
+   * rejected, or not filled and cancelled), place it with the other broker. Data falls back too.
+   */
+  brokerFailover: boolean;
   /** Between refreshes, update spot and premiums from Dhan quotes every second (stops / breaks act on them). */
   fastTicks: boolean;
   alertsEnabled: boolean;
@@ -248,6 +255,8 @@ export const DEFAULT_CONFIG: EngineConfig = {
   refreshSeconds: 15,
   fastTicks: true,
   angelSymbols: [],
+  angelOrderSymbols: [],
+  brokerFailover: true,
   alertsEnabled: true,
   sizingMode: 'RISK',
   capitalPaper: 100000,
@@ -299,7 +308,11 @@ export interface PendingSetup {
 
 /** Dhan order references for a live position. */
 export interface LiveLegs {
+  /** Broker holding the position (absent = Dhan). */
+  broker?: 'DHAN' | 'ANGEL';
   securityId: string;
+  /** Angel One trading symbol (its orders need it). */
+  tradingSymbol?: string;
   entryOrderId: string;
   /** Exchange-side stop-loss order protecting the remaining quantity. */
   slOrderId: string | null;
@@ -450,7 +463,7 @@ export interface PendingEntry {
   limit: number;
   placedAt: number;
   /** Set when the limit order was placed with Dhan (LIVE mode). */
-  live?: { securityId: string; orderId: string };
+  live?: { securityId: string; orderId: string; broker?: 'DHAN' | 'ANGEL'; tradingSymbol?: string };
 }
 
 /** The parts of the engine state that belong to one index (the rest is the shared account). */

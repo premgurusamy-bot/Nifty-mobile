@@ -4,21 +4,26 @@
  * Safety model:
  *  - Entries: the app's ENTER button, or the LIVE automatic switch. A market entry that isn't
  *    filled within the fill window (default 5 s) is cancelled; a part that filled is kept.
- *  - Every live entry gets an exchange-side STOP_LOSS sell order at the plan's
- *    SL, so the position stays protected even when the app is closed.
- *  - While the app runs, the engine's T1 (book half, trail SL to breakeven),
- *    T2 and trailing-SL exits are mirrored with real market orders, and a stop
- *    order that filled at the exchange closes the engine position.
+ *  - Each index's orders go to its broker (Dhan, or Angel One for the indexes set to it). With
+ *    "switch broker" on, an entry the broker certainly didn't take (not logged in, refused,
+ *    rejected, or not filled and cancelled with nothing filled) goes to the other broker at once.
+ *    When it is unclear whether an order was placed (no reply), it does NOT switch: two orders
+ *    would be worse than one missed entry.
+ *  - Every live entry gets an exchange-side STOP_LOSS order at the plan's SL with the same broker,
+ *    so the position stays protected even when the app is closed.
+ *  - While the app runs, the engine's T1 (book half, trail SL to breakeven), T2, trailing-SL and
+ *    profit-lock moves are mirrored with real orders at that broker, and a stop order that filled
+ *    at the exchange closes the engine position.
  *
- * No Node-only imports: runs inside the app (phone talks to Dhan directly).
+ * No Node-only imports: runs inside the app (phone talks to the brokers directly).
  */
 import { validateLimit, type EngineRunner } from '../src/lib/engine/runner.ts';
 import { catalogEntry } from '../src/lib/engine/catalog.ts';
 import { sideOf, type EngineConfig, type EngineState, type LiveLegs, type OpenPosition, type TradePlan } from '../src/lib/engine/types.ts';
-import { optionId } from '../src/lib/instruments.ts';
+import { DhanGateway, isRefused, isUnclear, type BrokerName, type Instrument, type OrderGateway, type PlaceArgs } from './brokers.ts';
 import type { DhanClient } from './dhan.ts';
 import { roundToTick } from './mapping.ts';
-import { underlyingFor, type DhanService } from './service.ts';
+import type { DhanService } from './service.ts';
 
 const FILL_TIMEOUT_MS = 15_000;
 const FILL_POLL_MS = 1000;
@@ -32,8 +37,12 @@ export interface Fill {
   filledQty: number;
 }
 
+/** The entry certainly didn't happen at this broker (nothing open there): safe to try the other one. */
+class NoEntry extends Error {}
+
 const upper = (s: unknown) => String(s ?? '').toUpperCase();
 const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+const brokerLabel = (b: BrokerName) => (b === 'ANGEL' ? 'Angel One' : 'Dhan');
 
 /**
  * Stop-loss limit price beyond the trigger, so it still fills on a fast move.
@@ -50,7 +59,7 @@ export function stopLimitPrice(trigger: number, o: { side?: 1 | -1; tick?: numbe
 /** Order routing for the selected instrument. */
 interface OrderCtx {
   segment: string;
-  product: string;
+  product: 'INTRADAY' | 'MARGIN';
   tick: number;
   futures: boolean;
 }
@@ -63,31 +72,46 @@ const ctxOf = (cfg: EngineConfig): OrderCtx => ({
 /** Opening order side: options are always bought; futures shorts are sold. */
 const openSide = (side: 1 | -1) => (side > 0 ? 'BUY' : 'SELL') as 'BUY' | 'SELL';
 const closeSide = (side: 1 | -1) => (side > 0 ? 'SELL' : 'BUY') as 'BUY' | 'SELL';
+const instOf = (l: { securityId: string; tradingSymbol?: string }): Instrument => ({
+  securityId: l.securityId,
+  ...(l.tradingSymbol ? { tradingSymbol: l.tradingSymbol } : {}),
+});
 
 export class LiveTrader {
-  private dhan: DhanClient;
-  private service: DhanService;
+  private gateways: Partial<Record<BrokerName, OrderGateway>>;
   private sleep: (ms: number) => Promise<void>;
   /** Stops the reconcile step from racing a manual ENTER/EXIT. */
   private busy = false;
 
-  constructor(dhan: DhanClient, service: DhanService, opts: { sleep?: (ms: number) => Promise<void> } = {}) {
-    this.dhan = dhan;
-    this.service = service;
+  constructor(
+    dhan: DhanClient,
+    service: DhanService,
+    opts: { sleep?: (ms: number) => Promise<void>; angel?: OrderGateway; dhanGateway?: OrderGateway } = {},
+  ) {
+    this.gateways = { DHAN: opts.dhanGateway ?? new DhanGateway(dhan, service), ...(opts.angel ? { ANGEL: opts.angel } : {}) };
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
 
-  private async order(orderId: string): Promise<any> {
-    const o = await this.dhan.order(orderId);
-    return Array.isArray(o) ? o[0] : o;
+  private gw(b: BrokerName | undefined): OrderGateway {
+    const g = this.gateways[b ?? 'DHAN'];
+    if (!g) throw new Error(`${brokerLabel(b ?? 'DHAN')} orders aren't available in this app`);
+    return g;
+  }
+
+  /** The index's broker first, then (switch on) the other one. */
+  brokersFor(cfg: EngineConfig): BrokerName[] {
+    const own: BrokerName = (cfg.angelOrderSymbols ?? []).includes(cfg.symbol) && cfg.instrumentKind === 'INDEX_OPTIONS' ? 'ANGEL' : 'DHAN';
+    const other: BrokerName = own === 'ANGEL' ? 'DHAN' : 'ANGEL';
+    const canOther = cfg.brokerFailover !== false && !!this.gateways[other] && (other === 'DHAN' || cfg.instrumentKind === 'INDEX_OPTIONS');
+    return canOther ? [own, other] : [own];
   }
 
   /** Poll until the order is TRADED (or definitively not). */
-  async waitFill(orderId: string, timeoutMs = FILL_TIMEOUT_MS, pollMs = FILL_POLL_MS): Promise<Fill> {
+  async waitFill(gw: OrderGateway, orderId: string, timeoutMs = FILL_TIMEOUT_MS, pollMs = FILL_POLL_MS): Promise<Fill> {
     const until = Date.now() + timeoutMs;
     let waited = 0; // also counted, so an injected (test) sleep ends the wait too
     for (;;) {
-      const o = await this.order(orderId);
+      const o = await gw.order(orderId).catch(() => null);
       const status = upper(o?.orderStatus);
       if (status === 'TRADED') {
         return {
@@ -98,111 +122,93 @@ export class LiveTrader {
         };
       }
       if (status === 'REJECTED' || status === 'CANCELLED' || status === 'EXPIRED') {
-        throw new Error(`Order ${orderId} ${status}${o?.omsErrorDescription ? `: ${o.omsErrorDescription}` : ''}`);
+        const msg = `${brokerLabel(gw.name)} order ${orderId} ${status}${o?.omsErrorDescription ? `: ${o.omsErrorDescription}` : ''}`;
+        throw num(o?.filledQty) > 0 ? new Error(msg) : new NoEntry(msg);
       }
       if (Date.now() > until || waited >= timeoutMs)
-        throw new Error(`Order ${orderId} not filled yet (${status || 'unknown'}) — check Dhan → Orders`);
+        throw new Error(`Order ${orderId} not filled yet (${status || 'unknown'}) — check ${brokerLabel(gw.name)} → Orders`);
       await this.sleep(pollMs);
       waited += pollMs;
     }
   }
 
-  /** Dhan security id of what the plan trades: the option strike, or the current MCX contract. */
-  async securityIdFor(
-    cfg: EngineConfig,
-    plan: Pick<TradePlan, 'direction' | 'strike'>,
-    expiry: string,
-  ): Promise<string> {
-    if (cfg.instrumentKind === 'MCX_FUTURES') {
-      if (!cfg.futSecurityId) throw new Error(`No ${cfg.symbol} contract resolved yet — tap Refresh now first`);
-      return cfg.futSecurityId;
-    }
-    if (plan.direction !== 'CE' && plan.direction !== 'PE') throw new Error('Option plan expected');
-    const id = optionId({ underlying: cfg.symbol, expiry, strike: plan.strike, type: plan.direction });
-    let ref = this.service.toDhan(id);
-    if (!ref) {
-      await this.service.optionChain(expiry, underlyingFor(cfg.symbol)); // learns security ids from Dhan's chain
-      ref = this.service.toDhan(id);
-    }
-    if (!ref) throw new Error(`No Dhan security id for ${cfg.symbol} ${expiry} ${plan.strike} ${plan.direction}`);
-    return ref.securityId;
+  /** Dhan security id of what the plan trades (the app's position ticker uses it). */
+  async securityIdFor(cfg: EngineConfig, plan: Pick<TradePlan, 'direction' | 'strike'>, expiry: string): Promise<string> {
+    return (await this.gw('DHAN').instrument(cfg, plan, expiry)).securityId;
+  }
+
+  private args(inst: Instrument, side: 'BUY' | 'SELL', qty: number, c: OrderCtx, type: PlaceArgs['type'], price = 0, trigger?: number): PlaceArgs {
+    return { inst, segment: c.segment, side, qty, type, price, product: c.product, ...(trigger != null ? { trigger } : {}) };
   }
 
   /**
    * Quantity: NSE options in units (multiples of the lot); MCX in lots — Dhan's
    * SDK example orders MCX Gold with quantity=1. The engine's MCX quantities are lots.
    */
-  private async marketOrder(securityId: string, side: 'BUY' | 'SELL', qty: number, c: OrderCtx): Promise<Fill> {
-    const res = await this.dhan.placeOrder({
-      securityId,
-      exchangeSegment: c.segment,
-      transactionType: side,
-      quantity: qty,
-      orderType: 'MARKET',
-      productType: c.product,
-      price: 0,
-    });
-    return this.waitFill(String(res.orderId));
+  private async marketOrder(gw: OrderGateway, inst: Instrument, side: 'BUY' | 'SELL', qty: number, c: OrderCtx): Promise<Fill> {
+    const id = await gw.place(this.args(inst, side, qty, c, 'MARKET'));
+    return this.waitFill(gw, id);
   }
 
   /**
    * Market entry with a fill window: filled within `seconds` → keep it. Not (fully) filled by
-   * then → cancel the order at Dhan; a part that did fill is kept (it is a real position and
-   * gets its stop), nothing filled → throws, no position.
+   * then → cancel the order; a part that did fill is kept (it is a real position and gets its
+   * stop). NoEntry when the broker certainly holds nothing (safe to try the other broker).
    */
-  private async marketEntry(securityId: string, side: 'BUY' | 'SELL', qty: number, c: OrderCtx, seconds: number): Promise<Fill> {
-    const res = await this.dhan.placeOrder({
-      securityId,
-      exchangeSegment: c.segment,
-      transactionType: side,
-      quantity: qty,
-      orderType: 'MARKET',
-      productType: c.product,
-      price: 0,
-    });
-    const orderId = String(res.orderId);
+  private async marketEntry(gw: OrderGateway, inst: Instrument, side: 'BUY' | 'SELL', qty: number, c: OrderCtx, seconds: number): Promise<Fill> {
+    const a = this.args(inst, side, qty, c, 'MARKET');
+    const t0 = Date.now();
+    let orderId: string;
     try {
-      return await this.waitFill(orderId, seconds * 1000, ENTRY_POLL_MS);
+      orderId = await gw.place(a);
+    } catch (e) {
+      if (isRefused(e)) throw new NoEntry((e as Error).message);
+      if (!isUnclear(e)) throw e;
+      // No reply: look whether it reached the broker before deciding anything.
+      await this.sleep(1500);
+      const found = await gw.findRecent(a, t0);
+      if (found === null) throw new NoEntry(`${(e as Error).message} (no order placed)`);
+      throw new Error(
+        `${(e as Error).message} — the order ${found ? `may have been placed (${found})` : 'may or may not have been placed'}: check ${brokerLabel(gw.name)} → Orders`,
+      );
+    }
+    try {
+      return await this.waitFill(gw, orderId, seconds * 1000, ENTRY_POLL_MS);
     } catch (e) {
       if (!/not filled yet/.test((e as Error).message)) throw e; // rejected / cancelled: nothing to undo
     }
-    await this.cancelQuietly(orderId);
-    const o = await this.order(orderId).catch(() => null);
+    await this.cancelQuietly(gw, orderId);
+    const o = await gw.order(orderId).catch(() => null);
     const f = this.fillOf(orderId, o);
     if (f.filledQty > 0) return f; // filled (fully, or partly) before the cancel landed
-    if (!o) throw new Error(`Order ${orderId} not filled in ${seconds} s — cancel sent, but its status couldn't be read: check Dhan → Orders`);
-    throw new Error(`Order ${orderId} not filled in ${seconds} s — cancelled, no trade`);
+    if (!o)
+      throw new Error(
+        `Order ${orderId} not filled in ${seconds} s — cancel sent, but its status couldn't be read: check ${brokerLabel(gw.name)} → Orders`,
+      );
+    throw new NoEntry(`Order ${orderId} not filled in ${seconds} s — cancelled, no trade`);
   }
 
   /** Protective stop for a position of `posSide` (+1 long → SELL stop below; -1 short → BUY stop above). */
-  private async placeStop(securityId: string, qty: number, trigger: number, posSide: 1 | -1, c: OrderCtx): Promise<string> {
+  private async placeStop(gw: OrderGateway, inst: Instrument, qty: number, trigger: number, posSide: 1 | -1, c: OrderCtx): Promise<string> {
     const t = roundToTick(trigger, c.tick);
-    const res = await this.dhan.placeOrder({
-      securityId,
-      exchangeSegment: c.segment,
-      transactionType: closeSide(posSide),
-      quantity: qty,
-      orderType: 'STOP_LOSS',
-      productType: c.product,
-      price: stopLimitPrice(t, { side: posSide, tick: c.tick, futures: c.futures }),
-      triggerPrice: t,
-    });
-    return String(res.orderId);
+    return gw.place(
+      this.args(inst, closeSide(posSide), qty, c, 'STOP_LOSS', stopLimitPrice(t, { side: posSide, tick: c.tick, futures: c.futures }), t),
+    );
   }
 
-  private async cancelQuietly(orderId: string | null) {
+  private async cancelQuietly(gw: OrderGateway, orderId: string | null) {
     if (!orderId) return;
     try {
-      await this.dhan.cancelOrder(orderId);
+      await gw.cancel(orderId);
     } catch {
       /* already traded / cancelled */
     }
   }
 
   /**
-   * Manual ENTER in LIVE mode. No limit: market buy. With a limit: a LIMIT buy
-   * at that price, which stays pending at Dhan until it fills (checked on every
-   * refresh) or you cancel it. Either way the protective stop goes in on fill.
+   * ENTER in LIVE mode. No limit: market order (switching broker if the first can't take it).
+   * With a limit: a LIMIT order at that price with the index's broker, pending until it fills
+   * (checked on every refresh) or you cancel it. Either way the protective stop goes in on fill.
    */
   async enter(runner: EngineRunner, limit?: number, opts: { auto?: boolean } = {}): Promise<OpenPosition | null> {
     if (this.busy) throw new Error('Another live order is in progress');
@@ -211,43 +217,55 @@ export class LiveTrader {
     try {
       const cfg = runner.config;
       if (!catalogEntry(cfg.symbol)) throw new Error(`Live trading isn't set up for ${cfg.symbol}`);
-      if (runner.lastChain?.feed === 'ANGEL' || cfg.angelSymbols?.includes(cfg.symbol))
-        throw new Error(`${cfg.symbol} runs on Angel One data — PAPER only for now (Settings → Angel One to switch it back to Dhan)`);
       const c = ctxOf(cfg);
       const plan = runner.entryPlan();
       const expiry = runner.dashboard?.expiry || cfg.futExpiry;
       if (!expiry && !c.futures) throw new Error('No expiry — tap Refresh now first');
-      const securityId = await this.securityIdFor(cfg, plan, expiry);
       const side = sideOf(plan.direction);
-      if (limit == null) {
-        const fill = await this.marketEntry(securityId, openSide(side), plan.qty, c, cfg.entryFillSeconds ?? 5);
-        const pos = await this.opened(runner, plan, securityId, fill, opts.auto);
-        if (fill.filledQty < plan.qty)
-          runner.status = `Entry partly filled (${fill.filledQty} of ${plan.qty}) — the rest was cancelled; stop placed for ${fill.filledQty}`;
-        return pos;
+      const order = this.brokersFor(cfg);
+
+      if (limit != null) {
+        validateLimit(limit, c.tick);
+        const gw = this.gw(order.find((b) => this.gw(b).ready()) ?? order[0]);
+        if (!gw.ready()) throw new Error(`${brokerLabel(gw.name)} is not logged in`);
+        const inst = await gw.instrument(cfg, plan, expiry);
+        const orderId = await gw.place(this.args(inst, openSide(side), plan.qty, c, 'LIMIT', roundToTick(limit, c.tick)));
+        await runner.setPendingEntry({
+          plan,
+          limit: roundToTick(limit, c.tick),
+          placedAt: Date.now(),
+          live: { securityId: inst.securityId, orderId, broker: gw.name, ...(inst.tradingSymbol ? { tradingSymbol: inst.tradingSymbol } : {}) },
+        });
+        // A marketable limit fills at once — open straight away if so.
+        const o = await gw.order(orderId).catch(() => null);
+        if (upper(o?.orderStatus) === 'TRADED') return await this.opened(runner, gw, plan, inst, this.fillOf(orderId, o));
+        return null;
       }
-      validateLimit(limit, c.tick);
-      const res = await this.dhan.placeOrder({
-        securityId,
-        exchangeSegment: c.segment,
-        transactionType: openSide(side),
-        quantity: plan.qty,
-        orderType: 'LIMIT',
-        productType: c.product,
-        price: roundToTick(limit, c.tick),
-      });
-      const orderId = String(res.orderId);
-      await runner.setPendingEntry({
-        plan,
-        limit: roundToTick(limit, c.tick),
-        placedAt: Date.now(),
-        live: { securityId, orderId },
-      });
-      // A marketable limit fills at once — open straight away if so.
-      const o = await this.order(orderId).catch(() => null);
-      if (upper(o?.orderStatus) === 'TRADED')
-        return await this.opened(runner, plan, securityId, this.fillOf(orderId, o));
-      return null;
+
+      const notes: string[] = [];
+      for (const b of order) {
+        const gw = this.gw(b);
+        if (!gw.ready()) {
+          notes.push(`${brokerLabel(b)}: not logged in`);
+          continue;
+        }
+        try {
+          const inst = await gw.instrument(cfg, plan, expiry).catch((e) => {
+            throw new NoEntry((e as Error).message);
+          });
+          const fill = await this.marketEntry(gw, inst, openSide(side), plan.qty, c, cfg.entryFillSeconds ?? 5);
+          const pos = await this.opened(runner, gw, plan, inst, fill, opts.auto);
+          const via = b !== order[0] ? ` via ${brokerLabel(b)} (${notes.join('; ')})` : '';
+          if (fill.filledQty < plan.qty)
+            runner.status = `Entry partly filled (${fill.filledQty} of ${plan.qty}) — the rest was cancelled; stop placed for ${fill.filledQty}${via}`;
+          else if (via) runner.status = `Entered${via}`;
+          return pos;
+        } catch (e) {
+          if (!(e instanceof NoEntry)) throw e; // unclear / partly live: never place a second order
+          notes.push(`${brokerLabel(b)}: ${(e as Error).message}`);
+        }
+      }
+      throw new Error(`Entry not placed — ${notes.join('; ')}`);
     } finally {
       this.busy = false;
     }
@@ -265,17 +283,23 @@ export class LiveTrader {
   }
 
   /** Entry filled: open the engine position at the real fill, then place the protective stop. */
-  private async opened(runner: EngineRunner, plan: TradePlan, securityId: string, buy: Fill, auto = false) {
-    const live: LiveLegs = { securityId, entryOrderId: buy.orderId, slOrderId: null };
-    const limitNote = runner.state.pendingEntry
-      ? `limit ${runner.state.pendingEntry.limit.toFixed(2)} filled`
-      : undefined;
-    const pos = await runner.manualEnter({ plan, entry: buy.avgPrice, qty: buy.filledQty, live, reason: limitNote, auto });
+  private async opened(runner: EngineRunner, gw: OrderGateway, plan: TradePlan, inst: Instrument, buy: Fill, auto = false) {
+    const live: LiveLegs = {
+      ...(gw.name !== 'DHAN' ? { broker: gw.name } : {}),
+      securityId: inst.securityId,
+      ...(inst.tradingSymbol ? { tradingSymbol: inst.tradingSymbol } : {}),
+      entryOrderId: buy.orderId,
+      slOrderId: null,
+    };
+    const limitNote = runner.state.pendingEntry ? `limit ${runner.state.pendingEntry.limit.toFixed(2)} filled` : undefined;
+    const via = gw.name === 'ANGEL' ? 'Angel One' : undefined;
+    const reason = [limitNote, via].filter(Boolean).join(' · ') || undefined;
+    const pos = await runner.manualEnter({ plan, entry: buy.avgPrice, qty: buy.filledQty, live, reason, auto });
     try {
-      const sl = await this.placeStop(securityId, pos.remainingQty, pos.currentSl, pos.side ?? 1, ctxOf(runner.config));
+      const sl = await this.placeStop(gw, inst, pos.remainingQty, pos.currentSl, pos.side ?? 1, ctxOf(runner.config));
       await runner.patchPosition({ live: { ...live, slOrderId: sl } });
     } catch (e) {
-      runner.status = `Entered, but the stop-loss order failed: ${(e as Error).message} — place one in Dhan now`;
+      runner.status = `Entered, but the stop-loss order failed: ${(e as Error).message} — place one in ${brokerLabel(gw.name)} now`;
     }
     return runner.state.position!;
   }
@@ -288,12 +312,13 @@ export class LiveTrader {
     if (this.busy) throw new Error('Another live order is in progress');
     this.busy = true;
     try {
-      await this.cancelQuietly(pe.live.orderId);
-      const o = await this.order(pe.live.orderId).catch(() => null);
+      const gw = this.gw(pe.live.broker);
+      await this.cancelQuietly(gw, pe.live.orderId);
+      const o = await gw.order(pe.live.orderId).catch(() => null);
       const f = this.fillOf(pe.live.orderId, o);
       if (f.filledQty > 0) {
         // Filled (fully, or partly before the cancel landed): that quantity is a real position.
-        await this.opened(runner, pe.plan, pe.live.securityId, f);
+        await this.opened(runner, gw, pe.plan, instOf(pe.live), f);
         runner.status = `The limit order had already filled (${f.filledQty} @ ${f.avgPrice.toFixed(2)}) — position opened`;
         return;
       }
@@ -303,17 +328,18 @@ export class LiveTrader {
     }
   }
 
-  /** On every refresh: has the pending limit entry filled at Dhan? */
+  /** On every refresh: has the pending limit entry filled? */
   private async checkPendingEntry(runner: EngineRunner) {
     const pe = runner.state.pendingEntry;
     if (!pe?.live) return;
-    const o = await this.order(pe.live.orderId).catch(() => null);
+    const gw = this.gw(pe.live.broker);
+    const o = await gw.order(pe.live.orderId).catch(() => null);
     if (!o) return;
     const f = this.fillOf(pe.live.orderId, o);
     if (f.status === 'TRADED') {
-      await this.opened(runner, pe.plan, pe.live.securityId, f);
+      await this.opened(runner, gw, pe.plan, instOf(pe.live), f);
     } else if (f.status === 'CANCELLED' || f.status === 'EXPIRED' || f.status === 'REJECTED') {
-      if (f.filledQty > 0) await this.opened(runner, pe.plan, pe.live.securityId, f);
+      if (f.filledQty > 0) await this.opened(runner, gw, pe.plan, instOf(pe.live), f);
       else {
         await runner.setPendingEntry(null);
         runner.status = `Limit entry ${f.status.toLowerCase()}${o.omsErrorDescription ? `: ${o.omsErrorDescription}` : ''}`;
@@ -321,7 +347,7 @@ export class LiveTrader {
     }
   }
 
-  /** Manual EXIT: cancel the stop, sell what's left at market. */
+  /** Manual EXIT: cancel the stop, sell what's left at market (with the broker holding it). */
   async exit(runner: EngineRunner, reason = 'MANUAL EXIT') {
     const p = runner.state.position;
     if (!p) throw new Error('No open position');
@@ -329,20 +355,21 @@ export class LiveTrader {
     if (this.busy) throw new Error('Another live order is in progress');
     this.busy = true;
     try {
-      const stopFill = await this.stopFilled(p.live.slOrderId);
+      const gw = this.gw(p.live.broker);
+      const stopFill = await this.stopFilled(gw, p.live.slOrderId);
       if (stopFill) return runner.manualExit({ price: stopFill.avgPrice, reason: 'SL HIT (exchange stop order)' });
-      await this.cancelQuietly(p.live.slOrderId);
-      const fill = await this.marketOrder(p.live.securityId, closeSide(p.side ?? 1), p.remainingQty, ctxOf(runner.config));
+      await this.cancelQuietly(gw, p.live.slOrderId);
+      const fill = await this.marketOrder(gw, instOf(p.live), closeSide(p.side ?? 1), p.remainingQty, ctxOf(runner.config));
       await runner.manualExit({ price: fill.avgPrice, reason: `${reason} (live fill)` });
     } finally {
       this.busy = false;
     }
   }
 
-  private async stopFilled(slOrderId: string | null): Promise<Fill | null> {
+  private async stopFilled(gw: OrderGateway, slOrderId: string | null): Promise<Fill | null> {
     if (!slOrderId) return null;
     try {
-      const o = await this.order(slOrderId);
+      const o = await gw.order(slOrderId);
       if (upper(o?.orderStatus) !== 'TRADED') return null;
       return {
         orderId: slOrderId,
@@ -369,8 +396,8 @@ export class LiveTrader {
           // Same path as tapping ENTER at market: every gate (time cutoff, daily limits, premium
           // filters, lot cap, capital) is checked again, and the exchange stop-loss goes in on fill.
           const pos = await this.enter(runner, undefined, { auto: true });
-          if (pos && !/^Entry partly filled/.test(runner.status))
-            runner.status = `Automatic LIVE entry filled: ${pos.remainingQty} @ ${pos.entry.toFixed(2)}`;
+          if (pos && !/^Entry partly filled|^Entered via/.test(runner.status))
+            runner.status = `Automatic LIVE entry filled: ${pos.remainingQty} @ ${pos.entry.toFixed(2)}${pos.live?.broker === 'ANGEL' ? ' (Angel One)' : ''}`;
         } catch (e) {
           runner.status = `Live order error - automatic entry failed: ${(e as Error).message}`;
         }
@@ -392,41 +419,43 @@ export class LiveTrader {
     const c = ctxOf(runner.config);
     const side = prev.side ?? 1;
     const live = prev.live;
+    const gw = this.gw(live.broker);
+    const inst = instOf(live);
     this.busy = true;
     try {
       if (!after.position) {
         // Engine closed it (SL / T2 / trailing SL / single-lot T1): make it real, journal the real fill.
-        const stop = await this.stopFilled(live.slOrderId);
+        const stop = await this.stopFilled(gw, live.slOrderId);
         if (stop) {
           await runner.amendExit(prev, stop.avgPrice, 'exchange stop fill');
           return;
         }
-        await this.cancelQuietly(live.slOrderId);
-        const fill = await this.marketOrder(live.securityId, closeSide(side), prev.remainingQty, c);
+        await this.cancelQuietly(gw, live.slOrderId);
+        const fill = await this.marketOrder(gw, inst, closeSide(side), prev.remainingQty, c);
         await runner.amendExit(prev, fill.avgPrice, 'live fill');
         return;
       }
       const cur = after.position;
       if (!prev.partialBooked && cur.partialBooked) {
         // T1: book half at market, re-protect the rest at breakeven.
-        await this.cancelQuietly(live.slOrderId);
-        await this.marketOrder(live.securityId, closeSide(side), cur.partialQty, c);
-        const sl = await this.placeStop(live.securityId, cur.remainingQty, cur.currentSl, side, c);
+        await this.cancelQuietly(gw, live.slOrderId);
+        await this.marketOrder(gw, inst, closeSide(side), cur.partialQty, c);
+        const sl = await this.placeStop(gw, inst, cur.remainingQty, cur.currentSl, side, c);
         await runner.patchPosition({ live: { ...live, slOrderId: sl } });
         return;
       }
       // Still open: did the exchange stop fire while we weren't looking?
-      const filled = await this.stopFilled(live.slOrderId);
+      const filled = await this.stopFilled(gw, live.slOrderId);
       if (!filled && side * (cur.currentSl - prev.currentSl) > 1e-9) {
-        // Profit lock raised the stop: replace the exchange stop at the new level.
-        await this.cancelQuietly(live.slOrderId);
-        const late = await this.stopFilled(live.slOrderId);
+        // Profit lock / loss trail raised the stop: replace the exchange stop at the new level.
+        await this.cancelQuietly(gw, live.slOrderId);
+        const late = await this.stopFilled(gw, live.slOrderId);
         if (late) {
           this.busy = false;
           await runner.manualExit({ price: late.avgPrice, reason: 'SL HIT (exchange stop order)' });
           return;
         }
-        const sl = await this.placeStop(live.securityId, cur.remainingQty, cur.currentSl, side, c);
+        const sl = await this.placeStop(gw, inst, cur.remainingQty, cur.currentSl, side, c);
         await runner.patchPosition({ live: { ...live, slOrderId: sl } });
         return;
       }
@@ -436,11 +465,11 @@ export class LiveTrader {
         return;
       }
       if (live.slOrderId) {
-        const o = await this.order(live.slOrderId).catch(() => null);
+        const o = await gw.order(live.slOrderId).catch(() => null);
         const st = upper(o?.orderStatus);
         if ((st === 'CANCELLED' || st === 'EXPIRED' || st === 'REJECTED') && runner.marketOpen()) {
           // e.g. a DAY stop expired overnight on a carried position — put it back.
-          const sl = await this.placeStop(live.securityId, cur.remainingQty, cur.currentSl, side, c);
+          const sl = await this.placeStop(gw, inst, cur.remainingQty, cur.currentSl, side, c);
           await runner.patchPosition({ live: { ...live, slOrderId: sl } });
         }
       }

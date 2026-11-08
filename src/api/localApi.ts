@@ -19,6 +19,7 @@ import { DhanEngineSource, dhanQuoteSource } from '../../server/engineSource.ts'
 import { AngelClient, type AngelSession } from '../../server/angel.ts';
 import { AngelEngineSource } from '../../server/angelSource.ts';
 import { RoutedEngineSource, routedQuoteSource } from '../../server/routedSource.ts';
+import { AngelGateway } from '../../server/brokers.ts';
 import { LiveTrader } from '../../server/liveTrader.ts';
 import { extractIps, isIPv4, runPreflight, type PreflightResult } from '../../server/preflight.ts';
 import { DhanService, underlyingFor } from '../../server/service.ts';
@@ -103,12 +104,13 @@ export const isLocalApi = (a: Api | null): a is LocalApi => !!a && 'engineEnter'
 export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
   const dhan = new DhanClient({ clientId: o.clientId, accessToken: o.accessToken, baseUrl: o.baseUrl });
   const service = new DhanService(dhan, { liveOrders: false, maxOrderValue: 0 });
-  const angel = new AngelClient({ baseUrl: o.angelBaseUrl, session: o.angelSession ?? null });
+  // Angel One orders need the static IP registered on the SmartAPI app (the same one as Dhan's).
+  const angel = new AngelClient({ baseUrl: o.angelBaseUrl, session: o.angelSession ?? null, publicIp: () => o.staticIp?.() ?? '' });
   const routed = new RoutedEngineSource(new DhanEngineSource(dhan), angel);
   routed.onAngelSessionLost = () => o.onAngelSessionLost?.();
   const engine = new EngineRunner(routed, o.store);
   await engine.init();
-  const trader = new LiveTrader(dhan, service, { sleep: o.sleep });
+  const trader = new LiveTrader(dhan, service, { sleep: o.sleep, angel: new AngelGateway(angel, routed.angelSource) });
   engine.afterCycle = (before, after) => trader.afterCycle(engine, before, after);
   engine.quoteSource = routedQuoteSource(dhanQuoteSource(dhan), angel);
   const angelStatus = (): AngelStatus => ({
@@ -127,7 +129,8 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
   const tickPosition = async () => {
     const p = engine.state.position;
     // The engine's fast ticks already quote the trade every second (and act on it).
-    if (ticking || !p || engine.fastTicking() || (!o.tickAlways && !engine.marketOpen())) return;
+    // (Angel One positions are priced by the engine's ticks through Angel.)
+    if (ticking || !p || p.live?.broker === 'ANGEL' || engine.fastTicking() || (!o.tickAlways && !engine.marketOpen())) return;
     ticking = true;
     try {
       const key = engine.positionKey()!;

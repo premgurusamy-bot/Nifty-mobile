@@ -7,7 +7,7 @@ import type { EngineDataSource } from '../src/lib/engine/runner.ts';
 import type { EngineConfig } from '../src/lib/engine/types.ts';
 import type { QuoteMap, QuoteSource } from '../src/lib/engine/ticks.ts';
 import { AngelError, type AngelClient } from './angel.ts';
-import { AngelEngineSource, angelQuoteSource } from './angelSource.ts';
+import { ANGEL_INDEX_TOKENS, AngelEngineSource, angelQuoteSource } from './angelSource.ts';
 
 /** Angel's "session no longer valid" errors: the user has to log in again. */
 const SESSION_GONE = /^AG800[1-3]$|invalid token|token expired|session/i;
@@ -15,7 +15,8 @@ const SESSION_GONE = /^AG800[1-3]$|invalid token|token expired|session/i;
 export class RoutedEngineSource implements EngineDataSource {
   private dhan: EngineDataSource;
   private angel: AngelClient;
-  private angelSource: AngelEngineSource;
+  /** Shared with the Angel One order gateway (contracts cached once). */
+  readonly angelSource: AngelEngineSource;
   /** Latest Angel problem (shown in Settings), '' when fine. */
   angelError = '';
   /** Called when Angel says the session is gone (the phone forgets it). */
@@ -29,7 +30,19 @@ export class RoutedEngineSource implements EngineDataSource {
 
   async load(cfg: EngineConfig, now: number) {
     const wantsAngel = cfg.instrumentKind === 'INDEX_OPTIONS' && (cfg.angelSymbols ?? []).includes(cfg.symbol);
-    if (!wantsAngel) return this.dhan.load(cfg, now);
+    if (!wantsAngel) {
+      try {
+        return await this.dhan.load(cfg, now);
+      } catch (e) {
+        // Dhan failed: an index Angel One can serve switches to it for this refresh (switch on).
+        const canAngel = cfg.instrumentKind === 'INDEX_OPTIONS' && cfg.brokerFailover !== false && this.angel.connected && !!ANGEL_INDEX_TOKENS[cfg.symbol];
+        if (!canAngel) throw e;
+        const d = await this.angelSource.load(cfg, now).catch(() => {
+          throw e; // both failed: report Dhan's error
+        });
+        return { ...d, chain: { ...d.chain, feedNote: `Dhan error (${(e as Error).message}) — using Angel One` } };
+      }
+    }
     let note = 'Angel One not logged in — using Dhan';
     if (this.angel.connected) {
       try {
