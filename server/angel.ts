@@ -74,6 +74,8 @@ export async function angelLogin(o: {
   totp: string;
   baseUrl?: string;
   now?: number;
+  /** The public IP sent with every later call too (the static IP), so the session matches them. */
+  publicIp?: string;
 }): Promise<AngelSession> {
   if (!o.apiKey.trim()) throw new AngelError('Enter the Angel One SmartAPI API key');
   if (!o.clientCode.trim()) throw new AngelError('Enter the Angel One client code');
@@ -82,7 +84,7 @@ export async function angelLogin(o: {
     `${o.baseUrl || ANGEL_API_URL}/rest/auth/angelbroking/user/v1/loginByPassword`,
     {
       method: 'POST',
-      headers: headers(o.apiKey.trim()),
+      headers: headers(o.apiKey.trim(), undefined, o.publicIp),
       body: JSON.stringify({ clientcode: o.clientCode.trim().toUpperCase(), password: o.pin, totp: o.totp }),
     },
     'login',
@@ -138,6 +140,53 @@ export class AngelClient {
     const s = this.session;
     if (!s) return Promise.reject(new AngelError('Angel One is not logged in — Settings → Angel One', 'NOT_LOGGED_IN'));
     return call<T>(`${this.baseUrl}${path}`, { method: 'GET', headers: headers(s.apiKey, s.jwtToken, this.publicIp()) }, what);
+  }
+
+  /** The logged-in client's profile (the simplest call that needs the session + API key). */
+  async profile(): Promise<any> {
+    const json = await this.slowThrottle.run(() => this.get<any>('/rest/secure/angelbroking/user/v1/getProfile', 'profile'));
+    return json?.data ?? {};
+  }
+
+  /**
+   * Step-by-step check of the Angel One connection: which calls work, and whether the public IP
+   * sent in the headers matters. For fixing a connection problem (or sending to Angel's support).
+   */
+  async diagnose(o: { staticIp: string; phoneIp: string }): Promise<string[]> {
+    const lines: string[] = [];
+    const s = this.session;
+    if (!s) return ['Not logged in to Angel One'];
+    lines.push(`Client ${s.clientCode} · API key …${s.apiKey.slice(-4)} (${s.apiKey.length} chars) · logged in ${new Date(s.at).toLocaleTimeString()}`);
+    const step = async (name: string, fn: () => Promise<unknown>) => {
+      try {
+        await fn();
+        lines.push(`✓ ${name}`);
+        return true;
+      } catch (e) {
+        lines.push(`✗ ${name}: ${(e as Error).message.replace(/^Angel One [^:]*: /, '')}`);
+        return false;
+      }
+    };
+    const ipOf = this.publicIp;
+    const ips = [...new Set([o.staticIp, o.phoneIp, '127.0.0.1'].filter(Boolean))];
+    for (const ip of ips) {
+      this.publicIp = () => ip;
+      const label = ip === o.staticIp ? 'static IP' : ip === o.phoneIp ? "phone's current IP" : 'no IP';
+      await step(`profile (sending ${label} ${ip})`, () => this.profile());
+    }
+    this.publicIp = ipOf;
+    await step('index price (quote LTP)', () => this.quote('LTP', { NSE: ['99926009'] }));
+    await step('5-min candles', () =>
+      this.candles({ exchange: 'NSE', symboltoken: '99926009', interval: 'FIVE_MINUTE', fromdate: '2026-01-01 09:15', todate: '2026-01-01 15:30' }).catch((e) => {
+        if (/no data|AB9019/i.test((e as Error).message)) return []; // a holiday window is fine: the call itself worked
+        throw e;
+      }),
+    );
+    await step('contract search (BANKNIFTY options)', () => this.searchScrip('NFO', 'BANKNIFTY'));
+    await step('funds (RMS)', () => this.rms());
+    if (o.staticIp && o.phoneIp && o.staticIp !== o.phoneIp)
+      lines.push(`Note: the phone is on ${o.phoneIp}, not the static IP ${o.staticIp} — Angel One / Dhan orders need the static IP's network.`);
+    return lines;
   }
 
   // ---- Orders (NFO options) ----------------------------------------------------

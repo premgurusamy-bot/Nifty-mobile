@@ -91,6 +91,8 @@ export interface PhoneTrading {
   angelStatus: () => AngelStatus;
   /** Load BANK NIFTY (or `symbol`) once from Angel One and summarise it. */
   angelTest: (symbol?: string) => Promise<{ symbol: string; spot: number; expiry: string; strikes: number; candles: number; withOi: number; withIv: number }>;
+  /** Each Angel One call checked on its own (and the public-IP header variants). */
+  angelDiagnose: () => Promise<string[]>;
 }
 
 export type LocalApi = Api & PhoneTrading & {
@@ -282,6 +284,8 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
       return angelStatus();
     },
     angelStatus,
+    angelDiagnose: async () =>
+      angel.diagnose({ staticIp: o.staticIp?.() ?? '', phoneIp: await (o.publicIp?.() ?? Promise.resolve('')).catch(() => '') }),
     angelTest: async (symbol = 'BANKNIFTY') => {
       const cfg = sanitizeConfig({ symbol }, engine.config);
       const d = await new AngelEngineSource(angel).load(cfg, Date.now());

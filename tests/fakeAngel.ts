@@ -68,6 +68,10 @@ export function startFakeAngel(
       }
       if (req.headers.authorization !== `Bearer ${state.jwt}`) return fail('Invalid Token', 'AG8001');
       if (state.failWith) return fail(state.failWith === 'AG8004' ? 'Invalid API Key' : 'Invalid Token', state.failWith);
+      if (path === '/rest/secure/angelbroking/user/v1/getProfile')
+        return send({ status: true, message: 'SUCCESS', data: { clientcode: ANGEL_CLIENT, name: 'Fake', exchanges: ['NSE', 'NFO'] } });
+      if (path === '/rest/secure/angelbroking/user/v1/getRMS')
+        return send({ status: true, message: 'SUCCESS', data: { net: '250000.00', availablecash: '250000.00' } });
       if (path === '/rest/secure/angelbroking/order/v1/placeOrder') {
         const c = byToken.get(String(body.symboltoken));
         if (!c || c.tradingsymbol !== body.tradingsymbol) return fail('Invalid symbol', 'AB1019');

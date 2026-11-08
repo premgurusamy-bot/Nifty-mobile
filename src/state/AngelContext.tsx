@@ -38,7 +38,7 @@ interface AngelValue {
 const Ctx = createContext<AngelValue | null>(null);
 
 export function AngelProvider({ children }: { children: ReactNode }) {
-  const { api } = useSettings();
+  const { api, staticIp } = useSettings();
   const local = isLocalApi(api) ? api : null;
   const [hasKeys, setHasKeys] = useState(false);
   const [clientCode, setClientCode] = useState('');
@@ -117,7 +117,7 @@ export function AngelProvider({ children }: { children: ReactNode }) {
       if (!local) throw new Error('Connect your Dhan account on this phone first (Angel One runs alongside it).');
       const [k, c, t] = await Promise.all([secret.get(K.apiKey), secret.get(K.client), secret.get(K.totp)]);
       if (!k || !c || !t) throw new Error('Save the Angel One API key, client code and TOTP key first.');
-      const s = await angelLogin({ apiKey: k, clientCode: c, pin: pin.trim(), totp: totpNow(t), baseUrl: ANGEL_BASE_URL }).catch((e) => {
+      const s = await angelLogin({ apiKey: k, clientCode: c, pin: pin.trim(), totp: totpNow(t), baseUrl: ANGEL_BASE_URL, publicIp: staticIp }).catch((e) => {
         throw new Error(
           `${(e as Error).message}. Check the MPIN, that the TOTP key is the one Angel showed, and that the phone's time is set automatically.`,
         );
@@ -125,14 +125,20 @@ export function AngelProvider({ children }: { children: ReactNode }) {
       await secret.set(K.session, JSON.stringify(s));
       setStatus(local.angelSetSession(s));
     },
-    [local],
+    [local, staticIp],
   );
 
   const test = useCallback(async () => {
     if (!local) throw new Error('Connect your Dhan account on this phone first.');
-    const r = await local.angelTest('BANKNIFTY');
-    setStatus(local.angelStatus());
-    return `BANK NIFTY ${r.spot.toFixed(2)} · expiry ${r.expiry} · ${r.strikes} strikes (${r.withOi} with OI, ${r.withIv} with IV) · ${r.candles} candles`;
+    try {
+      const r = await local.angelTest('BANKNIFTY');
+      setStatus(local.angelStatus());
+      return `BANK NIFTY ${r.spot.toFixed(2)} · expiry ${r.expiry} · ${r.strikes} strikes (${r.withOi} with OI, ${r.withIv} with IV) · ${r.candles} candles`;
+    } catch (e) {
+      // Show which call fails (and whether the IP header matters) instead of one error line.
+      const lines = await local.angelDiagnose().catch(() => [] as string[]);
+      throw new Error(`${(e as Error).message}${lines.length ? `\n\nStep by step:\n${lines.join('\n')}` : ''}`);
+    }
   }, [local]);
 
   const currentCode = useCallback(async () => {

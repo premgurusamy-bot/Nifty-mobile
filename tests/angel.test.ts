@@ -85,7 +85,7 @@ test('routing: Angel for the indexes set to it; not logged in or session ended �
   assert.match(d.chain.feedNote!, /session ended — log in again/);
   assert.equal(angel.connected, false);
   assert.equal(lost, 1);
-  // An API key Angel refuses on data calls (AG8004): the session is dropped, log in again.
+  // An API key Angel refuses on data calls (AG8004): stays logged in (so Test can diagnose), Dhan meanwhile.
   angel.session = await login();
   fa.state.failWith = 'AG8004';
   try {
@@ -93,9 +93,9 @@ test('routing: Angel for the indexes set to it; not logged in or session ended �
   } finally {
     fa.state.failWith = '';
   }
-  assert.match(d.chain.feedNote!, /refused the API key — check it is the API key \(not the secret key\)/);
-  assert.equal(angel.connected, false);
-  assert.equal(lost, 2);
+  assert.match(d.chain.feedNote!, /refused the API key — Settings → Angel One → Test shows which call; using Dhan/);
+  assert.equal(angel.connected, true);
+  assert.equal(lost, 1);
   assert.deepEqual(dhanLoads, ['NIFTY', 'BANKNIFTY', 'BANKNIFTY', 'BANKNIFTY']);
 });
 
@@ -146,4 +146,22 @@ test('phone: multi-index with BANK NIFTY on Angel — NIFTY from Dhan, BANK NIFT
     api.dispose();
     fake.server.close();
   }
+});
+
+test('diagnose: each call on its own, IP variants, and a note when the phone is off the static IP', async () => {
+  const angel = new AngelClient({ baseUrl: fa.url, session: await login(), publicIp: () => '203.0.113.7' });
+  const lines = await angel.diagnose({ staticIp: '203.0.113.7', phoneIp: '198.51.100.20' });
+  assert.match(lines[0], /^Client A123456 · API key …-key/);
+  assert.ok(lines.includes('✓ profile (sending static IP 203.0.113.7)'));
+  assert.ok(lines.includes("✓ profile (sending phone's current IP 198.51.100.20)"));
+  assert.ok(lines.includes('✓ contract search (BANKNIFTY options)'));
+  assert.match(lines.at(-1)!, /phone is on 198.51.100.20, not the static IP/);
+  fa.state.failWith = 'AG8004';
+  try {
+    const bad = await angel.diagnose({ staticIp: '203.0.113.7', phoneIp: '203.0.113.7' });
+    assert.ok(bad.some((l) => l === '✗ contract search (BANKNIFTY options): Invalid API Key (AG8004)'), bad.join('\n'));
+  } finally {
+    fa.state.failWith = '';
+  }
+  assert.equal(angel.publicIp(), '203.0.113.7'); // restored
 });
