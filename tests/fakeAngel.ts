@@ -67,7 +67,7 @@ export function startFakeAngel(
         return send({ status: true, message: 'SUCCESS', errorcode: '', data: { jwtToken: `Bearer ${state.jwt}`, refreshToken: 'fake-refresh', feedToken: 'fake-feed' } });
       }
       if (req.headers.authorization !== `Bearer ${state.jwt}`) return fail('Invalid Token', 'AG8001');
-      if (state.failWith) return fail('Invalid Token', state.failWith);
+      if (state.failWith) return fail(state.failWith === 'AG8004' ? 'Invalid API Key' : 'Invalid Token', state.failWith);
       if (path === '/rest/secure/angelbroking/order/v1/placeOrder') {
         const c = byToken.get(String(body.symboltoken));
         if (!c || c.tradingsymbol !== body.tradingsymbol) return fail('Invalid symbol', 'AB1019');

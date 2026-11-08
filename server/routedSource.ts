@@ -9,8 +9,12 @@ import type { QuoteMap, QuoteSource } from '../src/lib/engine/ticks.ts';
 import { AngelError, type AngelClient } from './angel.ts';
 import { ANGEL_INDEX_TOKENS, AngelEngineSource, angelQuoteSource } from './angelSource.ts';
 
-/** Angel's "session no longer valid" errors: the user has to log in again. */
-const SESSION_GONE = /^AG800[1-3]$|invalid token|token expired|session/i;
+/**
+ * Angel's "session no longer valid" errors: the user has to log in again. AG8004 (invalid API key)
+ * too: the session was made with a key Angel no longer accepts (changed / deleted app, or the secret
+ * key saved in place of the API key).
+ */
+const SESSION_GONE = /^AG800[1-4]$|invalid token|token expired|invalid api key|session/i;
 
 export class RoutedEngineSource implements EngineDataSource {
   private dhan: EngineDataSource;
@@ -55,7 +59,9 @@ export class RoutedEngineSource implements EngineDataSource {
         if (SESSION_GONE.test(err.code ?? '') || SESSION_GONE.test(err.message)) {
           this.angel.session = null;
           this.onAngelSessionLost?.();
-          note = 'Angel One session ended — log in again; using Dhan';
+          note = /AG8004|api key/i.test(`${err.code} ${err.message}`)
+            ? 'Angel One refused the API key — check it is the API key (not the secret key), then log in again; using Dhan'
+            : 'Angel One session ended — log in again; using Dhan';
         } else note = `Angel One error (${err.message}) — using Dhan`;
       }
     }

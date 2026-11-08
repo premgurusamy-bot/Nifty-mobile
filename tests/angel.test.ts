@@ -85,7 +85,18 @@ test('routing: Angel for the indexes set to it; not logged in or session ended �
   assert.match(d.chain.feedNote!, /session ended — log in again/);
   assert.equal(angel.connected, false);
   assert.equal(lost, 1);
-  assert.deepEqual(dhanLoads, ['NIFTY', 'BANKNIFTY', 'BANKNIFTY']);
+  // An API key Angel refuses on data calls (AG8004): the session is dropped, log in again.
+  angel.session = await login();
+  fa.state.failWith = 'AG8004';
+  try {
+    d = await r.load(cfg, now);
+  } finally {
+    fa.state.failWith = '';
+  }
+  assert.match(d.chain.feedNote!, /refused the API key — check it is the API key \(not the secret key\)/);
+  assert.equal(angel.connected, false);
+  assert.equal(lost, 2);
+  assert.deepEqual(dhanLoads, ['NIFTY', 'BANKNIFTY', 'BANKNIFTY', 'BANKNIFTY']);
 });
 
 test('settings: which indexes use Angel One', () => {

@@ -91,9 +91,12 @@ export function AngelProvider({ children }: { children: ReactNode }) {
     if (!c) throw new Error('Enter your Angel One client code');
     const t = parseTotpKey(totpKey); // readable error for a wrong key
     await Promise.all([secret.set(K.apiKey, k), secret.set(K.client, c), secret.set(K.totp, t)]);
+    // New keys: a session made with the old ones must not be used any more.
+    await secret.del(K.session);
+    if (local) setStatus(local.angelSetSession(null));
     setHasKeys(true);
     setClientCode(c);
-  }, []);
+  }, [local]);
 
   const logout = useCallback(async () => {
     const raw = await secret.get(K.session).catch(() => null);

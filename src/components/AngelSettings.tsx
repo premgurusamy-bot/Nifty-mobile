@@ -85,7 +85,7 @@ export function AngelSettingsCard() {
                 (smartapi.angelone.in/enable-totp — tap Scan QR code and point the camera at the QR, or pick a
                 screenshot of it). Saved only on this phone, in secure storage.
               </Text>
-              <Input label="SmartAPI API key" value={apiKey} onChange={setApiKey} secure />
+              <Input label="SmartAPI API key (the API key, not the secret key)" value={apiKey} onChange={setApiKey} secure />
               <Input label="Angel One client code" value={code} onChange={setCode} />
               <Input label="TOTP key (the code under the QR, or the otpauth:// link)" value={totpKey} onChange={setTotpKey} secure />
               <ScanQrButton
