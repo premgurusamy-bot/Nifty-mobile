@@ -8,9 +8,29 @@
 import type { EngineDataSource, FuturesContract } from '../src/lib/engine/runner.ts';
 import { ContractResolver, COMPACT_MASTER_URL } from './contracts.ts';
 import type { EngineConfig } from '../src/lib/engine/types.ts';
+import type { QuoteMap, QuoteSource } from '../src/lib/engine/ticks.ts';
 import { istDateString, toIST } from '../src/lib/time.ts';
 import type { DhanClient } from './dhan.ts';
 import { mapCandles, mapEngineChain, mapExpiries } from './mapping.ts';
+
+/** Fast-tick quotes: one Dhan /marketfeed/quote call for every instrument asked (shares the 1/s limit). */
+export function dhanQuoteSource(dhan: DhanClient): QuoteSource {
+  return async (reqs) => {
+    const body: Record<string, number[]> = {};
+    for (const r of reqs) {
+      const ids = (body[r.segment] ??= []);
+      const n = Number(r.securityId);
+      if (Number.isFinite(n) && !ids.includes(n)) ids.push(n);
+    }
+    const q = await dhan.quote(body);
+    const out: QuoteMap = {};
+    for (const r of reqs) {
+      const lp = Number(q?.data?.[r.segment]?.[r.securityId]?.last_price);
+      if (lp > 0) out[`${r.segment}|${r.securityId}`] = lp;
+    }
+    return out;
+  };
+}
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const istStamp = (ms: number) => {

@@ -188,7 +188,10 @@ export default function DashboardScreen() {
             {snap.demo ? 'DEMO · accelerated simulation · ' : 'Dhan live · '}
             {snap.marketOpen ? 'market open' : 'market closed'}
           </Text>
-          <Text style={ui.muted}>Last refresh: {time(snap.lastRefresh)}</Text>
+          <Text style={ui.muted}>
+            Last refresh: {time(snap.lastRefresh)}
+            {snap.lastTick ? ` · live quotes ${time(snap.lastTick)}` : ''}
+          </Text>
           <Text style={[ui.muted, { color: snap.status.startsWith('Error') ? colors.down : colors.muted }]}>
             Status: {snap.status}
           </Text>

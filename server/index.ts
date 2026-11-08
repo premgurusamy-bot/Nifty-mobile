@@ -20,6 +20,7 @@ import { loadScripMaster, SCRIP_MASTER_URL } from './scripMaster.ts';
 import { DhanService, HttpError } from './service.ts';
 import { EngineRunner } from '../src/lib/engine/runner.ts';
 import { DhanEngineSource, FileStore, telegramNotifier } from './engine.ts';
+import { dhanQuoteSource } from './engineSource.ts';
 import { TokenKeeper } from './tokenKeeper.ts';
 import { writeEnvValue } from './envFile.ts';
 
@@ -232,6 +233,7 @@ export async function start(cfg: ServerConfig) {
     telegramNotifier(cfg.telegramToken, cfg.telegramChatId),
   );
   await engine.init();
+  engine.quoteSource = dhanQuoteSource(dhan);
   engine.syncTimer();
   engine.fundsSource = async () => mapFunds(await dhan.fundLimit());
 

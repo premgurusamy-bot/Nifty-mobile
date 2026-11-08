@@ -40,6 +40,8 @@ export interface Leg {
   gamma: number;
   theta: number;
   vega: number;
+  /** Dhan security id of this option (for live quotes between refreshes). */
+  securityId?: string;
 }
 
 export interface ChainStrike {
@@ -128,6 +130,8 @@ export interface EngineConfig {
   lastEntryTimeMcx: string;
   /** Seconds between automatic refreshes (min 3: Dhan allows one option-chain request per 3 s). */
   refreshSeconds: number;
+  /** Between refreshes, update spot and premiums from Dhan quotes every second (stops / breaks act on them). */
+  fastTicks: boolean;
   alertsEnabled: boolean;
   /** RISK: lots sized so the stop costs ≤ max risk. CAPITAL: lots = (capital × %) ÷ cost per lot. */
   sizingMode: SizingMode;
@@ -233,6 +237,7 @@ export const DEFAULT_CONFIG: EngineConfig = {
   lastEntryTime: '14:35',
   lastEntryTimeMcx: '',
   refreshSeconds: 15,
+  fastTicks: true,
   alertsEnabled: true,
   sizingMode: 'RISK',
   capitalPaper: 100000,

@@ -17,6 +17,7 @@ import { findStrike, legOf } from './indicators.ts';
 import { catalogEntry, CATALOG } from './catalog.ts';
 import { buildFuturesPlan } from './futures.ts';
 import { sizingCapital, type SizingConfig } from './sizing.ts';
+import { applyTick, tickRequests, type QuoteSource } from './ticks.ts';
 import { blankSymbolState, isBusy, normalizeSymbolState, pickSymbolState, runMultiCycle, splitFactor } from './multi.ts';
 import {
   DEFAULT_CONFIG,
@@ -136,6 +137,8 @@ export interface EngineSnapshot {
   /** Persistent warning banner (Dashboard F4), e.g. expired Dhan token. */
   banner: string;
   lastRefresh: number | null;
+  /** Last fast tick (Dhan quotes between refreshes) while they are running, else null. */
+  lastTick?: number | null;
   /** Latest 5-min closes for the chart. */
   closes: number[];
   marketOpen: boolean;
@@ -223,6 +226,7 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
     if (patch.tradeMode === 'LIVE' && next.tradeMode !== 'LIVE' && patch.autoEntryLive === undefined) next.autoEntryLive = false;
     next.tradeMode = patch.tradeMode;
   }
+  if (patch.fastTicks !== undefined) next.fastTicks = !!patch.fastTicks;
   if (patch.multiSize !== undefined) {
     if (patch.multiSize !== 'SPLIT' && patch.multiSize !== 'FULL') throw new Error('multiSize must be SPLIT or FULL');
     next.multiSize = patch.multiSize;
@@ -343,6 +347,11 @@ export class EngineRunner {
   /** Multi-index: the index you picked to look at / ENTER on (until a trade opens). */
   private pinnedActive: string | null = null;
   private lastSaveKey = '';
+  /** Dhan quotes for the fast ticks between refreshes (null in demo: ticks off). */
+  quoteSource: QuoteSource | null = null;
+  /** When the last fast tick applied (ms, engine clock). */
+  lastTick: number | null = null;
+  private runningKind: 'refresh' | 'tick' | null = null;
   /** Fetches the live account balance (phone / server with Dhan); null in demo. */
   fundsSource: (() => Promise<number>) | null = null;
   private running: Promise<void> | null = null;
@@ -447,7 +456,10 @@ export class EngineRunner {
     await this.persist();
   }
 
-  private async doMultiRefresh(now: number) {
+  private async doMultiRefresh(
+    now: number,
+    pre?: { data: Record<string, { candles: Candle[]; chain: ChainSnapshot }>; loadErr: Record<string, string> },
+  ) {
     const symbols = this.watchList();
     if (!this.state.watch) {
       // Starting multi-index: the current index keeps its state, the others start from their IV banks.
@@ -457,9 +469,9 @@ export class EngineRunner {
       this.state = { ...this.state, watch: w };
     }
     this.stash();
-    const data: Record<string, { candles: Candle[]; chain: ChainSnapshot }> = {};
-    const loadErr: Record<string, string> = {};
-    for (const sym of symbols) {
+    const data: Record<string, { candles: Candle[]; chain: ChainSnapshot }> = pre?.data ?? {};
+    const loadErr: Record<string, string> = pre?.loadErr ?? {};
+    for (const sym of pre ? [] : symbols) {
       try {
         const d = await this.source.load(this.cfgFor(sym), now);
         data[sym] = { candles: d.candles, chain: d.chain };
@@ -483,7 +495,7 @@ export class EngineRunner {
     try {
       const before = this.state;
       const beforeWatch = this.watchStates();
-      await this.refreshFunds();
+      if (!pre) await this.refreshFunds();
       const res = runMultiCycle(this.state, this.state.watch!, symbols, (s) => this.cfgFor(s), data, now);
       this.multiDash = res.dashboards;
       this.multiData = data;
@@ -530,7 +542,7 @@ export class EngineRunner {
         : errs.length
           ? `Ready · ${errs.join(' · ')}`
           : 'Ready';
-      this.lastRefresh = now;
+      if (!pre) this.lastRefresh = now;
       this.logCycle(now, 'OK');
       const fresh = this.state.events.filter((e) => e.at === now);
       if (fresh.length) this.onEvents(fresh, this.config);
@@ -657,11 +669,71 @@ export class EngineRunner {
 
   /** Manual "Refresh Now": always runs, regardless of market hours. */
   refresh(): Promise<void> {
+    if (this.running && this.runningKind === 'tick') return this.running.then(() => this.refresh());
     if (this.running) return this.running;
+    this.runningKind = 'refresh';
     this.running = this.doRefresh().finally(() => {
       this.running = null;
+      this.runningKind = null;
     });
     return this.running;
+  }
+
+  /** Fast ticks are possible: switched on, a quote feed, and data from a full refresh to build on. */
+  canTick(): boolean {
+    if (!this.config.fastTicks || !this.quoteSource || this.lastRefresh == null) return false;
+    // Never run for long on an old chain: if full refreshes keep failing, ticks stop after a minute.
+    if (this.clock() - this.lastRefresh > 60_000) return false;
+    return this.multiActive() ? Object.keys(this.multiData).length > 0 : !!this.lastChain && this.candles.length > 0;
+  }
+
+  /** The fast ticks are running now (the separate open-trade ticker can stand down). */
+  fastTicking(): boolean {
+    return this.canTick() && this.config.autoRefresh && this.lastTick != null && this.clock() - this.lastTick < 5000;
+  }
+
+  /** One fast tick: quote spot + premiums, run the engine on the last refresh's data with them. */
+  tick(): Promise<void> {
+    if (this.running || !this.canTick()) return this.running ?? Promise.resolve();
+    this.runningKind = 'tick';
+    this.running = this.doTick().finally(() => {
+      this.running = null;
+      this.runningKind = null;
+    });
+    return this.running;
+  }
+
+  private async doTick() {
+    const now = this.clock();
+    const multi = this.multiActive() && !!this.state.watch;
+    const symbols = multi ? this.watchList() : [this.config.symbol];
+    const base: Record<string, { candles: Candle[]; chain: ChainSnapshot }> = multi
+      ? { ...this.multiData }
+      : { [this.config.symbol]: { candles: this.candles, chain: this.lastChain! } };
+    const states = multi ? this.watchStates() : { [this.config.symbol]: pickSymbolState(this.state) };
+    const cfgs = Object.fromEntries(symbols.map((sym) => [sym, multi ? this.cfgFor(sym) : this.config]));
+    const reqs = symbols.filter((sym) => base[sym]).flatMap((sym) => tickRequests(cfgs[sym], base[sym], states[sym]));
+    if (!reqs.length) return;
+    let quotes;
+    try {
+      quotes = await this.quoteSource!(reqs);
+    } catch {
+      return; // the next full refresh still runs on schedule
+    }
+    if (!Object.keys(quotes).length) return;
+    const data: Record<string, { candles: Candle[]; chain: ChainSnapshot }> = {};
+    for (const sym of symbols) if (base[sym]) data[sym] = applyTick(cfgs[sym], base[sym], states[sym], quotes, now);
+    if (multi) {
+      const loadErr: Record<string, string> = {};
+      for (const sym of symbols) if (!data[sym]) loadErr[sym] = this.multiErrors[sym] ?? 'no data yet';
+      await this.doMultiRefresh(now, { data, loadErr });
+    } else {
+      await this.processSingle(data[this.config.symbol], now, true);
+    }
+    this.lastTick = now;
+    const p = this.state.position;
+    const ltp = p ? this.premium(p.direction, p.strike) : null;
+    if (p && ltp) this.setMark(ltp, now);
   }
 
   private async doRefresh() {
@@ -693,9 +765,14 @@ export class EngineRunner {
       }
       return;
     }
+    await this.processSingle(data, now, false);
+  }
+
+  /** One engine cycle on loaded (or, for a fast tick, quote-patched) data. */
+  private async processSingle(data: { candles: Candle[]; chain: ChainSnapshot }, now: number, tick: boolean) {
     try {
       const before = this.state;
-      await this.refreshFunds();
+      if (!tick) await this.refreshFunds();
       const { state, dashboard } = runCycle(this.state, this.sizingConfig(), { ...data, now });
       this.state = state;
       this.dashboard = dashboard;
@@ -710,7 +787,7 @@ export class EngineRunner {
           this.status = `Live order error - ${(e as Error).message}`;
         }
       }
-      this.lastRefresh = now;
+      if (!tick) this.lastRefresh = now;
       this.logCycle(now, 'OK');
       // Every event raised during a cycle is stamped with that cycle's clock.
       const fresh = state.events.filter((e) => e.at === now);
@@ -1047,7 +1124,7 @@ export class EngineRunner {
   }
 
   /** Auto refresh loop (StartAutoRefresh / AutoRefreshTick), gated to market hours. */
-  syncTimer(tickMs = 1000) {
+  syncTimer(tickMs = 250) {
     if (!this.config.autoRefresh) {
       this.stop();
       return;
@@ -1056,12 +1133,14 @@ export class EngineRunner {
     this.timer = setInterval(() => {
       const secs = Math.max(MIN_REFRESH_SECONDS, this.config.refreshSeconds);
       if (this.running) return;
-      if (this.lastRefresh && this.clock() - this.lastRefresh < secs * 1000 && !this.source.alwaysOpen) return;
+      const due = !this.lastRefresh || this.clock() - this.lastRefresh >= secs * 1000 || !!this.source.alwaysOpen;
+      if (!due && !this.canTick()) return;
       if (!this.marketOpen()) {
         this.status = 'Market Closed (auto-refresh paused)';
         return;
       }
-      void this.refresh();
+      // A full refresh when due; in between, a fast tick on Dhan quotes (about one a second).
+      void (due ? this.refresh() : this.tick());
     }, tickMs);
   }
 
@@ -1080,6 +1159,7 @@ export class EngineRunner {
       status: this.status,
       banner: this.banner,
       lastRefresh: this.lastRefresh,
+      lastTick: this.fastTicking() ? this.lastTick : null,
       closes: this.candles.slice(-150).map((c) => c.c),
       marketOpen: this.marketOpen(),
       demo,

@@ -183,6 +183,15 @@ in practice a refresh lands every ~3–3.5 s). At fast rates the IV percentile s
 15 s, routine saves happen at most every 15 s (trades, stop / lock moves, orders, setups and alerts save at
 once), and the Dashboard follows the engine every 1.5 s.
 
+**Live quotes between refreshes** (Settings → Engine settings, on by default, Dhan only): with auto-refresh
+on, one Dhan quote call about every second (`src/lib/engine/ticks.ts`) updates each index's price (MCX: the
+future) and the premiums of the open trade, the armed setup, a pending limit entry and the strikes around the
+money (ATM ± 1, CE and PE). The engine runs on those prices right away: the price goes into the forming
+5-min candle, so a setup's break is seen within about a second, and stop-losses, Target 1, the loss trail
+and the profit lock act on the fresh premium (in LIVE the Dhan stop order follows as before). OI, IV and
+Greeks stay from the last option chain until the next full refresh; if full refreshes keep failing, the
+ticks stop after a minute rather than run on an old chain. Multi-index: one quote call covers both indexes.
+
 ## Portfolio: strategy results
 
 The Portfolio tab opens with **Strategy results** from the trade journal, separately for PAPER and LIVE:
@@ -266,8 +275,8 @@ IV history and calibrated score (`src/lib/engine/multi.ts`), against **one share
 - The Dashboard shows every watched index at the top, each with its trade and P&L; tap one to see its details
   and ENTER / EXIT on it. Today's P&L includes the other indexes' open trades. Multi-index can't be switched
   off while another index still has a trade open.
-- Dhan allows one option chain per 3 s, so with two indexes each refreshes about every 6 s; the trade shown
-  on the Dashboard is still quoted every 2 s.
+- Dhan allows one option chain per 3 s, so with two indexes each full refresh lands about every 6 s; in
+  between, the live quotes update both indexes' prices and premiums about every second.
 
 ## Loss trail
 

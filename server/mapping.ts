@@ -280,6 +280,7 @@ export function mapEngineChain(json: any, expiry: string): ChainSnapshot {
           gamma: num(raw.greeks?.gamma),
           theta: num(raw.greeks?.theta),
           vega: num(raw.greeks?.vega),
+          ...(raw.security_id != null ? { securityId: String(raw.security_id) } : {}),
         }
       : null;
   const strikes: ChainStrike[] = Object.keys(oc)

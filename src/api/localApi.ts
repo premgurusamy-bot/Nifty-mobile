@@ -15,7 +15,7 @@
 import { DhanClient } from '../../server/dhan.ts';
 import { mapFunds } from '../../server/mapping.ts';
 import { screenAll, type ScreenGroup, type ScreenReport } from '../lib/screener.ts';
-import { DhanEngineSource } from '../../server/engineSource.ts';
+import { DhanEngineSource, dhanQuoteSource } from '../../server/engineSource.ts';
 import { LiveTrader } from '../../server/liveTrader.ts';
 import { extractIps, isIPv4, runPreflight, type PreflightResult } from '../../server/preflight.ts';
 import { DhanService, underlyingFor } from '../../server/service.ts';
@@ -69,7 +69,11 @@ export interface PhoneTrading {
   screener: (group?: ScreenGroup) => Promise<ScreenReport>;
 }
 
-export type LocalApi = Api & PhoneTrading & { dispose: () => void };
+export type LocalApi = Api & PhoneTrading & {
+  dispose: () => void;
+  /** The engine itself (tests / diagnostics). */
+  runner: EngineRunner;
+};
 
 export const isLocalApi = (a: Api | null): a is LocalApi => !!a && 'engineEnter' in a;
 
@@ -80,6 +84,7 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
   await engine.init();
   const trader = new LiveTrader(dhan, service, { sleep: o.sleep });
   engine.afterCycle = (before, after) => trader.afterCycle(engine, before, after);
+  engine.quoteSource = dhanQuoteSource(dhan);
   engine.fundsSource = async () => mapFunds(await dhan.fundLimit());
   // The screener's own data source (same Dhan client, so it shares the rate limits).
   const screenSource = new DhanEngineSource(dhan);
@@ -89,7 +94,8 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
   let ticking = false;
   const tickPosition = async () => {
     const p = engine.state.position;
-    if (ticking || !p || (!o.tickAlways && !engine.marketOpen())) return;
+    // The engine's fast ticks already quote the trade every second (and act on it).
+    if (ticking || !p || engine.fastTicking() || (!o.tickAlways && !engine.marketOpen())) return;
     ticking = true;
     try {
       const key = engine.positionKey()!;
@@ -235,6 +241,7 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
         config: engine.config,
         state: engine.state,
       }),
+    runner: engine,
     dispose: () => {
       if (ticker) clearInterval(ticker);
       engine.stop();

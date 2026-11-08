@@ -907,6 +907,20 @@ export default function SettingsScreen() {
               />
             ))}
             <View style={s.switchRow}>
+              <Text style={s.label}>Live quotes every second between refreshes (Dhan)</Text>
+              <Switch
+                value={cfg.fastTicks !== false}
+                onValueChange={(v) => void save({ fastTicks: v })}
+                accessibilityLabel="Live quotes between refreshes"
+              />
+            </View>
+            <Text style={[ui.muted, { fontSize: 12 }]}>
+              The option chain (OI, IV, Greeks) can only be loaded once per 3 s per index. In between, with
+              auto-refresh on, one Dhan quote per second updates each index&apos;s price and the premiums of the open
+              trade, the armed setup and the strikes around the money — so a setup&apos;s break, stop-losses, Target 1,
+              the loss trail and the profit lock act within about a second. Not in demo mode.
+            </Text>
+            <View style={s.switchRow}>
               <Text style={s.label}>After the hold, enter only if the score held or rose (not fading)</Text>
               <Switch
                 value={cfg.confirmRising !== false}
