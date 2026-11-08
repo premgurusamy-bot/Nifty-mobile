@@ -31,6 +31,8 @@ interface AngelValue {
   login: (pin: string) => Promise<void>;
   logout: () => Promise<void>;
   test: () => Promise<string>;
+  /** The 6-digit code the app makes now from the saved TOTP key (to compare with your authenticator). */
+  currentCode: () => Promise<{ code: string; secondsLeft: number } | null>;
 }
 
 const Ctx = createContext<AngelValue | null>(null);
@@ -130,9 +132,16 @@ export function AngelProvider({ children }: { children: ReactNode }) {
     return `BANK NIFTY ${r.spot.toFixed(2)} · expiry ${r.expiry} · ${r.strikes} strikes (${r.withOi} with OI, ${r.withIv} with IV) · ${r.candles} candles`;
   }, [local]);
 
+  const currentCode = useCallback(async () => {
+    const t = await secret.get(K.totp);
+    if (!t) return null;
+    const now = Date.now();
+    return { code: totpNow(t, now), secondsLeft: 30 - (Math.floor(now / 1000) % 30) };
+  }, []);
+
   const value = useMemo<AngelValue>(
-    () => ({ available: !!local, hasKeys, clientCode, status: local ? status : null, saveKeys, forgetKeys, login, logout, test }),
-    [local, hasKeys, clientCode, status, saveKeys, forgetKeys, login, logout, test],
+    () => ({ available: !!local, hasKeys, clientCode, status: local ? status : null, saveKeys, forgetKeys, login, logout, test, currentCode }),
+    [local, hasKeys, clientCode, status, saveKeys, forgetKeys, login, logout, test, currentCode],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

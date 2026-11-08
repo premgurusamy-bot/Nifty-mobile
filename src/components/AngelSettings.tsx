@@ -121,6 +121,17 @@ export function AngelSettingsCard() {
 
           {a.hasKeys && !a.status?.connected ? (
             <>
+              <Button
+                label="Check TOTP code"
+                color={colors.cardAlt}
+                onPress={() =>
+                  void run(async () => {
+                    const c = await a.currentCode();
+                    if (!c) return 'No TOTP key saved';
+                    return `The app's code now: ${c.code} (changes in ${c.secondsLeft} s) — it must match Angel One in your authenticator app. If it doesn't, the saved key is old: Change keys and scan Angel's newest QR.`;
+                  })
+                }
+              />
               <Input label="Angel One MPIN" value={pin} onChange={setPin} secure numeric />
               <Button
                 label={busy ? 'Logging in…' : 'Log in to Angel One'}
