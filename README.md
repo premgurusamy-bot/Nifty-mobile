@@ -313,6 +313,25 @@ it with every Angel order. Angel's quote has no previous-day OI, so "change in O
 the first quote of the day. Routes and headers follow Angel's official SmartAPI client; tests run against
 `tests/fakeAngel.ts`.
 
+## Trend finder (Trend tab)
+
+"The trend is your friend": for each watched index (`src/lib/engine/trend.ts`, on the 5-min candles):
+
+- **Direction** UP / DOWN / SIDEWAYS — EMA20 vs EMA50 (small dead band, flips under 3 candles ignored);
+  sideways when ADX < 18 and the EMAs are within 0.3 ATR.
+- **When it started**: the turning point before the EMAs crossed (lowest low of an uptrend, highest high of a
+  downtrend), its price, **how long it has run** (market time), and the **move** in points, % and ATRs.
+- **Strength** 0–100 (ADX, share of candles closing with the trend, 15-min chart agreeing).
+- **Typical trend length** for this index (median of the finished trends in the loaded days) and how this
+  one's age compares.
+- **Is it ending?** ADX falling from its peak, a new high/low with weaker RSI (divergence), a close back
+  through EMA20, a broken swing low/high, price stretched > 2.5 ATR from EMA20, older than 75% of recent
+  trends, the 15-min chart disagreeing.
+- **Phase** JUST STARTED / RUNNING / MATURE / TIRING / BREAKING / SIDEWAYS with a one-line verdict, and today's
+  trends as a timeline.
+
+Guidance only: the engine's entry rules don't use it.
+
 ## Loss trail
 
 Settings → **Loss trail** (on by default). Before the day plan / profit lock's first step, the possible loss

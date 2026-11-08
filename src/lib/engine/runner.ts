@@ -18,6 +18,7 @@ import { catalogEntry, CATALOG } from './catalog.ts';
 import { buildFuturesPlan } from './futures.ts';
 import { orderBroker, sizingCapital, type BrokerName, type SizingConfig } from './sizing.ts';
 import { applyTick, tickRequests, type QuoteSource } from './ticks.ts';
+import { findTrend, type TrendReport } from './trend.ts';
 import { blankSymbolState, isBusy, normalizeSymbolState, pickSymbolState, runMultiCycle, splitFactor } from './multi.ts';
 import {
   DEFAULT_CONFIG,
@@ -137,6 +138,8 @@ export interface EngineSnapshot {
   /** Persistent warning banner (Dashboard F4), e.g. expired Dhan token. */
   banner: string;
   lastRefresh: number | null;
+  /** Trend finder per index (direction, start, age, strength, ending signs). */
+  trend?: Record<string, TrendReport>;
   /** Where each index's data came from (Dhan / Angel One, and why not the chosen one). */
   feeds?: Record<string, { feed: 'DHAN' | 'ANGEL'; note?: string }>;
   /** Last fast tick (Dhan quotes between refreshes) while they are running, else null. */
@@ -720,6 +723,27 @@ export class EngineRunner {
     return this.running;
   }
 
+  private trendCache = new Map<string, { key: string; report: TrendReport | null }>();
+
+  /** Trend finder for every watched index (or the selected one), recomputed when its candles change. */
+  trends(): Record<string, TrendReport> {
+    const sets: Record<string, Candle[]> = this.multiActive()
+      ? Object.fromEntries(Object.entries(this.multiData).map(([k, v]) => [k, v.candles]))
+      : { [this.config.symbol]: this.candles };
+    const out: Record<string, TrendReport> = {};
+    for (const [sym, c] of Object.entries(sets)) {
+      const last = c[c.length - 1];
+      const key = last ? `${c.length}|${last.t}|${last.h}|${last.l}|${last.c}` : '';
+      let hit = this.trendCache.get(sym);
+      if (!hit || hit.key !== key) {
+        hit = { key, report: last ? findTrend(c) : null };
+        this.trendCache.set(sym, hit);
+      }
+      if (hit.report) out[sym] = hit.report;
+    }
+    return out;
+  }
+
   /** Where each index's latest data came from. */
   feeds(): Record<string, { feed: 'DHAN' | 'ANGEL'; note?: string }> {
     const chains: Record<string, ChainSnapshot | null | undefined> = this.multiActive()
@@ -1213,6 +1237,7 @@ export class EngineRunner {
       lastRefresh: this.lastRefresh,
       lastTick: this.fastTicking() ? this.lastTick : null,
       feeds: this.feeds(),
+      trend: this.trends(),
       closes: this.candles.slice(-150).map((c) => c.c),
       marketOpen: this.marketOpen(),
       demo,
