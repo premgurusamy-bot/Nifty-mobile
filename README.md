@@ -336,7 +336,15 @@ the first quote of the day. Routes and headers follow Angel's official SmartAPI 
   time decay") moves the score; IV percentile (dear / cheap premiums, IV-crush risk) and expiry closeness add
   notes. The trend's phase caps it (tiring ≤ 60, breaking ≤ 35).
 
-Guidance only: the engine's entry rules don't use it.
+- **Gap at the open** (`findGap`): today's open vs yesterday's close in % / points / ATRs, flat (< 0.25%),
+  gap up / down, **full** when beyond yesterday's high / low; how much of the gap has been given back (now and
+  at worst), filled when price is back at yesterday's close; the first 15 minutes' range and which side broke
+  since. Status: WAIT 15 MIN → GAP & GO (holding, opening range broken with the gap) / HOLDING / FILLING
+  (half given back, or the range broken against it) / FILLED, with a verdict.
+- **Gap guard** (Settings → Engine settings, on, 0.5%): after a gap of at least that size, no new entry until
+  the first 15 minutes are over (index options; shown as BLOCKED with the reason and the time).
+
+Guidance only otherwise: the engine's entry rules don't use it.
 
 ## Faster multi-index data, FIN NIFTY, auto-pause
 

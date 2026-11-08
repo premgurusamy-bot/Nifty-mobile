@@ -2,7 +2,7 @@
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button, Card, Empty, styles as ui } from '../../components/ui';
 import { catalogEntry } from '../../lib/engine/catalog';
-import type { EntryStrength, TrendPhase, TrendReport } from '../../lib/engine/trend';
+import type { EntryStrength, GapReport, GapStatus, TrendPhase, TrendReport } from '../../lib/engine/trend';
 import { formatNumber, formatSigned } from '../../lib/format';
 import { useEngine } from '../../state/EngineContext';
 import { colors } from '../../theme';
@@ -21,6 +21,49 @@ const PHASE: Record<TrendPhase, { color: string; text: string }> = {
 };
 
 const ENTRY_COLOR = { STRONG: colors.up, OK: colors.warn, WEAK: colors.down } as const;
+
+const GAP: Record<GapStatus, { color: string; text: string }> = {
+  FLAT: { color: colors.muted, text: 'FLAT OPEN' },
+  WAIT_15: { color: colors.warn, text: 'WAIT 15 MIN' },
+  GAP_AND_GO: { color: colors.up, text: 'GAP & GO' },
+  HOLDING: { color: colors.warn, text: 'HOLDING' },
+  FILLING: { color: colors.down, text: 'FILLING' },
+  FILLED: { color: colors.muted, text: 'FILLED' },
+};
+
+function GapBlock({ g }: { g: GapReport }) {
+  const st0 = GAP[g.status];
+  const up = g.gapPts > 0;
+  const title =
+    g.kind === 'FLAT' ? 'Flat open' : `${g.full ? 'Full gap' : 'Gap'} ${up ? 'up ▲' : 'down ▼'} ${formatSigned(g.gapPct, 2)}%`;
+  return (
+    <View style={[st.entry, { borderColor: st0.color }]}>
+      <View style={st.head}>
+        <Text style={st.label}>Gap at the open</Text>
+        <Text style={[st.chip, { color: st0.color, borderColor: st0.color }]}>{st0.text}</Text>
+      </View>
+      <Text style={[ui.title, { fontSize: 18, color: g.kind === 'FLAT' ? colors.text : up ? colors.up : colors.down }]}>{title}</Text>
+      <View style={st.grid}>
+        <Cell k="Yesterday's close" v={formatNumber(g.prevClose)} />
+        <Cell k="Today's open" v={formatNumber(g.open)} />
+        <Cell k="Gap" v={`${formatSigned(g.gapPts, 1)} pts · ${Math.abs(g.gapAtr).toFixed(1)} ATR`} />
+        <Cell k="Yesterday high / low" v={`${formatNumber(g.prevHigh)} / ${formatNumber(g.prevLow)}`} />
+        {g.kind !== 'FLAT' ? (
+          <>
+            <Cell k="Filled now" v={`${Math.max(0, g.fillNowPct).toFixed(0)}%`} color={g.fillNowPct >= 50 ? colors.down : colors.up} />
+            <Cell k="Most filled today" v={g.filled ? '100% (closed)' : `${g.maxFillPct.toFixed(0)}%`} />
+          </>
+        ) : null}
+        <Cell k="First 15 min range" v={`${formatNumber(g.orb.low)} – ${formatNumber(g.orb.high)}`} />
+        <Cell
+          k="Since then"
+          v={!g.orb.done ? `forming (till ${hhmm(g.orb.endsAt)})` : g.orb.broke === 'UP' ? 'broke above' : g.orb.broke === 'DOWN' ? 'broke below' : g.orb.broke === 'BOTH' ? 'broke both sides' : 'inside'}
+        />
+      </View>
+      <Text style={[ui.title, { color: st0.color === colors.muted ? colors.text : st0.color }]}>{g.verdict}</Text>
+    </View>
+  );
+}
 
 function EntryBlock({ e }: { e: EntryStrength }) {
   const c = ENTRY_COLOR[e.label];
@@ -94,6 +137,8 @@ function TrendCard({ sym, t }: { sym: string; t: TrendReport & { entry?: EntrySt
         <Cell k="Last swing low" v={t.swingLow != null ? formatNumber(t.swingLow) : '—'} />
       </View>
 
+      {t.gap ? <GapBlock g={t.gap} /> : null}
+
       {t.entry ? <EntryBlock e={t.entry} /> : null}
 
       <Text style={st.label}>Is it ending?</Text>
@@ -158,8 +203,11 @@ export default function TrendScreen() {
         a broken swing low/high, price stretched far from EMA20, a trend older than most recent ones, and the
         15-min chart disagreeing. Entry strength adds the option&apos;s Greeks for the strike the engine would pick:
         delta + gamma turn the trend&apos;s speed into premium gained per hour, theta is the premium time takes per
-        hour, IV percentile shows cheap or dear premiums, and expiry day makes everything faster. Guidance only —
-        the engine&apos;s entry rules don&apos;t use it.
+        hour, IV percentile shows cheap or dear premiums, and expiry day makes everything faster. Gap: today&apos;s
+        open against yesterday&apos;s close (full gap = beyond yesterday&apos;s high / low), how much of it has been given
+        back, and the first 15 minutes&apos; range — holding beyond it is gap-and-go, falling back into the gap is a
+        fill. Guidance only, except the gap guard (Settings → Engine settings): after a big gap the engine waits
+        for the first 15 minutes before entering.
       </Text>
     </ScrollView>
   );

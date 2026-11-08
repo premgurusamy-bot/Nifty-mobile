@@ -69,6 +69,133 @@ export interface TrendReport {
   verdict: string;
   /** Today's trends, oldest first (the last one is the current trend). */
   today: TrendSegment[];
+  /** Today's opening gap against yesterday (null without yesterday's candles). */
+  gap: GapReport | null;
+}
+
+export type GapStatus = 'FLAT' | 'WAIT_15' | 'GAP_AND_GO' | 'HOLDING' | 'FILLING' | 'FILLED';
+
+export interface GapReport {
+  date: string;
+  prevClose: number;
+  prevHigh: number;
+  prevLow: number;
+  open: number;
+  gapPts: number;
+  gapPct: number;
+  /** Gap size in yesterday's closing ATRs. */
+  gapAtr: number;
+  kind: 'FLAT' | 'GAP_UP' | 'GAP_DOWN';
+  /** Opened beyond yesterday's high (gap up) / low (gap down). */
+  full: boolean;
+  /** How much of the gap has been given back: at worst today, and now (0–100+). */
+  maxFillPct: number;
+  fillNowPct: number;
+  /** Price has been back to yesterday's close. */
+  filled: boolean;
+  /** First 15 minutes (three 5-min candles): its range, done or not, and which side broke since. */
+  orb: { high: number; low: number; done: boolean; endsAt: number; broke: 'UP' | 'DOWN' | 'BOTH' | null };
+  status: GapStatus;
+  verdict: string;
+}
+
+/** A gap smaller than this (%) counts as a flat open. */
+export const FLAT_GAP_PCT = 0.25;
+
+/** Today's opening gap: size, full / partial, fill so far, first-15-minute range and what it's doing. */
+export function findGap(candles: Candle[], atr?: number[]): GapReport | null {
+  const c = candles.filter((x) => x.c > 0);
+  if (c.length < 2) return null;
+  const L = c.length - 1;
+  const date = istDay(c[L].t);
+  const first = c.findIndex((x) => istDay(x.t) === date);
+  if (first <= 0) return null; // no previous day in the data
+  const prevDay = istDay(c[first - 1].t);
+  const prev = c.filter((x) => istDay(x.t) === prevDay);
+  const prevClose = prev[prev.length - 1].c;
+  const prevHigh = Math.max(...prev.map((x) => x.h));
+  const prevLow = Math.min(...prev.map((x) => x.l));
+  const today = c.slice(first);
+  const open = today[0].o > 0 ? today[0].o : today[0].c;
+  const gapPts = open - prevClose;
+  const gapPct = (100 * gapPts) / prevClose;
+  const a = atr?.[first - 1] || prev.reduce((m, x) => m + (x.h - x.l), 0) / prev.length || 1;
+  const kind = Math.abs(gapPct) < FLAT_GAP_PCT ? 'FLAT' : gapPts > 0 ? 'GAP_UP' : 'GAP_DOWN';
+  const up = gapPts > 0;
+  const full = up ? open > prevHigh : open < prevLow;
+  const price = c[L].c;
+  const lowT = Math.min(...today.map((x) => x.l));
+  const highT = Math.max(...today.map((x) => x.h));
+  const size = Math.abs(gapPts) || 1;
+  const maxFillPct = Math.max(0, (100 * (up ? open - lowT : highT - open)) / size);
+  const fillNowPct = (100 * (up ? open - price : price - open)) / size;
+  const filled = up ? lowT <= prevClose : highT >= prevClose;
+  const orbBars = today.slice(0, 3);
+  const orb = {
+    high: Math.max(...orbBars.map((x) => x.h)),
+    low: Math.min(...orbBars.map((x) => x.l)),
+    done: false,
+    endsAt: today[0].t + 15 * 60_000,
+    broke: null as 'UP' | 'DOWN' | 'BOTH' | null,
+  };
+  orb.done = today.length > 3; // three opening candles finished (a fourth has started)
+  if (orb.done) {
+    const after = today.slice(3);
+    const bu = after.some((x) => x.h > orb.high);
+    const bd = after.some((x) => x.l < orb.low);
+    orb.broke = bu && bd ? 'BOTH' : bu ? 'UP' : bd ? 'DOWN' : null;
+  }
+  const withGap = up ? 'UP' : 'DOWN';
+  const against = up ? 'DOWN' : 'UP';
+  let status: GapStatus;
+  if (kind === 'FLAT') status = 'FLAT';
+  else if (!orb.done) status = 'WAIT_15';
+  else if (filled) status = 'FILLED';
+  else if (fillNowPct >= 50 || orb.broke === against) status = 'FILLING';
+  else if (orb.broke === withGap || orb.broke === 'BOTH') status = fillNowPct < 50 ? 'GAP_AND_GO' : 'FILLING';
+  else status = 'HOLDING';
+  const word = up ? 'up' : 'down';
+  const side = up ? 'CE' : 'PE';
+  const otherSide = up ? 'PE' : 'CE';
+  const sz = `${Math.abs(gapPct).toFixed(2)}% (${Math.abs(gapPts).toFixed(0)} pts, ${(Math.abs(gapPts) / a).toFixed(1)} ATR)`;
+  const verdict = {
+    FLAT: `Flat open (${gapPct >= 0 ? '+' : ''}${gapPct.toFixed(2)}%): no gap to play — follow the day's own trend.`,
+    WAIT_15: `Gap ${word} ${sz}: wait for the first 15 minutes to finish before trading it — don't chase the opening candle.`,
+    GAP_AND_GO: `Gap ${word} holding and the first-15-min ${up ? 'high' : 'low'} broke: gap-and-go — ${side} with it while price stays beyond the opening range.`,
+    HOLDING: `Gap ${word} holding inside the first-15-min range: wait for a break — ${up ? 'above' : 'below'} ${(up ? orb.high : orb.low).toFixed(0)} = go, ${up ? 'below' : 'above'} ${(up ? orb.low : orb.high).toFixed(0)} = filling.`,
+    FILLING: `Gap ${word} is filling (${Math.max(0, fillNowPct).toFixed(0)}% given back): no fresh ${side}; the fill target is yesterday's close ${prevClose.toFixed(0)} (${otherSide} side).`,
+    FILLED: `Gap ${word} fully filled (back to yesterday's close ${prevClose.toFixed(0)}): the gap is done — trade the day's own trend.`,
+  }[status];
+  return {
+    date,
+    prevClose,
+    prevHigh,
+    prevLow,
+    open,
+    gapPts,
+    gapPct,
+    gapAtr: gapPts / a,
+    kind,
+    full: kind !== 'FLAT' && full,
+    maxFillPct,
+    fillNowPct,
+    filled: kind !== 'FLAT' && filled,
+    orb,
+    status,
+    verdict,
+  };
+}
+
+/**
+ * Gap guard for the engine: after a big gap (≥ minPct) no new entry until the first 15 minutes are
+ * over — the opening candles of a gap swing hardest. Returns the reason, or null.
+ */
+export function gapEntryBlock(candles: Candle[], now: number, minPct: number): string | null {
+  const g = findGap(candles);
+  if (!g || g.kind === 'FLAT' || Math.abs(g.gapPct) < minPct) return null;
+  if (now >= g.orb.endsAt) return null;
+  const until = new Date(g.orb.endsAt + 5.5 * 3600_000).toISOString().slice(11, 16);
+  return `Gap ${g.gapPts > 0 ? 'up' : 'down'} ${Math.abs(g.gapPct).toFixed(2)}% at the open — waiting for the first 15 minutes (until ${until})`;
 }
 
 const CANDLE_MIN = 5;
@@ -339,6 +466,7 @@ export function findTrend(candles: Candle[]): TrendReport | null {
     warnings,
     verdict,
     today,
+    gap: findGap(c, atr),
   };
 }
 

@@ -938,6 +938,16 @@ export default function SettingsScreen() {
               />
             ))}
             <View style={s.switchRow}>
+              <Text style={s.label}>
+                Gap guard: after an opening gap of {cfg.gapGuardPct ?? 0.5}% or more, no new entry in the first 15 minutes
+              </Text>
+              <Switch
+                value={cfg.gapGuard !== false}
+                onValueChange={(v) => void save({ gapGuard: v })}
+                accessibilityLabel="Gap guard"
+              />
+            </View>
+            <View style={s.switchRow}>
               <Text style={s.label}>Live quotes every second between refreshes (Dhan)</Text>
               <Switch
                 value={cfg.fastTicks !== false}

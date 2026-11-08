@@ -239,6 +239,8 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
     next.tradeMode = patch.tradeMode;
   }
   if (patch.fastTicks !== undefined) next.fastTicks = !!patch.fastTicks;
+  if (patch.gapGuard !== undefined) next.gapGuard = !!patch.gapGuard;
+  num('gapGuardPct', 0.1, 5);
   if (patch.angelSymbols !== undefined) {
     const ok = ['NIFTY', 'BANKNIFTY', 'FINNIFTY'];
     const list = [...new Set((patch.angelSymbols ?? []).map((x) => String(x).toUpperCase()))];

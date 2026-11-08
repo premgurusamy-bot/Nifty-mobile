@@ -142,6 +142,9 @@ export interface EngineConfig {
   lastEntryTimeMcx: string;
   /** Seconds between automatic refreshes (min 3: Dhan allows one option-chain request per 3 s). */
   refreshSeconds: number;
+  /** Gap guard: after an opening gap of at least gapGuardPct %, no new entry in the first 15 minutes. */
+  gapGuard: boolean;
+  gapGuardPct: number;
   /** Index options whose market data comes from Angel One instead of Dhan. */
   angelSymbols: string[];
   /** Index options whose LIVE orders go to Angel One (the rest: Dhan). */
@@ -260,6 +263,8 @@ export const DEFAULT_CONFIG: EngineConfig = {
   lastEntryTimeMcx: '',
   refreshSeconds: 15,
   fastTicks: true,
+  gapGuard: true,
+  gapGuardPct: 0.5,
   angelSymbols: ['FINNIFTY'],
   angelOrderSymbols: ['FINNIFTY'],
   brokerFailover: true,
