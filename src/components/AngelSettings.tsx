@@ -10,6 +10,7 @@ import { otpauthInfo, parseTotpKey } from '../lib/totp';
 const INDEXES = [
   { sym: 'NIFTY', label: 'NIFTY 50' },
   { sym: 'BANKNIFTY', label: 'BANK NIFTY' },
+  { sym: 'FINNIFTY', label: 'FIN NIFTY' },
 ];
 const BROKERS = [
   { label: 'Dhan', value: 'DHAN' as const },

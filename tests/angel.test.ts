@@ -100,7 +100,7 @@ test('routing: Angel for the indexes set to it; not logged in or session ended â
 });
 
 test('settings: which indexes use Angel One', () => {
-  assert.deepEqual(DEFAULT_CONFIG.angelSymbols, []);
+  assert.deepEqual(DEFAULT_CONFIG.angelSymbols, ['FINNIFTY']);
   assert.deepEqual(sanitizeConfig({ angelSymbols: ['banknifty'] }, DEFAULT_CONFIG).angelSymbols, ['BANKNIFTY']);
   assert.throws(() => sanitizeConfig({ angelSymbols: ['GOLDM'] }, DEFAULT_CONFIG), /can't use Angel One data/);
 });
@@ -125,7 +125,7 @@ test('phone: multi-index with BANK NIFTY on Angel â€” NIFTY from Dhan, BANK NIFT
     assert.equal(api.angelSetSession(await login()).connected, true);
     const t = await api.angelTest();
     assert.deepEqual([t.symbol, t.expiry, t.strikes, t.withIv], ['BANKNIFTY', ANGEL_EXPIRY, 41, 41]);
-    await api.engineConfig({ expiry: GOLDEN_EXPIRY, lastEntryTime: '', multiIndex: true, angelSymbols: ['BANKNIFTY'] });
+    await api.engineConfig({ expiry: GOLDEN_EXPIRY, lastEntryTime: '', multiIndex: true, watchSymbols: ['NIFTY', 'BANKNIFTY'], angelSymbols: ['BANKNIFTY'] });
     const nd = fake.requests.length;
     const s = await api.engineRefresh();
     const chains = fake.requests.slice(nd).filter((q) => q.path === '/optionchain').map((q) => q.body.UnderlyingScrip);

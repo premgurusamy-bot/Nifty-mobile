@@ -64,7 +64,7 @@ test('Angel One order status words and times', () => {
   );
   assert.equal(angelStatus({ status: 'open', filledshares: '30' }), 'PART_TRADED');
   assert.equal(angelTime('08-Nov-2026 10:15:20'), Date.UTC(2026, 10, 8, 4, 45, 20));
-  assert.deepEqual(DEFAULT_CONFIG.angelOrderSymbols, []);
+  assert.deepEqual(DEFAULT_CONFIG.angelOrderSymbols, ['FINNIFTY']);
   assert.equal(DEFAULT_CONFIG.brokerFailover, true);
   assert.throws(() => sanitizeConfig({ angelOrderSymbols: ['GOLDM'] }, DEFAULT_CONFIG), /can't trade through Angel One/);
 });

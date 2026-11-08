@@ -219,7 +219,7 @@ export default function DashboardScreen() {
               <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
                 <Text style={ui.title}>
                   {w.label}
-                  {w.inTrade ? '  · IN TRADE' : w.pendingEntry ? '  · ORDER PENDING' : ''}
+                  {w.inTrade ? '  · IN TRADE' : w.pendingEntry ? '  · ORDER PENDING' : w.paused ? '  · PAUSED' : ''}
                   {w.active ? '  · shown below' : ''}
                 </Text>
                 {snap.feeds?.[w.symbol] && (snap.feeds[w.symbol].feed === 'ANGEL' || snap.feeds[w.symbol].note) ? (

@@ -18,7 +18,7 @@ import { catalogEntry, CATALOG } from './catalog.ts';
 import { buildFuturesPlan } from './futures.ts';
 import { orderBroker, sizingCapital, type BrokerName, type SizingConfig } from './sizing.ts';
 import { applyTick, tickRequests, type QuoteSource } from './ticks.ts';
-import { findTrend, type TrendReport } from './trend.ts';
+import { entryStrength, findTrend, type EntryStrength, type TrendReport } from './trend.ts';
 import { blankSymbolState, isBusy, normalizeSymbolState, pickSymbolState, runMultiCycle, splitFactor } from './multi.ts';
 import {
   DEFAULT_CONFIG,
@@ -62,6 +62,11 @@ export interface EngineDataSource {
   ): Promise<{ candles: Candle[]; chain: ChainSnapshot; contract?: FuturesContract }>;
   /** Clock used for the cycle (demo mode runs on simulated time). */
   now?(): number;
+  /**
+   * Which request lane an instrument's load uses (e.g. 'DHAN' / 'ANGEL'): lanes have their own rate
+   * limits, so the engine loads different lanes at the same time. Absent = one lane.
+   */
+  laneOf?(cfg: EngineConfig): string;
   /** Demo sources ignore market hours. */
   alwaysOpen?: boolean;
 }
@@ -94,6 +99,8 @@ export interface WatchItem {
   /** The index's open trade: what, how many, entry and its P&L (incl. the T1 half). */
   trade?: { label: string; qty: number; entry: number; pnl: number | null };
   pendingEntry?: boolean;
+  /** Auto-paused because the data got slow (tap to bring it back). */
+  paused?: boolean;
   confidence: number | null;
   signal: string;
   direction: string;
@@ -139,7 +146,7 @@ export interface EngineSnapshot {
   banner: string;
   lastRefresh: number | null;
   /** Trend finder per index (direction, start, age, strength, ending signs). */
-  trend?: Record<string, TrendReport>;
+  trend?: Record<string, TrendReport & { entry?: EntryStrength | null }>;
   /** Where each index's data came from (Dhan / Angel One, and why not the chosen one). */
   feeds?: Record<string, { feed: 'DHAN' | 'ANGEL'; note?: string }>;
   /** Last fast tick (Dhan quotes between refreshes) while they are running, else null. */
@@ -247,6 +254,7 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
     next.angelOrderSymbols = list;
   }
   if (patch.brokerFailover !== undefined) next.brokerFailover = !!patch.brokerFailover;
+  if (patch.autoShed !== undefined) next.autoShed = !!patch.autoShed;
   if (patch.multiSize !== undefined) {
     if (patch.multiSize !== 'SPLIT' && patch.multiSize !== 'FULL') throw new Error('multiSize must be SPLIT or FULL');
     next.multiSize = patch.multiSize;
@@ -326,16 +334,23 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
 }
 
 /** Current settings revision: 1 = hold before entry 5 → 3 minutes. */
-export const CONFIG_REV = 1;
+export const CONFIG_REV = 2;
 
 /**
  * One-time updates to saved settings. Rev 1: the hold-before-entry default changed from 5 to 3
  * minutes; a saved 5 (the old default) becomes 3, any other value you chose is kept.
+ * Rev 2: FIN NIFTY joins the watch list, on Angel One (data and orders) — Settings can change it.
  */
 export function migrateConfig(cfg: EngineConfig, saved: Partial<EngineConfig>): EngineConfig {
   const rev = saved.configRev ?? 0;
   const next = { ...cfg, configRev: CONFIG_REV };
   if (rev < 1 && saved.confirmHoldMinutes === 5) next.confirmHoldMinutes = 3;
+  if (rev < 2) {
+    const add = (list: string[] | undefined) => [...new Set([...(list ?? []), 'FINNIFTY'])];
+    next.watchSymbols = add(next.watchSymbols);
+    next.angelSymbols = add(next.angelSymbols);
+    next.angelOrderSymbols = add(next.angelOrderSymbols);
+  }
   return next;
 }
 
@@ -373,7 +388,20 @@ export class EngineRunner {
   quoteSource: QuoteSource | null = null;
   /** When the last fast tick applied (ms, engine clock). */
   lastTick: number | null = null;
-  private runningKind: 'refresh' | 'tick' | null = null;
+  /** The fast tick in flight (it may overlap a full refresh's loading). */
+  private ticking: Promise<void> | null = null;
+  /** Engine cycles (refresh or tick) run one at a time; loading and quoting happen outside it. */
+  private proc: Promise<unknown> = Promise.resolve();
+  /** Multi-index: indexes paused because full refreshes got too slow (real-time ms until). */
+  paused: Record<string, { until: number; reason: string }> = {};
+  /** How long the last full refresh took to load (ms, real time). */
+  lastLoadMs: number | null = null;
+  /** Auto-pause thresholds (real ms): slow loads in a row pause one index; fast ones bring it back. */
+  shedSlowMs = 12_000;
+  shedFastMs = 6_000;
+  shedPauseMs = 10 * 60_000;
+  private slowLoads = 0;
+  private fastLoads = 0;
   /** Fetches the live account balance (phone / server with Dhan); null in demo. */
   fundsSource: ((broker: BrokerName) => Promise<number>) | null = null;
   private running: Promise<void> | null = null;
@@ -489,6 +517,7 @@ export class EngineRunner {
   /** Multi-index: look at / ENTER / EXIT on this watched index (each keeps its own trade). */
   async setActive(symbol: string) {
     if (!this.multiActive() || !this.watchList().includes(symbol)) throw new Error(`${symbol} is not being watched`);
+    delete this.paused[symbol]; // you want to see it: it loads again
     this.useWatched(symbol);
     this.pinnedActive = symbol;
     await this.persist();
@@ -499,6 +528,93 @@ export class EngineRunner {
     pre?: { data: Record<string, { candles: Candle[]; chain: ChainSnapshot }>; loadErr: Record<string, string> },
   ) {
     const symbols = this.watchList();
+    let data: Record<string, { candles: Candle[]; chain: ChainSnapshot }> = pre?.data ?? {};
+    let loadErr: Record<string, string> = pre?.loadErr ?? {};
+    if (!pre) {
+      const loaded = await this.loadMulti(symbols, now);
+      data = loaded.data;
+      loadErr = loaded.loadErr;
+      return this.serial(() => this.processMulti(Math.max(now, this.lastTick ?? 0), symbols, data, loadErr, false));
+    }
+    return this.processMulti(now, symbols, data, loadErr, true);
+  }
+
+  /**
+   * Load every watched index (not paused): indexes on different request lanes (Dhan / Angel One)
+   * load at the same time, one after another within a lane. Times the whole load for auto-pause.
+   */
+  private async loadMulti(symbols: string[], now: number) {
+    const data: Record<string, { candles: Candle[]; chain: ChainSnapshot }> = {};
+    const loadErr: Record<string, string> = {};
+    const t0 = Date.now();
+    this.unpauseDue(t0);
+    const lanes = new Map<string, string[]>();
+    for (const sym of symbols) {
+      if (this.paused[sym]) continue;
+      const lane = this.source.laneOf?.(this.cfgFor(sym)) ?? 'main';
+      lanes.set(lane, [...(lanes.get(lane) ?? []), sym]);
+    }
+    await Promise.all(
+      [...lanes.values()].map(async (list) => {
+        for (const sym of list) {
+          try {
+            const d = await this.source.load(this.cfgFor(sym), now);
+            data[sym] = { candles: d.candles, chain: d.chain };
+          } catch (e) {
+            loadErr[sym] = (e as Error).message;
+          }
+        }
+      }),
+    );
+    this.lastLoadMs = Date.now() - t0;
+    return { data, loadErr };
+  }
+
+  /** Paused indexes whose pause has run out come back. */
+  private unpauseDue(t: number) {
+    for (const [sym, p] of Object.entries(this.paused)) if (p.until <= t) delete this.paused[sym];
+  }
+
+  /**
+   * Auto-pause (only when really needed): 3 full refreshes in a row slower than shedSlowMs pause the
+   * index least likely to trade (lowest score; never one in a trade or with an order, never the one
+   * shown, always keeping at least one) for shedPauseMs; 5 fast refreshes bring one back early.
+   */
+  private shed(symbols: string[]) {
+    if (!this.config.autoShed || this.lastLoadMs == null) return;
+    const ms = this.lastLoadMs;
+    this.slowLoads = ms > this.shedSlowMs ? this.slowLoads + 1 : 0;
+    this.fastLoads = ms < this.shedFastMs ? this.fastLoads + 1 : 0;
+    const pausedNow = Object.keys(this.paused);
+    if (this.fastLoads >= 5 && pausedNow.length) {
+      const first = pausedNow.sort((x, y) => this.paused[x].until - this.paused[y].until)[0];
+      delete this.paused[first];
+      this.fastLoads = 0;
+      return;
+    }
+    if (this.slowLoads < 3) return;
+    this.slowLoads = 0;
+    const w = this.watchStates();
+    const live = symbols.filter((s) => !this.paused[s]);
+    if (live.length <= 1) return;
+    const conf = (s: string) => this.multiDash[s]?.decision.confidence ?? -1;
+    const pick = live
+      .filter((s) => s !== this.config.symbol && !isBusy(w[s]))
+      .sort((x, y) => conf(x) - conf(y))[0];
+    if (!pick) return;
+    this.paused[pick] = {
+      until: Date.now() + this.shedPauseMs,
+      reason: `Paused ${Math.round(this.shedPauseMs / 60_000)} min: data was slow (full refresh ${(ms / 1000).toFixed(1)} s)`,
+    };
+  }
+
+  private async processMulti(
+    now: number,
+    symbols: string[],
+    data: Record<string, { candles: Candle[]; chain: ChainSnapshot }>,
+    loadErr: Record<string, string>,
+    pre: boolean,
+  ) {
     if (!this.state.watch) {
       // Starting multi-index: the current index keeps its state, the others start from their IV banks.
       const w: Record<string, SymbolState> = {};
@@ -507,16 +623,7 @@ export class EngineRunner {
       this.state = { ...this.state, watch: w };
     }
     this.stash();
-    const data: Record<string, { candles: Candle[]; chain: ChainSnapshot }> = pre?.data ?? {};
-    const loadErr: Record<string, string> = pre?.loadErr ?? {};
-    for (const sym of pre ? [] : symbols) {
-      try {
-        const d = await this.source.load(this.cfgFor(sym), now);
-        data[sym] = { candles: d.candles, chain: d.chain };
-      } catch (e) {
-        loadErr[sym] = (e as Error).message;
-      }
-    }
+    if (!pre) this.shed(symbols);
     if (!Object.keys(data).length) {
       const msg = Object.values(loadErr)[0] ?? 'no data';
       this.status = `Error - ${msg}`;
@@ -667,9 +774,10 @@ export class EngineRunner {
         signal: d?.decision.signal ?? '',
         direction: d?.decision.direction ?? '',
         strike: d?.decision.selectedStrike ?? 0,
-        decision: d?.decision.decisionText ?? 'Waiting for the first refresh',
+        decision: this.paused[sym]?.reason ?? d?.decision.decisionText ?? 'Waiting for the first refresh',
         spot: d?.market.spot ?? null,
         ...(this.multiErrors[sym] ? { error: this.multiErrors[sym] } : {}),
+        ...(this.paused[sym] ? { paused: true } : {}),
       };
     });
   }
@@ -713,25 +821,32 @@ export class EngineRunner {
 
   /** Manual "Refresh Now": always runs, regardless of market hours. */
   refresh(): Promise<void> {
-    if (this.running && this.runningKind === 'tick') return this.running.then(() => this.refresh());
     if (this.running) return this.running;
-    this.runningKind = 'refresh';
     this.running = this.doRefresh().finally(() => {
       this.running = null;
-      this.runningKind = null;
     });
     return this.running;
   }
 
+  /** Run an engine cycle after any other in progress (state changes never interleave). */
+  private serial<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.proc.then(fn, fn);
+    this.proc = next.catch(() => {});
+    return next;
+  }
+
   private trendCache = new Map<string, { key: string; report: TrendReport | null }>();
 
-  /** Trend finder for every watched index (or the selected one), recomputed when its candles change. */
-  trends(): Record<string, TrendReport> {
-    const sets: Record<string, Candle[]> = this.multiActive()
-      ? Object.fromEntries(Object.entries(this.multiData).map(([k, v]) => [k, v.candles]))
-      : { [this.config.symbol]: this.candles };
-    const out: Record<string, TrendReport> = {};
-    for (const [sym, c] of Object.entries(sets)) {
+  /**
+   * Trend finder for every watched index (or the selected one), recomputed when its candles change,
+   * plus the entry strength from the option's Greeks (the latest chain; cheap, so every time).
+   */
+  trends(): Record<string, TrendReport & { entry?: EntryStrength | null }> {
+    const sets: Record<string, { candles: Candle[]; chain: ChainSnapshot | null; dash: Dashboard | null }> = this.multiActive()
+      ? Object.fromEntries(Object.entries(this.multiData).map(([k, v]) => [k, { ...v, dash: this.multiDash[k] ?? null }]))
+      : { [this.config.symbol]: { candles: this.candles, chain: this.lastChain, dash: this.dashboard } };
+    const out: Record<string, TrendReport & { entry?: EntryStrength | null }> = {};
+    for (const [sym, { candles: c, chain, dash }] of Object.entries(sets)) {
       const last = c[c.length - 1];
       const key = last ? `${c.length}|${last.t}|${last.h}|${last.l}|${last.c}` : '';
       let hit = this.trendCache.get(sym);
@@ -739,7 +854,23 @@ export class EngineRunner {
         hit = { key, report: last ? findTrend(c) : null };
         this.trendCache.set(sym, hit);
       }
-      if (hit.report) out[sym] = hit.report;
+      if (!hit.report) continue;
+      const t = hit.report;
+      let entry: EntryStrength | null = null;
+      if (chain?.strikes.length) {
+        const side = t.lean === 'UP' ? 'ce' : 'pe';
+        // The strike the engine would pick for this side, else the one at the money.
+        const want = dash && dash.decision.direction === (t.lean === 'UP' ? 'CE' : 'PE') && dash.decision.selectedStrike ? dash.decision.selectedStrike : chain.spot;
+        const row = findStrike(chain, want);
+        const l = row?.[side];
+        const now = last ? last.t : this.clock();
+        const dte = chain.expiry ? Math.max(0, (Date.parse(`${chain.expiry}T15:30:00+05:30`) - now) / 86400_000) : 7;
+        entry = entryStrength(t, c, l && row ? { strike: row.strike, ltp: l.ltp, delta: l.delta, gamma: l.gamma, theta: l.theta, vega: l.vega, iv: l.iv } : null, {
+          ivPercentile: dash?.decision.ivPercentile ?? null,
+          daysToExpiry: dte,
+        });
+      }
+      out[sym] = { ...t, entry };
     }
     return out;
   }
@@ -770,25 +901,31 @@ export class EngineRunner {
 
   /** One fast tick: quote spot + premiums, run the engine on the last refresh's data with them. */
   tick(): Promise<void> {
-    if (this.running || !this.canTick()) return this.running ?? Promise.resolve();
-    this.runningKind = 'tick';
-    this.running = this.doTick().finally(() => {
-      this.running = null;
-      this.runningKind = null;
+    if (this.ticking || !this.canTick()) return this.ticking ?? Promise.resolve();
+    this.ticking = this.doTick().finally(() => {
+      this.ticking = null;
     });
-    return this.running;
+    return this.ticking;
   }
 
-  private async doTick() {
-    const now = this.clock();
+  /** What a tick builds on: each index's last data, per-index state and settings. */
+  private tickBase() {
     const multi = this.multiActive() && !!this.state.watch;
     const symbols = multi ? this.watchList() : [this.config.symbol];
     const base: Record<string, { candles: Candle[]; chain: ChainSnapshot }> = multi
       ? { ...this.multiData }
-      : { [this.config.symbol]: { candles: this.candles, chain: this.lastChain! } };
+      : this.lastChain
+        ? { [this.config.symbol]: { candles: this.candles, chain: this.lastChain } }
+        : {};
     const states = multi ? this.watchStates() : { [this.config.symbol]: pickSymbolState(this.state) };
     const cfgs = Object.fromEntries(symbols.map((sym) => [sym, multi ? this.cfgFor(sym) : this.config]));
-    const reqs = symbols.filter((sym) => base[sym]).flatMap((sym) => tickRequests(cfgs[sym], base[sym], states[sym]));
+    return { multi, symbols, base, states, cfgs };
+  }
+
+  private async doTick() {
+    // Quote outside the engine lock: a full refresh may be loading meanwhile — ticks keep going.
+    const pre = this.tickBase();
+    const reqs = pre.symbols.filter((sym) => pre.base[sym]).flatMap((sym) => tickRequests(pre.cfgs[sym], pre.base[sym], pre.states[sym]));
     if (!reqs.length) return;
     let quotes;
     try {
@@ -797,19 +934,26 @@ export class EngineRunner {
       return; // the next full refresh still runs on schedule
     }
     if (!Object.keys(quotes).length) return;
-    const data: Record<string, { candles: Candle[]; chain: ChainSnapshot }> = {};
-    for (const sym of symbols) if (base[sym]) data[sym] = applyTick(cfgs[sym], base[sym], states[sym], quotes, now);
-    if (multi) {
-      const loadErr: Record<string, string> = {};
-      for (const sym of symbols) if (!data[sym]) loadErr[sym] = this.multiErrors[sym] ?? 'no data yet';
-      await this.doMultiRefresh(now, { data, loadErr });
-    } else {
-      await this.processSingle(data[this.config.symbol], now, true);
-    }
-    this.lastTick = now;
-    const p = this.state.position;
-    const ltp = p ? this.premium(p.direction, p.strike) : null;
-    if (p && ltp) this.setMark(ltp, now);
+    await this.serial(async () => {
+      if (!this.canTick()) return;
+      const now = Math.max(this.clock(), this.lastTick ?? 0, this.lastRefresh ?? 0);
+      // Patch the latest data (a refresh may have just replaced it), never the data we started from.
+      const { multi, symbols, base, states, cfgs } = this.tickBase();
+      const data: Record<string, { candles: Candle[]; chain: ChainSnapshot }> = {};
+      for (const sym of symbols) if (base[sym]) data[sym] = applyTick(cfgs[sym], base[sym], states[sym], quotes, now);
+      if (!Object.keys(data).length) return;
+      if (multi) {
+        const loadErr: Record<string, string> = {};
+        for (const sym of symbols) if (!data[sym]) loadErr[sym] = this.multiErrors[sym] ?? 'no data yet';
+        await this.doMultiRefresh(now, { data, loadErr });
+      } else {
+        await this.processSingle(data[this.config.symbol], now, true);
+      }
+      this.lastTick = now;
+      const p = this.state.position;
+      const ltp = p ? this.premium(p.direction, p.strike) : null;
+      if (p && ltp) this.setMark(ltp, now);
+    });
   }
 
   private async doRefresh() {
@@ -841,7 +985,7 @@ export class EngineRunner {
       }
       return;
     }
-    await this.processSingle(data, now, false);
+    await this.serial(() => this.processSingle(data, Math.max(now, this.lastTick ?? 0), false));
   }
 
   /** One engine cycle on loaded (or, for a fast tick, quote-patched) data. */

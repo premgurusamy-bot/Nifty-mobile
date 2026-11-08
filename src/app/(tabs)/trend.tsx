@@ -2,7 +2,7 @@
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button, Card, Empty, styles as ui } from '../../components/ui';
 import { catalogEntry } from '../../lib/engine/catalog';
-import type { TrendPhase, TrendReport } from '../../lib/engine/trend';
+import type { EntryStrength, TrendPhase, TrendReport } from '../../lib/engine/trend';
 import { formatNumber, formatSigned } from '../../lib/format';
 import { useEngine } from '../../state/EngineContext';
 import { colors } from '../../theme';
@@ -20,7 +20,45 @@ const PHASE: Record<TrendPhase, { color: string; text: string }> = {
   SIDEWAYS: { color: colors.muted, text: 'SIDEWAYS' },
 };
 
-function TrendCard({ sym, t }: { sym: string; t: TrendReport }) {
+const ENTRY_COLOR = { STRONG: colors.up, OK: colors.warn, WEAK: colors.down } as const;
+
+function EntryBlock({ e }: { e: EntryStrength }) {
+  const c = ENTRY_COLOR[e.label];
+  return (
+    <View style={[st.entry, { borderColor: c }]}>
+      <View style={st.head}>
+        <Text style={st.label}>Entry strength (trend + Greeks)</Text>
+        <Text style={[st.chip, { color: c, borderColor: c }]}>
+          {e.label} {e.score}
+        </Text>
+      </View>
+      <View style={st.barTrack} accessibilityLabel={`Entry strength ${e.score} of 100`}>
+        <View style={[st.barFill, { width: `${e.score}%`, backgroundColor: c }]} />
+      </View>
+      <Text style={ui.muted}>
+        {e.side} {e.strike} @ {formatNumber(e.premium)} · expiry in {e.daysToExpiry < 1 ? `${Math.round(e.daysToExpiry * 24)}h` : `${e.daysToExpiry.toFixed(1)} days`}
+      </Text>
+      <View style={st.grid}>
+        <Cell k="Delta" v={e.delta.toFixed(2)} />
+        <Cell k="Gamma" v={e.gamma.toFixed(4)} />
+        <Cell k="Theta (per day)" v={e.theta.toFixed(1)} color={colors.down} />
+        <Cell k="Vega" v={e.vega.toFixed(1)} />
+        <Cell k="IV" v={`${e.iv.toFixed(1)}${e.ivPercentile != null ? ` (${e.ivPercentile.toFixed(0)} pct)` : ''}`} />
+        <Cell k="Trend speed" v={`${e.speedPtsHr.toFixed(0)} pts/hr`} />
+        <Cell k="Premium gain / hr" v={`+${e.gainPerHr.toFixed(1)}`} color={colors.up} />
+        <Cell k="Time decay / hr" v={`−${e.thetaPerHr.toFixed(1)}`} color={colors.down} />
+      </View>
+      <Text style={[ui.title, { color: c }]}>Move pays {e.edge >= 10 ? '10×+' : `${e.edge.toFixed(1)}×`} the time decay</Text>
+      {e.notes.map((n) => (
+        <Text key={n} style={ui.muted}>
+          • {n}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
+function TrendCard({ sym, t }: { sym: string; t: TrendReport & { entry?: EntryStrength | null } }) {
   const ph = PHASE[t.phase];
   const dirColor = t.direction === 'UP' ? colors.up : t.direction === 'DOWN' ? colors.down : colors.muted;
   const arrow = t.direction === 'UP' ? '▲ UP' : t.direction === 'DOWN' ? '▼ DOWN' : `◆ SIDEWAYS (leans ${t.lean.toLowerCase()})`;
@@ -55,6 +93,8 @@ function TrendCard({ sym, t }: { sym: string; t: TrendReport }) {
         <Cell k="Last swing high" v={t.swingHigh != null ? formatNumber(t.swingHigh) : '—'} />
         <Cell k="Last swing low" v={t.swingLow != null ? formatNumber(t.swingLow) : '—'} />
       </View>
+
+      {t.entry ? <EntryBlock e={t.entry} /> : null}
 
       <Text style={st.label}>Is it ending?</Text>
       {t.warnings.length ? (
@@ -116,7 +156,10 @@ export default function TrendScreen() {
         point before the EMAs crossed (the lowest low of an uptrend, the highest high of a downtrend). Age counts
         market time only. Ending signs: strength fading, a new high/low with weaker RSI, a close back through EMA20,
         a broken swing low/high, price stretched far from EMA20, a trend older than most recent ones, and the
-        15-min chart disagreeing. Guidance only — the engine&apos;s entry rules don&apos;t use it.
+        15-min chart disagreeing. Entry strength adds the option&apos;s Greeks for the strike the engine would pick:
+        delta + gamma turn the trend&apos;s speed into premium gained per hour, theta is the premium time takes per
+        hour, IV percentile shows cheap or dear premiums, and expiry day makes everything faster. Guidance only —
+        the engine&apos;s entry rules don&apos;t use it.
       </Text>
     </ScrollView>
   );
@@ -131,4 +174,5 @@ const st = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap', rowGap: 10 },
   cell: { width: '50%', gap: 2, paddingRight: 8 },
   label: { color: colors.muted, fontSize: 12 },
+  entry: { borderWidth: 1, borderRadius: 12, padding: 12, gap: 8 },
 });

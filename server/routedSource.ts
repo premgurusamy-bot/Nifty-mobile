@@ -28,6 +28,12 @@ export class RoutedEngineSource implements EngineDataSource {
     this.angelSource = new AngelEngineSource(angel);
   }
 
+  /** Dhan and Angel One have their own rate limits: their indexes load at the same time. */
+  laneOf(cfg: EngineConfig): string {
+    const wantsAngel = cfg.instrumentKind === 'INDEX_OPTIONS' && (cfg.angelSymbols ?? []).includes(cfg.symbol);
+    return wantsAngel && this.angel.connected ? 'ANGEL' : 'DHAN';
+  }
+
   async load(cfg: EngineConfig, now: number) {
     const wantsAngel = cfg.instrumentKind === 'INDEX_OPTIONS' && (cfg.angelSymbols ?? []).includes(cfg.symbol);
     if (!wantsAngel) {

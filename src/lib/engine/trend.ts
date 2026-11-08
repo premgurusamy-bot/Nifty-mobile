@@ -341,3 +341,121 @@ export function findTrend(candles: Candle[]): TrendReport | null {
     today,
   };
 }
+
+// ---------------------------------------------------------------- entry strength (trend + Greeks)
+
+export interface EntryStrength {
+  /** 0–100: the trend, its phase, and whether the option's Greeks pay for riding it. */
+  score: number;
+  label: 'STRONG' | 'OK' | 'WEAK';
+  side: 'CE' | 'PE';
+  strike: number;
+  premium: number;
+  delta: number;
+  gamma: number;
+  /** Per day (premium points). */
+  theta: number;
+  vega: number;
+  iv: number;
+  ivPercentile: number | null;
+  daysToExpiry: number;
+  /** Index points per hour in the trend's direction (recent half hour and the whole trend, blended). */
+  speedPtsHr: number;
+  /** What the trend's speed should add to the premium per hour (delta + gamma), and what time takes. */
+  gainPerHr: number;
+  thetaPerHr: number;
+  /** gain ÷ decay: above 2 the move pays well for the time; below 1 time decay wins. */
+  edge: number;
+  notes: string[];
+}
+
+const TRADING_HOURS = 6.25;
+
+/**
+ * How good an option entry with the trend is right now: the trend part (strength, phase) and the
+ * Greeks part — delta + gamma turn the trend's speed into premium per hour, theta takes premium per
+ * hour, IV percentile says whether premiums are cheap or dear (IV crush risk), and expiry closeness.
+ */
+export function entryStrength(
+  t: TrendReport,
+  candles: Candle[],
+  leg: { strike: number; ltp: number; delta: number; gamma: number; theta: number; vega: number; iv: number } | null,
+  o: { ivPercentile: number | null; daysToExpiry: number },
+): EntryStrength | null {
+  if (!leg || !(leg.ltp > 0)) return null;
+  const side = t.lean === 'UP' ? 'CE' : 'PE';
+  const sign = t.lean === 'UP' ? 1 : -1;
+  const L = candles.length - 1;
+  const recent = L >= 6 ? sign * (candles[L].c - candles[L - 6].c) * 2 : 0; // last 30 min → per hour
+  const whole = t.ageMin > 0 ? (sign * t.movePts) / (t.ageMin / 60) : 0;
+  const speed = Math.max(0, 0.5 * recent + 0.5 * whole);
+  const d = Math.abs(leg.delta);
+  const gainPerHr = d * speed + 0.5 * Math.abs(leg.gamma) * speed * speed;
+  const thetaPerHr = Math.abs(leg.theta) / TRADING_HOURS;
+  const edge = thetaPerHr > 0 ? Math.min(10, gainPerHr / thetaPerHr) : gainPerHr > 0 ? 10 : 0;
+
+  const notes: string[] = [];
+  let score = t.strength;
+  score += { STARTING: 5, RUNNING: 5, MATURE: -10, EXHAUSTING: -25, REVERSING: -45, SIDEWAYS: -10 }[t.phase];
+  if (t.phase === 'SIDEWAYS') score = Math.min(score, 25);
+  if (edge >= 3) {
+    score += 15;
+    notes.push(`The trend's speed pays ${edge.toFixed(1)}× the time decay — strong for buying`);
+  } else if (edge >= 2) {
+    score += 10;
+    notes.push(`The move pays ${edge.toFixed(1)}× the time decay`);
+  } else if (edge >= 1) {
+    notes.push(`The move only just beats time decay (${edge.toFixed(1)}×)`);
+  } else if (edge >= 0.5) {
+    score -= 10;
+    notes.push(`Time decay eats most of the move (${edge.toFixed(1)}×) — needs the trend to speed up`);
+  } else {
+    score -= 20;
+    notes.push(`Time decay beats the move (${edge.toFixed(1)}×) — buying options loses here`);
+  }
+  const ivp = o.ivPercentile != null && o.ivPercentile >= 0 ? o.ivPercentile : null; // < 0: not enough IV history yet
+  if (ivp != null) {
+    if (ivp > 80) {
+      score -= 10;
+      notes.push(`IV is high (${ivp.toFixed(0)} percentile): premiums are dear; an IV drop costs ₹${(leg.vega).toFixed(1)} per point per unit`);
+    } else if (ivp > 65) {
+      score -= 5;
+      notes.push(`IV on the high side (${ivp.toFixed(0)} percentile)`);
+    } else if (ivp < 30) {
+      score += 5;
+      notes.push(`IV is low (${ivp.toFixed(0)} percentile): premiums are cheap`);
+    }
+  }
+  if (d < 0.3) {
+    score -= 5;
+    notes.push(`Delta ${d.toFixed(2)}: far out of the money — needs a big move`);
+  } else if (d > 0.7) notes.push(`Delta ${d.toFixed(2)}: deep in the money — moves like the index, costs more`);
+  if (o.daysToExpiry <= 1)
+    notes.push(`Expiry ${o.daysToExpiry <= 0.5 ? 'today' : 'tomorrow'}: gamma and theta are at their highest — fast both ways`);
+  // The trend's phase caps it: a tiring or breaking trend is never a strong entry, however good the Greeks.
+  const cap = { STARTING: 100, RUNNING: 100, MATURE: 85, EXHAUSTING: 60, REVERSING: 35, SIDEWAYS: 25 }[t.phase];
+  if (score > cap) {
+    score = cap;
+    if (t.phase === 'EXHAUSTING' || t.phase === 'REVERSING') notes.push(`Capped at ${cap}: the trend is ${t.phase === 'EXHAUSTING' ? 'tiring' : 'breaking'}`);
+  }
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  return {
+    score,
+    label: score >= 70 ? 'STRONG' : score >= 50 ? 'OK' : 'WEAK',
+    side,
+    strike: leg.strike,
+    premium: leg.ltp,
+    delta: leg.delta,
+    gamma: leg.gamma,
+    theta: leg.theta,
+    vega: leg.vega,
+    iv: leg.iv,
+    ivPercentile: ivp,
+    daysToExpiry: o.daysToExpiry,
+    speedPtsHr: speed,
+    gainPerHr,
+    thetaPerHr,
+    edge,
+    notes,
+  };
+}

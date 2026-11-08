@@ -44,13 +44,13 @@ function setup(over: Partial<EngineConfig> = {}) {
   const r = new EngineRunner(source as never, { load: async () => null, save: async () => {} });
   const ready = (async () => {
     await r.init();
-    await r.updateConfig({ multiIndex: true, lastEntryTime: '', dayPlanLock: false, ...over });
+    await r.updateConfig({ multiIndex: true, watchSymbols: ['NIFTY', 'BANKNIFTY'], lastEntryTime: '', dayPlanLock: false, ...over });
   })();
   return { r, view, loads, ready, at: (ms: number) => (now = t0 + ms) };
 }
 
 test('settings: off by default; index options only', () => {
-  assert.deepEqual([DEFAULT_CONFIG.multiIndex, DEFAULT_CONFIG.watchSymbols], [false, ['NIFTY', 'BANKNIFTY']]);
+  assert.deepEqual([DEFAULT_CONFIG.multiIndex, DEFAULT_CONFIG.watchSymbols], [false, ['NIFTY', 'BANKNIFTY', 'FINNIFTY']]);
   assert.throws(() => sanitizeConfig({ watchSymbols: ['NIFTY', 'GOLDM'] }, DEFAULT_CONFIG), /index options only/);
   assert.throws(() => sanitizeConfig({ watchSymbols: [] }, DEFAULT_CONFIG), /at least one/);
   assert.equal('watchOnly' in sanitizeConfig({ watchOnly: 'x' } as never, DEFAULT_CONFIG), false); // never saved
@@ -244,7 +244,7 @@ test('phone: multi-index loads NIFTY and BANK NIFTY chains from Dhan each refres
     sleep: async () => {},
   });
   try {
-    await api.engineConfig({ expiry: GOLDEN_EXPIRY, lastEntryTime: '', multiIndex: true });
+    await api.engineConfig({ expiry: GOLDEN_EXPIRY, lastEntryTime: '', multiIndex: true, watchSymbols: ['NIFTY', 'BANKNIFTY'] });
     const n = fake.requests.length;
     const s = await api.engineRefresh();
     const chains = fake.requests.slice(n).filter((q) => q.path === '/optionchain').map((q) => q.body.UnderlyingScrip);

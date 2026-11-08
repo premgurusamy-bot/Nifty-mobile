@@ -330,7 +330,24 @@ the first quote of the day. Routes and headers follow Angel's official SmartAPI 
 - **Phase** JUST STARTED / RUNNING / MATURE / TIRING / BREAKING / SIDEWAYS with a one-line verdict, and today's
   trends as a timeline.
 
+- **Entry strength (trend + Greeks)** 0–100, STRONG / OK / WEAK, for the strike the engine would pick on the
+  trend's side: delta + gamma turn the trend's speed (pts/hour, last 30 min and whole trend) into premium
+  gained per hour, theta / 6.25 is the premium time takes per hour, and their ratio ("the move pays N× the
+  time decay") moves the score; IV percentile (dear / cheap premiums, IV-crush risk) and expiry closeness add
+  notes. The trend's phase caps it (tiring ≤ 60, breaking ≤ 35).
+
 Guidance only: the engine's entry rules don't use it.
+
+## Faster multi-index data, FIN NIFTY, auto-pause
+
+- Indexes load in **lanes** (`EngineDataSource.laneOf`): Dhan-fed and Angel-fed indexes load at the same time
+  (each broker has its own limits), one after another within a lane.
+- The **1-second ticks keep running during a full refresh**: loading and quoting happen outside the engine
+  lock; only the engine cycles (refresh or tick) run one at a time, and a tick always patches the newest data.
+- **FIN NIFTY** is watched by default on Angel One (data and orders); saved settings get it once (config rev 2).
+- **Auto-pause** (`autoShed`, on): only if 3 full refreshes in a row take over 12 s, the index least likely to
+  trade (lowest score; never one in a trade or with an order, never the one shown, at least one kept) pauses
+  for 10 minutes; 5 fast refreshes bring it back early, and tapping it brings it back at once.
 
 ## Loss trail
 

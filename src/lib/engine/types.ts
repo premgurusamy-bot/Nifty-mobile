@@ -114,6 +114,11 @@ export interface EngineConfig {
    */
   multiIndex: boolean;
   watchSymbols: string[];
+  /**
+   * Multi-index: when full refreshes stay too slow (3 in a row over ~12 s), pause the index least
+   * likely to trade for 10 minutes (never one in a trade, never the one shown). Only when needed.
+   */
+  autoShed: boolean;
   /** Multi-index size while several index trades are open: SPLIT = each gets 1/N of the normal lots; FULL = each full size. */
   multiSize: 'SPLIT' | 'FULL';
   /** LIVE market entries: seconds to wait for the fill; not filled by then → the order is cancelled. */
@@ -242,8 +247,9 @@ export const DEFAULT_CONFIG: EngineConfig = {
   autoRefresh: false,
   tradeMode: 'PAPER',
   multiIndex: false,
-  watchSymbols: ['NIFTY', 'BANKNIFTY'],
+  watchSymbols: ['NIFTY', 'BANKNIFTY', 'FINNIFTY'],
   multiSize: 'SPLIT',
+  autoShed: true,
   entryFillSeconds: 5,
   autoEntryPaper: true,
   autoEntryLive: false,
@@ -254,8 +260,8 @@ export const DEFAULT_CONFIG: EngineConfig = {
   lastEntryTimeMcx: '',
   refreshSeconds: 15,
   fastTicks: true,
-  angelSymbols: [],
-  angelOrderSymbols: [],
+  angelSymbols: ['FINNIFTY'],
+  angelOrderSymbols: ['FINNIFTY'],
   brokerFailover: true,
   alertsEnabled: true,
   sizingMode: 'RISK',
