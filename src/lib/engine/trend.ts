@@ -587,3 +587,41 @@ export function entryStrength(
     notes,
   };
 }
+
+// ---------------------------------------------------------------- trend filter for entries
+
+export interface TrendFilterCfg {
+  trendFilter: boolean;
+  trendBlockSideways: boolean;
+  trendBlockTiring: boolean;
+  /** Minimum trend strength (0–100, 0 = off). */
+  trendMinStrength: number;
+}
+
+/**
+ * Entry filter ("the trend is your friend"): a new entry only with the trend — CE / LONG in an UP
+ * trend, PE / SHORT in a DOWN trend; optionally none when sideways, none when the trend is tiring or
+ * breaking, and none below a minimum strength. Returns the reason to wait, or null.
+ */
+export function trendEntryBlock(candles: Candle[], direction: string, cfg: TrendFilterCfg): string | null {
+  if (!cfg.trendFilter) return null;
+  const t = findTrend(candles);
+  if (!t) return null; // not enough candles yet: no opinion
+  const want: 'UP' | 'DOWN' = direction === 'CE' || direction === 'LONG' ? 'UP' : 'DOWN';
+  const since = t.startedAt ? new Date(t.startedAt + 5.5 * 3600_000).toISOString().slice(11, 16) : '';
+  const age = t.ageMin >= 60 ? `${Math.floor(t.ageMin / 60)}h ${t.ageMin % 60}m` : `${t.ageMin}m`;
+  if (t.direction === 'SIDEWAYS') {
+    return cfg.trendBlockSideways
+      ? `Trend filter: no trend (sideways, ADX ${t.adx.toFixed(0)}) — waiting for one to form`
+      : null;
+  }
+  if (t.direction !== want) {
+    const ok = want === 'UP' ? 'PE' : 'CE';
+    return `Trend filter: ${direction} is against the ${t.direction} trend (since ${since}, ${age}) — only ${ok} with the trend`;
+  }
+  if (cfg.trendBlockTiring && (t.phase === 'EXHAUSTING' || t.phase === 'REVERSING'))
+    return `Trend filter: the ${t.direction} trend is ${t.phase === 'EXHAUSTING' ? 'tiring' : 'breaking'} (${t.warnings[0] ?? 'ending signs'}) — no fresh entry`;
+  if (cfg.trendMinStrength > 0 && t.strength < cfg.trendMinStrength)
+    return `Trend filter: the ${t.direction} trend is weak (strength ${t.strength} < ${cfg.trendMinStrength})`;
+  return null;
+}

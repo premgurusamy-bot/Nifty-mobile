@@ -206,8 +206,9 @@ export default function TrendScreen() {
         hour, IV percentile shows cheap or dear premiums, and expiry day makes everything faster. Gap: today&apos;s
         open against yesterday&apos;s close (full gap = beyond yesterday&apos;s high / low), how much of it has been given
         back, and the first 15 minutes&apos; range — holding beyond it is gap-and-go, falling back into the gap is a
-        fill. Guidance only, except the gap guard (Settings → Engine settings): after a big gap the engine waits
-        for the first 15 minutes before entering.
+        fill. Used for entries (Settings → Engine settings): the trend filter lets the engine enter only with the
+        trend (and, if set, not when sideways, tiring / breaking or weak), and the gap guard waits out the first 15
+        minutes after a big gap. Entry strength is guidance.
       </Text>
     </ScrollView>
   );

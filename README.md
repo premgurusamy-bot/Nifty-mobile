@@ -350,7 +350,12 @@ the first quote of the day. Routes and headers follow Angel's official SmartAPI 
 - **Gap guard** (Settings → Engine settings, on, 0.5%): after a gap of at least that size, no new entry until
   the first 15 minutes are over (index options; shown as BLOCKED with the reason and the time).
 
-Guidance only otherwise: the engine's entry rules don't use it.
+- **Trend filter** (Settings → Engine settings, on): the engine enters **only with the trend** — CE / LONG in an
+  UP trend, PE / SHORT in a DOWN trend — and, each switchable: not when sideways (on), not when the trend is
+  tiring or breaking (on), not below a minimum trend strength (off; 40–70). Blocked setups show
+  `BLOCKED - Trend filter: …` with the reason (applies to automatic entries and alerts like the other gates).
+
+Entry strength (Greeks) is guidance.
 
 ## Faster multi-index data, FIN NIFTY, auto-pause
 

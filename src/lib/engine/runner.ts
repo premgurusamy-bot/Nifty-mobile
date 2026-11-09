@@ -253,6 +253,10 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   }
   if (patch.fastTicks !== undefined) next.fastTicks = !!patch.fastTicks;
   if (patch.gapGuard !== undefined) next.gapGuard = !!patch.gapGuard;
+  if (patch.trendFilter !== undefined) next.trendFilter = !!patch.trendFilter;
+  if (patch.trendBlockSideways !== undefined) next.trendBlockSideways = !!patch.trendBlockSideways;
+  if (patch.trendBlockTiring !== undefined) next.trendBlockTiring = !!patch.trendBlockTiring;
+  num('trendMinStrength', 0, 100);
   num('gapGuardPct', 0.1, 5);
   if (patch.angelSymbols !== undefined) {
     const ok = ['NIFTY', 'BANKNIFTY', 'FINNIFTY'];

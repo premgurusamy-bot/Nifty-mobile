@@ -34,7 +34,7 @@ import { sessionOpen, type Session } from './catalog.ts';
 import { evaluateFutures, buildFuturesPlan } from './futures.ts';
 import { sizeLots, type SizingConfig } from './sizing.ts';
 import { dayPlanFor, lockFor, lossCapFor } from './profitLock.ts';
-import { gapEntryBlock } from './trend.ts';
+import { gapEntryBlock, trendEntryBlock } from './trend.ts';
 import { calibrationFor, NO_CALIBRATION, type Calibration } from './calibration.ts';
 
 const IV_HISTORY_MAX = 20000;
@@ -665,7 +665,9 @@ function stagedDecision(
     const base = canTakeNewTrade(s, cfg, now);
     // Gap guard (index options): no new entry in the first 15 minutes after a big opening gap.
     const gapWait = base.ok && cfg.gapGuard && cfg.session !== 'MCX' ? gapEntryBlock(candles, now, cfg.gapGuardPct ?? 0.5) : null;
-    const gate = gapWait ? { ok: false, reason: gapWait } : base;
+    // Trend filter: only with the trend (Trend tab), optionally not when sideways / tiring / weak.
+    const trendWait = base.ok && !gapWait ? trendEntryBlock(candles, direction, cfg) : null;
+    const gate = gapWait ? { ok: false, reason: gapWait } : trendWait ? { ok: false, reason: trendWait } : base;
     if (!gate.ok) {
       s.blockedReason = gate.reason;
       if (pastEntryCutoff(cfg, now)) s.pending = null; // an armed setup doesn't survive the entry cutoff

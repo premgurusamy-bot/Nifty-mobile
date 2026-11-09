@@ -145,6 +145,14 @@ export interface EngineConfig {
   lastEntryTimeMcx: string;
   /** Seconds between automatic refreshes (min 3: Dhan allows one option-chain request per 3 s). */
   refreshSeconds: number;
+  /**
+   * Trend filter (Trend tab → entries): only with the trend — CE / LONG in an UP trend, PE / SHORT
+   * in a DOWN trend; optionally not when sideways, not when tiring / breaking, not below a strength.
+   */
+  trendFilter: boolean;
+  trendBlockSideways: boolean;
+  trendBlockTiring: boolean;
+  trendMinStrength: number;
   /** Gap guard: after an opening gap of at least gapGuardPct %, no new entry in the first 15 minutes. */
   gapGuard: boolean;
   gapGuardPct: number;
@@ -278,6 +286,10 @@ export const DEFAULT_CONFIG: EngineConfig = {
   lastEntryTimeMcx: '',
   refreshSeconds: 15,
   fastTicks: true,
+  trendFilter: true,
+  trendBlockSideways: true,
+  trendBlockTiring: true,
+  trendMinStrength: 0,
   gapGuard: true,
   gapGuardPct: 0.5,
   angelSymbols: ['FINNIFTY'],

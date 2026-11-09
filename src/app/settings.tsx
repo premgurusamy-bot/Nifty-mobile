@@ -961,6 +961,45 @@ export default function SettingsScreen() {
               ))}
             </View>
             <View style={s.switchRow}>
+              <Text style={s.label}>Trend filter: enter only with the trend (CE in an up trend, PE in a down trend)</Text>
+              <Switch
+                value={cfg.trendFilter !== false}
+                onValueChange={(v) => void save({ trendFilter: v })}
+                accessibilityLabel="Trend filter"
+              />
+            </View>
+            {cfg.trendFilter !== false ? (
+              <>
+                <View style={s.switchRow}>
+                  <Text style={s.label}>  …and no entry when there is no trend (sideways)</Text>
+                  <Switch
+                    value={cfg.trendBlockSideways !== false}
+                    onValueChange={(v) => void save({ trendBlockSideways: v })}
+                    accessibilityLabel="No entry when sideways"
+                  />
+                </View>
+                <View style={s.switchRow}>
+                  <Text style={s.label}>  …and no fresh entry when the trend is tiring or breaking</Text>
+                  <Switch
+                    value={cfg.trendBlockTiring !== false}
+                    onValueChange={(v) => void save({ trendBlockTiring: v })}
+                    accessibilityLabel="No entry when the trend is tiring"
+                  />
+                </View>
+                <Text style={s.label}>  Minimum trend strength (Trend tab, 0–100; 0 = off)</Text>
+                <View style={s.chips}>
+                  {[0, 40, 50, 60, 70].map((n) => (
+                    <Chip
+                      key={n}
+                      label={n === 0 ? 'Off' : String(n)}
+                      active={(cfg.trendMinStrength ?? 0) === n}
+                      onPress={() => void save({ trendMinStrength: n })}
+                    />
+                  ))}
+                </View>
+              </>
+            ) : null}
+            <View style={s.switchRow}>
               <Text style={s.label}>
                 Gap guard: after an opening gap of {cfg.gapGuardPct ?? 0.5}% or more, no new entry in the first 15 minutes
               </Text>

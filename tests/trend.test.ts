@@ -120,3 +120,21 @@ test('the snapshot carries the entry strength for the strike the engine would pi
   assert.ok(e.premium > 0 && e.delta !== 0);
   assert.ok(e.score >= 0 && e.score <= 100);
 });
+
+test('trend filter: only with the trend; not when sideways / tiring; minimum strength; off = no opinion', async () => {
+  const { trendEntryBlock } = await import('../src/lib/engine/trend.ts');
+  const on = { trendFilter: true, trendBlockSideways: true, trendBlockTiring: true, trendMinStrength: 0 };
+  const up = path([...line(24300, -6, 30, 3), ...line(24120, 8, 40, 3)]);
+  assert.equal(trendEntryBlock(up, 'CE', on), null);
+  assert.match(trendEntryBlock(up, 'PE', on)!, /^Trend filter: PE is against the UP trend \(since \d\d:\d\d, .*\) — only CE with the trend$/);
+  assert.equal(trendEntryBlock(up, 'LONG', on), null); // futures too
+  assert.match(trendEntryBlock(up, 'PE', { ...on, trendFilter: false }) ?? 'none', /^none$/);
+  assert.match(trendEntryBlock(up, 'CE', { ...on, trendMinStrength: 101 })!, /is weak \(strength \d+ < 101\)/);
+  const flat = path(Array.from({ length: 80 }, (_, i) => 24200 + (i % 4 < 2 ? 6 : -6)));
+  assert.match(trendEntryBlock(flat, 'CE', on)!, /no trend \(sideways/);
+  assert.equal(trendEntryBlock(flat, 'CE', { ...on, trendBlockSideways: false }), null);
+  const broken = path([...line(24000, 7, 50, 2), 24330, 24320, 24310, 24318, 24330, 24345, 24360, 24355, 24300, 24270, 24250]);
+  const why = trendEntryBlock(broken, 'CE', on);
+  assert.ok(why == null || /tiring|breaking|against/.test(why), String(why));
+  assert.equal(trendEntryBlock(path(line(100, 1, 20)), 'PE', on), null); // too few candles: no opinion
+});
