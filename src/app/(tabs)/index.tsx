@@ -103,7 +103,7 @@ function LotStepper(p: {
 }
 
 export default function DashboardScreen() {
-  const { snap, busy, error, refresh, updateConfig, mode, phone, enter, cancelEntry, exit, setTradeMode, setActive } = useEngine();
+  const { snap, busy, error, refresh, updateConfig, mode, phone, enter, cancelEntry, exit, setTradeMode, setActive, setIndexOn } = useEngine();
   // null = follow the market premium; a string = the price you typed.
   const [priceEdit, setPriceText] = useState<string | null>(null);
   const [toggling, setToggling] = useState(false);
@@ -276,10 +276,12 @@ export default function DashboardScreen() {
           {snap.watch.map((w) => (
             <Pressable
               key={w.symbol}
-              onPress={() => (w.active ? undefined : void setActive(w.symbol).catch((e) => setTradeMsg((e as Error).message)))}
+              onPress={() =>
+                w.active || w.off ? undefined : void setActive(w.symbol).catch((e) => setTradeMsg((e as Error).message))
+              }
               accessibilityRole="button"
               accessibilityLabel={`${w.label} ${w.confidence ?? ''}`}
-              style={[s.watchRow, w.active && { borderColor: colors.accent }]}
+              style={[s.watchRow, w.active && { borderColor: colors.accent }, w.off && { opacity: 0.55 }]}
             >
               <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
                 <Text style={ui.title}>
@@ -302,17 +304,29 @@ export default function DashboardScreen() {
                   {w.error ? `Error: ${w.error}` : w.decision}
                 </Text>
               </View>
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={[s.watchScore, { color: signalColor(w.signal as never) }]}>
-                  {w.confidence == null ? '—' : w.confidence.toFixed(1)}
-                </Text>
-                <Text style={[ui.muted, { fontSize: 11 }]}>
-                  {w.direction} {w.strike || ''}
-                </Text>
+              <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                <Switch
+                  value={!w.off}
+                  disabled={(w.inTrade || !!w.pendingEntry) && !w.off}
+                  onValueChange={(v) => void setIndexOn(w.symbol, v).catch((e) => setTradeMsg((e as Error).message))}
+                  accessibilityLabel={`${w.label} on or off`}
+                />
+                {!w.off ? (
+                  <>
+                    <Text style={[s.watchScore, { color: signalColor(w.signal as never) }]}>
+                      {w.confidence == null ? '—' : w.confidence.toFixed(1)}
+                    </Text>
+                    <Text style={[ui.muted, { fontSize: 11 }]}>
+                      {w.direction} {w.strike || ''}
+                    </Text>
+                  </>
+                ) : (
+                  <Text style={[ui.muted, { fontSize: 12, fontWeight: '700' }]}>OFF</Text>
+                )}
               </View>
             </Pressable>
           ))}
-          <Text style={[ui.muted, { fontSize: 11 }]}>Tap an index to see its details and ENTER / EXIT on it. Each index can be in its own trade.</Text>
+          <Text style={[ui.muted, { fontSize: 11 }]}>Tap an index to see its details and ENTER / EXIT on it. Each index can be in its own trade. Switch off the ones with no trend or value: they stop loading, so the rest refresh faster.</Text>
         </Card>
       ) : null}
       {snap.live ? (

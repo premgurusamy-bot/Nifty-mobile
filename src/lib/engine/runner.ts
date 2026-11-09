@@ -102,6 +102,8 @@ export interface WatchItem {
   pendingEntry?: boolean;
   /** Auto-paused because the data got slow (tap to bring it back). */
   paused?: boolean;
+  /** Switched off on the Dashboard. */
+  off?: boolean;
   confidence: number | null;
   signal: string;
   direction: string;
@@ -274,6 +276,7 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   }
   if (patch.brokerFailover !== undefined) next.brokerFailover = !!patch.brokerFailover;
   if (patch.autoShed !== undefined) next.autoShed = !!patch.autoShed;
+  if (patch.offSymbols !== undefined) next.offSymbols = [...new Set((patch.offSymbols ?? []).map((x) => String(x).toUpperCase()))];
   if (patch.multiSize !== undefined) {
     if (patch.multiSize !== 'SPLIT' && patch.multiSize !== 'FULL') throw new Error('multiSize must be SPLIT or FULL');
     next.multiSize = patch.multiSize;
@@ -551,6 +554,7 @@ export class EngineRunner {
   /** Multi-index: look at / ENTER / EXIT on this watched index (each keeps its own trade). */
   async setActive(symbol: string) {
     if (!this.multiActive() || !this.watchList().includes(symbol)) throw new Error(`${symbol} is not being watched`);
+    if (this.isOff(symbol)) throw new Error(`${symbol} is switched off — turn it on first.`);
     delete this.paused[symbol]; // you want to see it: it loads again
     this.useWatched(symbol);
     this.pinnedActive = symbol;
@@ -584,7 +588,7 @@ export class EngineRunner {
     this.unpauseDue(t0);
     const lanes = new Map<string, string[]>();
     for (const sym of symbols) {
-      if (this.paused[sym]) continue;
+      if (this.paused[sym] || this.isOff(sym)) continue;
       const lane = this.source.laneOf?.(this.cfgFor(sym)) ?? 'main';
       lanes.set(lane, [...(lanes.get(lane) ?? []), sym]);
     }
@@ -602,6 +606,38 @@ export class EngineRunner {
     );
     this.lastLoadMs = Date.now() - t0;
     return { data, loadErr };
+  }
+
+  /** Switched off on the Dashboard (a trade or order still open keeps it on). */
+  isOff(sym: string): boolean {
+    return (this.config.offSymbols ?? []).includes(sym) && !isBusy(this.watchStates()[sym]);
+  }
+
+  /**
+   * Dashboard on / off for one watched index. Off: not loaded or traded (its requests stop, the
+   * others refresh faster). Refused while it has a trade or order, or when it is the last one on.
+   */
+  async setIndexOn(sym: string, on: boolean) {
+    if (!this.watchList().includes(sym)) throw new Error(`${sym} is not being watched`);
+    const off = new Set(this.config.offSymbols ?? []);
+    if (on) {
+      off.delete(sym);
+      delete this.paused[sym];
+    } else {
+      if (isBusy(this.watchStates()[sym])) throw new Error(`${sym} has an open trade or order — it stays on until that is closed.`);
+      const stillOn = this.watchList().filter((s) => s !== sym && !off.has(s));
+      if (!stillOn.length) throw new Error('At least one index stays on.');
+      off.add(sym);
+      if (this.config.symbol === sym) {
+        // Show an index that is still on.
+        const conf = (s: string) => this.multiDash[s]?.decision.confidence ?? -1;
+        this.useWatched(stillOn.sort((a, b) => conf(b) - conf(a))[0]);
+      }
+      delete this.multiDash[sym];
+      delete this.multiData[sym];
+    }
+    this.config = { ...this.config, offSymbols: [...off] };
+    await this.persist();
   }
 
   /** Paused indexes whose pause has run out come back. */
@@ -629,7 +665,7 @@ export class EngineRunner {
     if (this.slowLoads < 3) return;
     this.slowLoads = 0;
     const w = this.watchStates();
-    const live = symbols.filter((s) => !this.paused[s]);
+    const live = symbols.filter((s) => !this.paused[s] && !this.isOff(s));
     if (live.length <= 1) return;
     const conf = (s: string) => this.multiDash[s]?.decision.confidence ?? -1;
     const pick = live
@@ -808,10 +844,13 @@ export class EngineRunner {
         signal: d?.decision.signal ?? '',
         direction: d?.decision.direction ?? '',
         strike: d?.decision.selectedStrike ?? 0,
-        decision: this.paused[sym]?.reason ?? d?.decision.decisionText ?? 'Waiting for the first refresh',
+        decision: this.isOff(sym)
+          ? 'Off — switch it on to watch and trade it'
+          : (this.paused[sym]?.reason ?? d?.decision.decisionText ?? 'Waiting for the first refresh'),
         spot: d?.market.spot ?? null,
         ...(this.multiErrors[sym] ? { error: this.multiErrors[sym] } : {}),
         ...(this.paused[sym] ? { paused: true } : {}),
+        ...(this.isOff(sym) ? { off: true } : {}),
       };
     });
   }

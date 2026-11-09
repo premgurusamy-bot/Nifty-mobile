@@ -116,3 +116,42 @@ test('saved settings: FIN NIFTY joins the watch list on Angel One once (rev 2); 
   const later = { ...m, watchSymbols: ['NIFTY', 'BANKNIFTY'] };
   assert.deepEqual(migrateConfig(later, later).watchSymbols, ['NIFTY', 'BANKNIFTY']);
 });
+
+test('Dashboard on/off per index: off = not loaded (the rest refresh faster); trades, the last one and the shown one handled', async () => {
+  const { r, log, ready } = setup(() => 1);
+  await ready;
+  await r.refresh();
+  await r.setIndexOn('FINNIFTY', false);
+  log.length = 0;
+  await r.refresh();
+  assert.deepEqual(log.filter((l) => l.startsWith('start')).sort(), ['start BANKNIFTY', 'start NIFTY']); // FIN NIFTY not loaded
+  const fin = r.watchItems().find((w) => w.symbol === 'FINNIFTY')!;
+  assert.equal(fin.off, true);
+  assert.match(fin.decision, /^Off — switch it on/);
+  await assert.rejects(r.setActive('FINNIFTY'), /switched off — turn it on first/);
+  // Switching off the index shown moves the view to one still on.
+  const shown = r.config.symbol;
+  await r.setIndexOn(shown, false);
+  assert.notEqual(r.config.symbol, shown);
+  // The last one can't go off.
+  await assert.rejects(r.setIndexOn(r.config.symbol, false), /At least one index stays on/);
+  // Back on: loaded again.
+  await r.setIndexOn('FINNIFTY', true);
+  await r.setIndexOn(shown, true);
+  log.length = 0;
+  await r.refresh();
+  assert.equal(log.filter((l) => l.startsWith('start')).length, 3);
+  assert.deepEqual(r.config.offSymbols, []);
+});
+
+test('an index with an open trade stays on', async () => {
+  const { r, ready } = setup(() => 1);
+  await ready;
+  await r.refresh();
+  const other = ['NIFTY', 'BANKNIFTY', 'FINNIFTY'].find((s) => s !== r.config.symbol)!; // not the one shown
+  r.state = { ...r.state, watch: { ...r.state.watch!, [other]: { ...r.state.watch![other], pendingEntry: { plan: {} as never, limit: 1, placedAt: 0 } } } };
+  await assert.rejects(r.setIndexOn(other, false), /has an open trade or order — it stays on/);
+  // and the one shown, when it holds the trade
+  r.state = { ...r.state, pendingEntry: { plan: {} as never, limit: 1, placedAt: 0 } };
+  await assert.rejects(r.setIndexOn(r.config.symbol, false), /has an open trade or order/);
+});

@@ -122,6 +122,8 @@ export interface EngineConfig {
    * likely to trade for 10 minutes (never one in a trade, never the one shown). Only when needed.
    */
   autoShed: boolean;
+  /** Multi-index: watched indexes switched OFF on the Dashboard (not loaded, not traded, kept in the list). */
+  offSymbols: string[];
   /** Multi-index size while several index trades are open: SPLIT = each gets 1/N of the normal lots; FULL = each full size. */
   multiSize: 'SPLIT' | 'FULL';
   /** LIVE market entries: seconds to wait for the fill; not filled by then → the order is cancelled. */
@@ -275,6 +277,7 @@ export const DEFAULT_CONFIG: EngineConfig = {
   multiIndex: false,
   watchSymbols: ['NIFTY', 'BANKNIFTY', 'FINNIFTY'],
   multiSize: 'SPLIT',
+  offSymbols: [],
   autoShed: true,
   entryFillSeconds: 5,
   autoEntryPaper: true,

@@ -86,6 +86,8 @@ export interface PhoneTrading {
   dhanIps: () => Promise<string[]>;
   /** Multi-index: make a watched index the one shown / entered on (no trade or limit order open). */
   engineSetActive: (symbol: string) => Promise<EngineSnapshot>;
+  /** Multi-index: switch a watched index on / off (Dashboard). */
+  engineSetIndexOn: (symbol: string, on: boolean) => Promise<EngineSnapshot>;
   /** Screen the indexes (~10 s: one option chain per 3 s) or the MCX minis on live data. */
   screener: (group?: ScreenGroup) => Promise<ScreenReport>;
   /** Use (or drop) an Angel One session for the Angel-fed indexes. */
@@ -301,6 +303,10 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
     dhanIps: async () => extractIps(await dhan.getIP()),
     engineSetActive: async (symbol: string) => {
       await engine.exclusive(() => engine.setActive(symbol));
+      return engine.snapshot();
+    },
+    engineSetIndexOn: async (symbol: string, on: boolean) => {
+      await engine.exclusive(() => engine.setIndexOn(symbol, on));
       return engine.snapshot();
     },
     screener: (group?: ScreenGroup) =>
