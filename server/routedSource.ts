@@ -19,6 +19,12 @@ export class RoutedEngineSource implements EngineDataSource {
   readonly angelSource: AngelEngineSource;
   /** Latest Angel problem (shown in Settings), '' when fine. */
   angelError = '';
+  /**
+   * After an Angel One failure an index goes straight to Dhan for a while (no waiting on Angel to fail
+   * again first, which doubled the load time), then Angel is tried again. Real time, ms.
+   */
+  angelCooldownMs = 60_000;
+  private angelPausedUntil = new Map<string, { until: number; note: string }>();
   /** Called when Angel says the session is gone (the phone forgets it). */
   onAngelSessionLost: (() => void) | null = null;
 
@@ -31,7 +37,12 @@ export class RoutedEngineSource implements EngineDataSource {
   /** Dhan and Angel One have their own rate limits: their indexes load at the same time. */
   laneOf(cfg: EngineConfig): string {
     const wantsAngel = cfg.instrumentKind === 'INDEX_OPTIONS' && (cfg.angelSymbols ?? []).includes(cfg.symbol);
-    return wantsAngel && this.angel.connected ? 'ANGEL' : 'DHAN';
+    return wantsAngel && this.angel.connected && !this.angelPaused(cfg.symbol) ? 'ANGEL' : 'DHAN';
+  }
+
+  private angelPaused(symbol: string) {
+    const p = this.angelPausedUntil.get(symbol);
+    return p && Date.now() < p.until ? p : null;
   }
 
   async load(cfg: EngineConfig, now: number) {
@@ -50,7 +61,9 @@ export class RoutedEngineSource implements EngineDataSource {
       }
     }
     let note = 'Angel One not logged in — using Dhan';
-    if (this.angel.connected) {
+    const paused = this.angelPaused(cfg.symbol);
+    if (paused) note = paused.note;
+    else if (this.angel.connected) {
       try {
         const d = await this.angelSource.load(cfg, now);
         this.angelError = '';
@@ -66,6 +79,9 @@ export class RoutedEngineSource implements EngineDataSource {
           // Kept logged in, so Settings → Test can show which call Angel refuses.
           note = 'Angel One refused the API key — Settings → Angel One → Test shows which call; using Dhan';
         else note = `Angel One error (${err.message}) — using Dhan`;
+        // Don't wait on Angel again next refresh: Dhan for a minute, then try Angel again.
+        const back = new Date(Date.now() + this.angelCooldownMs + 5.5 * 3600_000).toISOString().slice(11, 19);
+        this.angelPausedUntil.set(cfg.symbol, { until: Date.now() + this.angelCooldownMs, note: `${note} (Angel retried at ${back})` });
       }
     }
     const d = await this.dhan.load(cfg, now);

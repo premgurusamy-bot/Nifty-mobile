@@ -67,6 +67,7 @@ test('routing: Angel for the indexes set to it; not logged in or session ended â
   const dhan = { load: async (c: typeof bank) => (dhanLoads.push(c.symbol), { candles: [{ t: 0, o: 1, h: 1, l: 1, c: 1, v: 0 }], chain: { spot: 1, expiry: 'x', strikes: [] } }) };
   const angel = new AngelClient({ baseUrl: fa.url });
   const r = new RoutedEngineSource(dhan, angel);
+  r.angelCooldownMs = 0; // this test checks each failure on its own
   let lost = 0;
   r.onAngelSessionLost = () => lost++;
   const cfg = { ...bank, angelSymbols: ['BANKNIFTY'] };
@@ -196,4 +197,29 @@ test('candles: fetched once per new 5-min candle / minute, the forming candle fo
     fa.state.rateLimitCandles = false;
     fa.state.spot -= 40;
   }
+});
+
+test('after an Angel One failure the index goes straight to Dhan for a minute (no waiting on Angel each refresh)', async () => {
+  const dhanLoads: string[] = [];
+  const dhan = { load: async (c: typeof bank) => (dhanLoads.push(c.symbol), { candles: [{ t: 0, o: 1, h: 1, l: 1, c: 1, v: 0 }], chain: { spot: 1, expiry: 'x', strikes: [] } }) };
+  const angel = new AngelClient({ baseUrl: fa.url, session: await login() });
+  const r = new RoutedEngineSource(dhan, angel);
+  const cfg = { ...bank, angelSymbols: ['BANKNIFTY'] };
+  fa.state.rateLimitCandles = true; // Angel: 'exceeding access rate'
+  const n = fa.requests.length;
+  try {
+    const d1 = await r.load(cfg, now);
+    assert.match(d1.chain.feedNote!, /Angel One error \(.*exceeding access rate/);
+    const angelCalls = fa.requests.length - n;
+    const d2 = await r.load(cfg, now);
+    assert.equal(fa.requests.length - n, angelCalls); // no new Angel request
+    assert.match(d2.chain.feedNote!, /Angel retried at \d\d:\d\d:\d\d/);
+    assert.equal(r.laneOf(cfg), 'DHAN');
+  } finally {
+    fa.state.rateLimitCandles = false;
+  }
+  r.angelCooldownMs = 0;
+  (r as any).angelPausedUntil.clear();
+  assert.equal(r.laneOf(cfg), 'ANGEL');
+  assert.equal((await r.load(cfg, now)).chain.feed, 'ANGEL'); // tried again after the pause
 });
