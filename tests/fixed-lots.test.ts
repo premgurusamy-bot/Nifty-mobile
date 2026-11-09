@@ -52,9 +52,15 @@ test('max lots still caps; capital that cannot pay for the lots blocks the trade
   assert.equal(buildTradePlan(chain, 'PE', 24150, atr, fixed({ fixedLots: 30, capitalPaper: 1e7 }))!.qty, 25 * 65); // cap 25
   assert.match(buildTradePlan(chain, 'PE', 24150, atr, fixed({ fixedLots: 30, capitalPaper: 1e7 }))!.sizing!, /\(max lots 25\)/);
   // 10 lots × 65 × 78.35 = ₹50,927 > ₹40,000 paper capital
-  const poor = buildTradePlan(chain, 'PE', 24150, atr, fixed({ fixedLots: 10, capitalPaper: 40000 }))!;
+  // Premium for 10 lots (₹50,928) > ₹40,000 capital: lots adjusted down to what it can pay for (7).
+  const fit = buildTradePlan(chain, 'PE', 24150, atr, fixed({ fixedLots: 10, capitalPaper: 40000 }))!;
+  assert.equal(fit.qty, 7 * 65);
+  assert.equal(fit.blocked, undefined);
+  assert.match(fit.sizing!, /^Fixed 10 lot\(s\) → 7 by capital \(₹40,000 paper capital ÷ ₹5,093 premium per lot\)/);
+  // Not even one lot: refused, with the reason.
+  const poor = buildTradePlan(chain, 'PE', 24150, atr, fixed({ fixedLots: 10, capitalPaper: 4000 }))!;
   assert.equal(poor.qty, 0);
-  assert.match(poor.blocked!, /^10 lot\(s\) need ₹50,928 .* but paper capital is ₹40,000$/);
+  assert.match(poor.blocked!, /^1 lot needs ₹5,093 \(premium per lot\) but paper capital is ₹4,000$/);
   // LIVE with the Dhan balance not fetched yet: not blocked here (Dhan refuses if funds are short)
   assert.equal(buildTradePlan(chain, 'PE', 24150, atr, { ...fixed({ tradeMode: 'LIVE' }), availableFunds: null })!.qty, 130);
 });

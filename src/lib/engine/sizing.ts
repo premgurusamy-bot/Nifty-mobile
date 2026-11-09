@@ -88,15 +88,22 @@ function sizeLotsFull(
     // Can the capital pay for it? (LIVE with the balance not fetched yet: Dhan itself will refuse if not.)
     const { base: capital, source } = sizingCapital(cfg); // the whole capital: "% per trade" is for Capital mode
     const known = !(cfg.tradeMode === 'LIVE' && !(liveCapitalFor(cfg) > 0) && cfg.availableFunds == null);
-    const sizing = `Fixed ${lots} lot(s)${capped} · max loss ${inr(riskPerLot * lots)}`;
     if (known && costPerLot > 0 && costPerLot * lots > capital) {
+      // The premium costs more than the capital: take as many lots as it can pay for.
+      const fit = Math.floor(capital / costPerLot);
+      if (fit < 1) {
+        return {
+          lots: 0,
+          sizing: `Fixed ${lots} lot(s)${capped}`,
+          blocked: `1 lot needs ${inr(costPerLot)} (${costLabel}) but ${source} is ${inr(capital)}`,
+        };
+      }
       return {
-        lots: 0,
-        sizing,
-        blocked: `${lots} lot(s) need ${inr(costPerLot * lots)} (${costLabel} ${inr(costPerLot)}) but ${source} is ${inr(capital)}`,
+        lots: fit,
+        sizing: `Fixed ${lots} lot(s) → ${fit} by capital (${inr(capital)} ${source} ÷ ${inr(costPerLot)} ${costLabel}) · max loss ${inr(riskPerLot * fit)}`,
       };
     }
-    return { lots, sizing };
+    return { lots, sizing: `Fixed ${lots} lot(s)${capped} · max loss ${inr(riskPerLot * lots)}` };
   }
   if (cfg.sizingMode !== 'CAPITAL') {
     const raw = Math.max(1, Math.floor(cfg.maxRisk / riskPerLot));

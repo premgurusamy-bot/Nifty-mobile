@@ -52,6 +52,8 @@ function LotStepper(p: {
   fixed: boolean;
   max: number;
   unitsPerLot: number;
+  /** Lots the next entry will really take (fewer when the capital can't pay for all of them). */
+  planLots: number;
   cost: number | null;
   maxLoss: number | null;
   onChange: (lots: number) => void;
@@ -85,8 +87,13 @@ function LotStepper(p: {
           </Pressable>
         </View>
       </View>
+      {p.fixed && p.planLots > 0 && p.planLots < p.lots ? (
+        <Text style={{ color: colors.warn, fontSize: 12, fontWeight: '600' }}>
+          Capital pays for {p.planLots} of {p.lots} lots at this premium — the entry takes {p.planLots}
+        </Text>
+      ) : null}
       <Text style={[ui.muted, { fontSize: 12 }]}>
-        {p.lots * p.unitsPerLot} qty
+        {(p.fixed && p.planLots > 0 ? Math.min(p.planLots, p.lots) : p.lots) * p.unitsPerLot} qty
         {p.cost ? ` · needs ~${formatINR(p.cost, 0)}` : ''}
         {p.maxLoss ? ` · max loss ${formatINR(p.maxLoss, 0)}` : ''}
         {p.fixed ? ` · max ${p.max} lots` : ' · tap − / + to use fixed lots'}
@@ -452,6 +459,7 @@ export default function DashboardScreen() {
                   fixed={cfg.sizingMode === 'FIXED'}
                   max={cfg.maxLots > 0 ? cfg.maxLots : 100}
                   unitsPerLot={isFut ? 1 : cfg.lotSize}
+                  planLots={cand.qty > 0 ? Math.round(cand.qty / Math.max(1, isFut ? 1 : cfg.lotSize)) : 0}
                   cost={cand.qty > 0 ? cand.entry * cand.qty * (isFut ? 0 : 1) : null}
                   maxLoss={cand.qty > 0 ? cand.maxLoss : null}
                   onChange={(n) =>
