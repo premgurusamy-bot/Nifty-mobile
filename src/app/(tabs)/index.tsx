@@ -76,6 +76,13 @@ function AdvisorCard({ advice }: { advice: Advice }) {
               <Text style={{ color: VERDICT_COLOR[i.verdict] }}>{i.verdict}</Text> · {i.label}
               <Text style={{ color: colors.muted, fontWeight: '400' }}> — {i.reason}</Text>
             </Text>
+            {i.verdict !== 'OFF' && (i.iv !== 'UNKNOWN' || i.vol !== 'UNKNOWN') ? (
+              <Text style={{ fontSize: 12 }}>
+                <Text style={{ color: i.iv === 'LOW' ? colors.up : i.iv === 'HIGH' ? colors.down : colors.muted }}>{i.ivText}</Text>
+                <Text style={{ color: colors.muted }}> · </Text>
+                <Text style={{ color: i.vol === 'HEAVY' ? colors.up : i.vol === 'THIN' ? colors.down : colors.muted }}>{i.volText}</Text>
+              </Text>
+            ) : null}
             {i.next ? <Text style={[ui.muted, { fontSize: 12 }]}>Next: {i.next}</Text> : null}
           </View>
         ))}

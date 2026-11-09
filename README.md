@@ -364,7 +364,10 @@ watched indexes (`src/lib/advisor.ts`): **IN TRADE** first, then the **BEST** in
 trend strength + entry strength among those worth watching), **WATCH**, and **SKIP** with the reason — no data,
 paused, sideways, a tiring / breaking trend, a setup against the trend, a blocked gate, or a low score — and
 **what happens next** for each (e.g. "Setup armed: CE 24300 enters if price breaks 24,312.50 after the hold").
-It speaks when the advice changes and has held for 15 s (so a flickering score doesn't talk), and every 2 / 5 /
+Each index also shows its **IV level** (the selected option's IV and the IV percentile: low < 30 = cheap premiums,
+high > 70 = dear, IV-drop risk) and **volume** (the selected option's traded volume against the median of the
+strikes around the money: heavy ≥ 1.5×, thin < 0.5×); low IV / heavy volume rank an index up, high IV / thin
+volume down, and very thin volume (< 0.25×) is a skip (poor fills). It speaks when the advice changes and has held for 15 s (so a flickering score doesn't talk), and every 2 / 5 /
 10 minutes in market hours (Settings → Alerts → Voice; 🔊 Speak on the card any time); alerts can be read out too.
 
 ## Faster multi-index data, FIN NIFTY, auto-pause

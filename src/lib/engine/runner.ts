@@ -991,6 +991,28 @@ export class EngineRunner {
   /** Best / watch / skip for every watched index (or the one selected), from the scores and trends. */
   advice(): Advice {
     const trends = this.trends();
+    // IV and volume of the option each index would trade (its selected strike), for the advisor.
+    const market = (sym: string, d: Dashboard | null | undefined) => {
+      const chain = this.chainFor(sym);
+      if (!d) return {};
+      const ivp = d.decision.ivPercentile;
+      const out: Pick<IndexInput, 'iv' | 'ivPercentile' | 'volume'> = {
+        iv: d.greeks.iv || null,
+        ivPercentile: ivp != null && ivp >= 0 ? ivp : null,
+      };
+      const side = d.decision.direction === 'CE' ? 'ce' : d.decision.direction === 'PE' ? 'pe' : null;
+      if (chain?.strikes.length && side) {
+        const row = findStrike(chain, d.decision.selectedStrike);
+        const atm = findStrike(chain, chain.spot);
+        const i = atm ? chain.strikes.indexOf(atm) : -1;
+        const near = i >= 0 ? chain.strikes.slice(Math.max(0, i - 5), i + 6) : [];
+        const vols = near.flatMap((r) => [r.ce?.volume ?? 0, r.pe?.volume ?? 0]).filter((v) => v > 0).sort((a, b) => a - b);
+        const median = vols.length ? vols[Math.floor(vols.length / 2)] : 0;
+        const leg = row?.[side]?.volume ?? 0;
+        if (median > 0) out.volume = { leg, median };
+      }
+      return out;
+    };
     const inputs: IndexInput[] = this.multiActive()
       ? this.watchItems().map((w) => ({
           symbol: w.symbol,
@@ -1006,6 +1028,7 @@ export class EngineRunner {
           paused: w.paused,
           error: w.error,
           trend: trends[w.symbol] ?? null,
+          ...market(w.symbol, this.multiDash[w.symbol]),
         }))
       : this.dashboard
         ? [
@@ -1020,6 +1043,7 @@ export class EngineRunner {
               inTrade: !!this.state.position,
               tradePnl: this.livePnl().tradePnl,
               trend: trends[this.config.symbol] ?? null,
+              ...market(this.config.symbol, this.dashboard),
             },
           ]
         : [];

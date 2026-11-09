@@ -89,3 +89,33 @@ test('the engine ships the advice with its snapshot', async () => {
   assert.equal(a.items[0].symbol, 'NIFTY');
   assert.ok(a.speech.length > 10);
 });
+
+test('IV level and volume: shown, spoken, and they move the ranking (very thin volume = skip)', async () => {
+  const { ivLevel, volumeLevel } = await import('../src/lib/advisor.ts');
+  assert.deepEqual([ivLevel(20), ivLevel(50), ivLevel(85), ivLevel(-1), ivLevel(null)], ['LOW', 'NORMAL', 'HIGH', 'UNKNOWN', 'UNKNOWN']);
+  assert.deepEqual(volumeLevel({ leg: 300, median: 100 }), { level: 'HEAVY', ratio: 3 });
+  assert.equal(volumeLevel({ leg: 80, median: 100 }).level, 'NORMAL');
+  assert.equal(volumeLevel({ leg: 20, median: 100 }).level, 'THIN');
+  assert.equal(volumeLevel({ leg: 5, median: 0 }).level, 'UNKNOWN');
+
+  // Same score and trend: low IV + heavy volume beats high IV + thin volume.
+  const a = advise(
+    [
+      idx({ symbol: 'NIFTY', label: 'NIFTY 50', iv: 12.5, ivPercentile: 85, volume: { leg: 40, median: 100 } }),
+      idx({ symbol: 'BANKNIFTY', label: 'BANK NIFTY', iv: 13.1, ivPercentile: 20, volume: { leg: 250, median: 100 } }),
+    ],
+    cfg,
+  );
+  assert.equal(a.best, 'BANKNIFTY');
+  const bank = a.items.find((i) => i.symbol === 'BANKNIFTY')!;
+  assert.equal(bank.ivText, 'IV 13.1 · low (20 percentile)');
+  assert.equal(bank.volText, 'volume heavy (2.5× nearby strikes)');
+  assert.match(bank.reason, /IV low, volume heavy$/);
+  assert.match(a.items.find((i) => i.symbol === 'NIFTY')!.reason, /IV high, premiums dear, volume thin$/);
+  assert.match(a.speech, /IV low, volume heavy/);
+
+  // Hardly any volume on the option: skip.
+  const thin = advise([idx({ volume: { leg: 10, median: 100 } })], cfg);
+  assert.equal(thin.items[0].verdict, 'SKIP');
+  assert.match(thin.items[0].reason, /^volume very thin on CE 24300$/);
+});

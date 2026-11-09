@@ -21,6 +21,27 @@ export interface IndexInput {
   paused?: boolean;
   error?: string;
   trend?: (TrendReport & { entry?: EntryStrength | null }) | null;
+  /** The selected option's IV (%) and the index's IV percentile (−1 / null = not enough history yet). */
+  iv?: number | null;
+  ivPercentile?: number | null;
+  /** The selected option's traded volume, and the median of the strikes around the money (same units). */
+  volume?: { leg: number; median: number } | null;
+}
+
+export type IvLevel = 'LOW' | 'NORMAL' | 'HIGH' | 'UNKNOWN';
+export type VolumeLevel = 'HEAVY' | 'NORMAL' | 'THIN' | 'UNKNOWN';
+
+/** IV level from the percentile: under 30 low (cheap premiums), over 70 high (dear, IV-drop risk). */
+export function ivLevel(ivPercentile: number | null | undefined): IvLevel {
+  if (ivPercentile == null || ivPercentile < 0) return 'UNKNOWN';
+  return ivPercentile < 30 ? 'LOW' : ivPercentile > 70 ? 'HIGH' : 'NORMAL';
+}
+
+/** Volume of the option against the strikes around it: thin options fill badly. */
+export function volumeLevel(v: { leg: number; median: number } | null | undefined): { level: VolumeLevel; ratio: number | null } {
+  if (!v || !(v.median > 0)) return { level: 'UNKNOWN', ratio: null };
+  const ratio = v.leg / v.median;
+  return { level: ratio >= 1.5 ? 'HEAVY' : ratio >= 0.5 ? 'NORMAL' : 'THIN', ratio };
 }
 
 export interface IndexAdvice {
@@ -32,6 +53,11 @@ export interface IndexAdvice {
   /** What happens next / what to look for. */
   next: string;
   rank: number;
+  /** "IV 13.2 · low (22 pct)" and "volume heavy (1.8× nearby strikes)" for the screen. */
+  ivText: string;
+  volText: string;
+  iv: IvLevel;
+  vol: VolumeLevel;
 }
 
 export interface Advice {
@@ -51,7 +77,21 @@ const dur = (m: number) => (m >= 60 ? `${Math.floor(m / 60)} hour ${m % 60} minu
 const round = (n: number) => Math.round(n).toLocaleString('en-IN');
 
 export function advise(inputs: IndexInput[], cfg: { confHigh: number; confWatch: number }): Advice {
-  const items: IndexAdvice[] = inputs.map((x) => {
+  const items: IndexAdvice[] = inputs.map((x): IndexAdvice => {
+    const ivl = ivLevel(x.ivPercentile);
+    const vl = volumeLevel(x.volume);
+    const ivText =
+      x.iv != null && x.iv > 0
+        ? `IV ${x.iv.toFixed(1)} · ${ivl === 'UNKNOWN' ? 'level not known yet' : `${ivl.toLowerCase()} (${x.ivPercentile!.toFixed(0)} percentile)`}`
+        : 'IV —';
+    const volText =
+      vl.level === 'UNKNOWN' ? 'volume —' : `volume ${vl.level.toLowerCase()} (${vl.ratio!.toFixed(1)}× nearby strikes)`;
+    const extra = { ivText, volText, iv: ivl, vol: vl.level };
+    const r = adviseOne(x);
+    return { ...r, ...extra };
+  });
+
+  function adviseOne(x: IndexInput): Omit<IndexAdvice, 'ivText' | 'volText' | 'iv' | 'vol'> {
     const t = x.trend ?? null;
     const conf = x.confidence ?? 0;
     const side = x.direction === 'CE' || x.direction === 'LONG' ? 'up' : 'down';
@@ -94,9 +134,20 @@ export function advise(inputs: IndexInput[], cfg: { confHigh: number; confWatch:
     }
     if (conf < cfg.confWatch)
       return { ...base, verdict: 'SKIP', reason: `score only ${conf.toFixed(0)}`, next: `Needs ${cfg.confHigh} to trade.`, rank: conf * 0.5 };
+    // Volume: an option hardly anyone trades fills badly — skip it.
+    const vl = volumeLevel(x.volume);
+    if (vl.level === 'THIN' && vl.ratio != null && vl.ratio < 0.25)
+      return { ...base, verdict: 'SKIP', reason: `volume very thin on ${x.direction} ${x.strike}`, next: 'Poor fills: wait for volume.', rank: conf * 0.3 };
     // Worth watching: what comes next.
     const entry = t?.entry?.score ?? null;
-    const rank = conf + (t ? t.strength * 0.3 : 0) + (entry != null ? entry * 0.2 : 0);
+    const ivl = ivLevel(x.ivPercentile);
+    // Cheap IV and heavy volume help an option buyer; dear IV and thin volume hurt.
+    const rank =
+      conf +
+      (t ? t.strength * 0.3 : 0) +
+      (entry != null ? entry * 0.2 : 0) +
+      (ivl === 'LOW' ? 5 : ivl === 'HIGH' ? -10 : 0) +
+      (vl.level === 'HEAVY' ? 5 : vl.level === 'THIN' ? -10 : 0);
     let next: string;
     const trig = /break of ([\d,.]+)/.exec(x.decision)?.[1];
     if (/^SETUP (ARMED|HOLDING)/.test(x.decision))
@@ -107,8 +158,10 @@ export function advise(inputs: IndexInput[], cfg: { confHigh: number; confWatch:
     else if (conf < cfg.confHigh) next = `Score ${conf.toFixed(0)}, building towards ${cfg.confHigh}.`;
     else next = 'At the trade level: waiting for the setup.';
     const strength = entry != null ? `, entry strength ${entry.toFixed(0)}` : '';
-    return { ...base, verdict: 'WATCH', reason: `score ${conf.toFixed(0)}, ${trendWord}${strength}`, next, rank };
-  });
+    const ivWord = ivl === 'LOW' ? ', IV low' : ivl === 'HIGH' ? ', IV high, premiums dear' : '';
+    const volWord = vl.level === 'HEAVY' ? ', volume heavy' : vl.level === 'THIN' ? ', volume thin' : '';
+    return { ...base, verdict: 'WATCH', reason: `score ${conf.toFixed(0)}, ${trendWord}${strength}${ivWord}${volWord}`, next, rank };
+  }
 
   // The best: a trade first, else the highest-ranked index worth watching.
   const candidates = items.filter((i) => i.verdict === 'WATCH').sort((a, b) => b.rank - a.rank);
