@@ -155,3 +155,39 @@ test('an index with an open trade stays on', async () => {
   r.state = { ...r.state, pendingEntry: { plan: {} as never, limit: 1, placedAt: 0 } };
   await assert.rejects(r.setIndexOn(r.config.symbol, false), /has an open trade or order/);
 });
+
+test('fast mode: each chain reloads at most every chainEverySeconds; a failed reload keeps the last data', async () => {
+  let fail = false;
+  const { r, log, ready } = setup(() => 1);
+  await ready;
+  await r.updateConfig({ chainEverySeconds: 15 });
+  (r as any).source.load = (async (orig) => async (cfg: EngineConfig, now: number) => {
+    if (fail && cfg.symbol === 'BANKNIFTY') throw new Error('rate limited');
+    return orig(cfg, now);
+  })((r as any).source.load.bind((r as any).source));
+  (r as any).source.load = await (r as any).source.load;
+  await r.refresh();
+  const loaded = log.filter((l) => l.startsWith('start')).length;
+  assert.equal(loaded, 3);
+  await r.refresh(); // within 15 s: nothing reloaded, the data is kept
+  assert.equal(log.filter((l) => l.startsWith('start')).length, loaded);
+  assert.deepEqual(Object.keys(r.multiDash).sort(), ['BANKNIFTY', 'FINNIFTY', 'NIFTY']);
+  // Due again (as if 15 s passed) and BANK NIFTY's reload fails: its last data is kept, error shown.
+  for (const k of Object.keys((r as any).loadedAt)) (r as any).loadedAt[k] -= 16_000;
+  fail = true;
+  await r.refresh();
+  assert.ok(r.multiDash.BANKNIFTY, 'still scored on its last data');
+  assert.match(r.multiErrors.BANKNIFTY, /rate limited/);
+});
+
+test('saved settings rev 5: closed-candle scoring, fast mode and earlier profit protection (only over the old defaults)', () => {
+  const old = { ...DEFAULT_CONFIG, configRev: 4, lt1At: 5000, lt1Loss: 15000, lt2At: 8500, lt2Loss: 7000, dl1At: 9000, dl1Lock: 5000, dl2At: 12000, dl2Lock: 7000, dl3At: 14000, dl3Lock: 10000 };
+  const m = migrateConfig(old, old);
+  assert.deepEqual([m.closedCandleScoring, m.chainEverySeconds], [true, 15]);
+  assert.deepEqual([m.lt1At, m.lt1Loss, m.lt2At, m.lt2Loss], [4000, 0, 5000, 0]);
+  assert.deepEqual([m.dl1At, m.dl1Lock, m.dl2At, m.dl2Lock, m.dl3At, m.dl3Lock], [6000, 3000, 9000, 5000, 12000, 8000]);
+  const mine = { ...old, lt1At: 6000, dl1At: 10000 };
+  const k = migrateConfig(mine, mine);
+  assert.equal(k.lt1At, 6000); // your own numbers are kept
+  assert.equal(k.dl1At, 10000);
+});

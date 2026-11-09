@@ -961,6 +961,29 @@ export default function SettingsScreen() {
               ))}
             </View>
             <View style={s.switchRow}>
+              <Text style={s.label}>Closed-candle scoring: the score uses finished 5-min candles (no jumping every second)</Text>
+              <Switch
+                value={!!cfg.closedCandleScoring}
+                onValueChange={(v) => void save({ closedCandleScoring: v })}
+                accessibilityLabel="Closed-candle scoring"
+              />
+            </View>
+            <Text style={s.label}>Fast mode (multi-index): reload each option chain at most every</Text>
+            <View style={s.chips}>
+              {[0, 10, 15, 30].map((n) => (
+                <Chip
+                  key={n}
+                  label={n === 0 ? 'Every refresh' : `${n} s`}
+                  active={(cfg.chainEverySeconds ?? 0) === n}
+                  onPress={() => void save({ chainEverySeconds: n })}
+                />
+              ))}
+            </View>
+            <Text style={[ui.muted, { fontSize: 12 }]}>
+              Between chain reloads the 1-second live quotes drive the engine (price, breaks, stops, P&L); OI and IV
+              change slowly. Fewer chain requests = no waiting on Dhan&apos;s 3-second limit.
+            </Text>
+            <View style={s.switchRow}>
               <Text style={s.label}>Trend filter: enter only with the trend (CE in an up trend, PE in a down trend)</Text>
               <Switch
                 value={cfg.trendFilter !== false}

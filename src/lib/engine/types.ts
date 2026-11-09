@@ -155,6 +155,14 @@ export interface EngineConfig {
   trendBlockSideways: boolean;
   trendBlockTiring: boolean;
   trendMinStrength: number;
+  /**
+   * Closed-candle scoring: the score uses finished 5-min candles only (the live price moving the forming
+   * candle no longer swings it); setups trigger on the last finished candle, the live price breaks them.
+   */
+  closedCandleScoring: boolean;
+  /** Multi-index fast mode: each index's option chain + candles reload at most this often (s); the
+   *  1-second quotes drive the engine in between. 0 = every refresh. */
+  chainEverySeconds: number;
   /** Gap guard: after an opening gap of at least gapGuardPct %, no new entry in the first 15 minutes. */
   gapGuard: boolean;
   gapGuardPct: number;
@@ -289,6 +297,8 @@ export const DEFAULT_CONFIG: EngineConfig = {
   lastEntryTimeMcx: '',
   refreshSeconds: 15,
   fastTicks: true,
+  closedCandleScoring: false,
+  chainEverySeconds: 0,
   trendFilter: true,
   trendBlockSideways: true,
   trendBlockTiring: true,

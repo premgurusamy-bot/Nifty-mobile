@@ -132,7 +132,7 @@ test('saved settings: the old minute holds become seconds once — default 3 / 5
   const { confirmHoldSeconds: _s, ...base } = DEFAULT_CONFIG;
   const a = await make({ ...base, confirmHoldMinutes: 3, configRev: 3 });
   assert.equal(a.now, 30);
-  assert.equal(a.stored.configRev, 4);
+  assert.equal(a.stored.configRev, 5);
   assert.equal('confirmHoldMinutes' in a.stored, false);
   assert.equal((await make({ ...base, confirmHoldMinutes: 5, configRev: undefined })).now, 30);
   assert.equal((await make({ ...base, confirmHoldMinutes: 10, configRev: 3 })).now, 600); // your own choice, in seconds
@@ -140,4 +140,23 @@ test('saved settings: the old minute holds become seconds once — default 3 / 5
   assert.equal((await make({ ...base, configRev: 3 })).now, 30); // saved before the hold existed
   // after the update, your seconds are kept
   assert.equal((await make({ ...DEFAULT_CONFIG, confirmHoldSeconds: 45, configRev: 4 })).now, 45);
+});
+
+test('closed-candle scoring: the forming candle moving does not move the score; the setup triggers on the last finished candle', async () => {
+  const { scoringCandles } = await import('../src/lib/engine/decision.ts');
+  const cc = { ...cfg, confirmHoldSeconds: 0, closedCandleScoring: true };
+  // The fixture's last candle (11:40) is still forming at 11:40:27.
+  assert.equal(scoringCandles(candles, t0 + 27_000, cc).length, candles.length - 1);
+  assert.equal(scoringCandles(candles, t0 + 5 * min, cc).length, candles.length); // finished
+  assert.equal(scoringCandles(candles, t0 + 27_000, { closedCandleScoring: false }).length, candles.length);
+  const wild = (k: number) => [...candles.slice(0, -1), { ...last, h: last.h + k, l: last.l - k, c: last.c + k / 2 }];
+  const run = (c: typeof cc, k: number) =>
+    runCycle({ ...initialEngineState(), ivHistory: fx.ivHistoryBefore }, c, { candles: wild(k), chain, now: t0 + 27_000 });
+  const a = run(cc, 0);
+  const b = run(cc, 40);
+  assert.equal(a.dashboard.decision.confidence, b.dashboard.decision.confidence); // steady
+  const prevCandle = candles[candles.length - 2];
+  if (a.state.pending) {
+    assert.equal(a.state.pending.trigger, a.state.pending.direction === 'CE' ? prevCandle.h : prevCandle.l);
+  }
 });

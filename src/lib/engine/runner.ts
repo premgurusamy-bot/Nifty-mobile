@@ -258,6 +258,8 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   }
   if (patch.fastTicks !== undefined) next.fastTicks = !!patch.fastTicks;
   if (patch.gapGuard !== undefined) next.gapGuard = !!patch.gapGuard;
+  if (patch.closedCandleScoring !== undefined) next.closedCandleScoring = !!patch.closedCandleScoring;
+  num('chainEverySeconds', 0, 120);
   if (patch.trendFilter !== undefined) next.trendFilter = !!patch.trendFilter;
   if (patch.trendBlockSideways !== undefined) next.trendBlockSideways = !!patch.trendBlockSideways;
   if (patch.trendBlockTiring !== undefined) next.trendBlockTiring = !!patch.trendBlockTiring;
@@ -360,12 +362,15 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
 }
 
 /** Current settings revision: 1 = hold before entry 5 → 3 minutes. */
-export const CONFIG_REV = 4;
+export const CONFIG_REV = 5;
 
 /**
  * One-time updates to saved settings. Rev 1: the hold-before-entry default changed from 5 to 3
  * minutes; a saved 5 (the old default) becomes 3, any other value you chose is kept.
  * Rev 2: FIN NIFTY joins the watch list, on Angel One (data and orders) — Settings can change it.
+ * Rev 5 (accuracy / speed / profit): closed-candle scoring on, multi-index fast mode (chains every 15 s,
+ * the 1-second quotes in between), and earlier profit protection — only where the old defaults were
+ * still set: loss trail 4,000 → lose 0 / 5,000 → lose 0, day plan 6,000 → 3,000 / 9,000 → 5,000 / 12,000 → 8,000.
  * Rev 4: the hold is in seconds; the default becomes 30 s (a saved default 3 / 5 min becomes 30 s,
  * 0 stays off, any other number of minutes you chose is kept as seconds).
  * Rev 3: default size Fixed 16 lots (− / + on the Dashboard); the index-option lot cap 10 → 25
@@ -374,6 +379,17 @@ export const CONFIG_REV = 4;
 export function migrateConfig(cfg: EngineConfig, saved: Partial<EngineConfig>): EngineConfig {
   const rev = saved.configRev ?? 0;
   const next = { ...cfg, configRev: CONFIG_REV };
+  if (rev < 5) {
+    next.closedCandleScoring = true;
+    next.chainEverySeconds = 15;
+    if (next.lt1At === 5000 && next.lt1Loss === 15000 && next.lt2At === 8500 && next.lt2Loss === 7000)
+      Object.assign(next, { lt1At: 4000, lt1Loss: 0, lt2At: 5000, lt2Loss: 0 });
+    if (
+      next.dl1At === 9000 && next.dl1Lock === 5000 && next.dl2At === 12000 && next.dl2Lock === 7000 &&
+      next.dl3At === 14000 && next.dl3Lock === 10000
+    )
+      Object.assign(next, { dl1At: 6000, dl1Lock: 3000, dl2At: 9000, dl2Lock: 5000, dl3At: 12000, dl3Lock: 8000 });
+  }
   if (rev < 4) {
     const m = saved.confirmHoldMinutes;
     if (saved.confirmHoldSeconds == null)
@@ -434,6 +450,8 @@ export class EngineRunner {
   private proc: Promise<unknown> = Promise.resolve();
   /** Multi-index: indexes paused because full refreshes got too slow (real-time ms until). */
   paused: Record<string, { until: number; reason: string }> = {};
+  /** When each index's chain + candles were last loaded (real ms; fast mode). */
+  private loadedAt: Record<string, number> = {};
   /** How long the last full refresh took to load (ms, real time). */
   lastLoadMs: number | null = null;
   /** Auto-pause thresholds (real ms): slow loads in a row pause one index; fast ones bring it back. */
@@ -590,8 +608,15 @@ export class EngineRunner {
     const t0 = Date.now();
     this.unpauseDue(t0);
     const lanes = new Map<string, string[]>();
+    const every = (this.config.chainEverySeconds ?? 0) * 1000;
     for (const sym of symbols) {
       if (this.paused[sym] || this.isOff(sym)) continue;
+      // Fast mode: this index's chain was loaded moments ago — the ticks keep its data current.
+      const at = this.loadedAt[sym];
+      if (every > 0 && at != null && t0 - at < every && this.multiData[sym]) {
+        data[sym] = this.multiData[sym];
+        continue;
+      }
       const lane = this.source.laneOf?.(this.cfgFor(sym)) ?? 'main';
       lanes.set(lane, [...(lanes.get(lane) ?? []), sym]);
     }
@@ -601,8 +626,13 @@ export class EngineRunner {
           try {
             const d = await this.source.load(this.cfgFor(sym), now);
             data[sym] = { candles: d.candles, chain: d.chain };
+            this.loadedAt[sym] = Date.now();
           } catch (e) {
             loadErr[sym] = (e as Error).message;
+            // A failed reload keeps the last data (the ticks keep it current) for up to 2 minutes,
+            // so one bad request doesn't stop an index — its error still shows.
+            const at = this.loadedAt[sym];
+            if (this.multiData[sym] && at != null && Date.now() - at < 120_000) data[sym] = this.multiData[sym];
           }
         }
       }),

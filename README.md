@@ -357,6 +357,18 @@ the first quote of the day. Routes and headers follow Angel's official SmartAPI 
 
 Entry strength (Greeks) is guidance.
 
+## Accuracy, speed and profit settings (rev 5)
+
+- **Closed-candle scoring** (Settings → Engine settings): the score's candle patterns and averages use finished
+  5-min candles only, so the 1-second live price moving the forming candle no longer swings the score
+  (e.g. 54 → 81 in seconds); a setup triggers on the last finished candle and the live price breaks it.
+- **Fast mode** (multi-index, `chainEverySeconds`, 15 s): each index's option chain + candles reload at most that
+  often; in between the 1-second quotes drive the engine. A failed reload keeps the last data (up to 2 minutes)
+  so one bad request doesn't stop an index.
+- **Earlier profit protection** (applied once over the old defaults): loss trail best ₹4,000 → may lose ₹0, ₹5,000
+  → ₹0; day plan trade 1: ₹6,000 → ₹3,000, ₹9,000 → ₹5,000, ₹12,000 → ₹8,000 (then trailing). Values you had
+  changed yourself are kept.
+
 ## Voice advisor
 
 The Dashboard's **Advisor** card (and a voice, via `expo-speech`, Indian English at the alert volume) ranks the

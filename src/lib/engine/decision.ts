@@ -607,6 +607,17 @@ export function closeOpenPosition(s: EngineState, price: number, reason: string,
 
 // ---------------------------------------------------------------- the refresh cycle
 
+/**
+ * Closed-candle scoring: the score's candle patterns and averages use only finished 5-min candles,
+ * so the live price (1-second ticks) moving the forming candle doesn't swing the score; the forming
+ * candle still decides the break of a setup and the stops.
+ */
+export function scoringCandles(candles: Candle[], now: number, cfg: Pick<EngineConfig, 'closedCandleScoring'>): Candle[] {
+  if (!cfg.closedCandleScoring || candles.length < 31) return candles;
+  const last = candles[candles.length - 1];
+  return last.t + 5 * 60_000 > now ? candles.slice(0, -1) : candles;
+}
+
 export interface RefreshInput {
   candles: Candle[];
   chain: ChainSnapshot;
@@ -627,6 +638,8 @@ interface StagedInput {
   selectedStrike: number;
   label: string;
   candles: Candle[];
+  /** The candle a setup's trigger comes from (the last finished one with closed-candle scoring). */
+  setupCandle?: Candle;
   now: number;
   spot: number;
   buySignal: Signal;
@@ -679,7 +692,8 @@ function stagedDecision(
       const holdSec = Math.max(0, cfg.confirmHoldSeconds ?? (cfg.confirmHoldMinutes ?? 0) * 60);
       const holdMs = holdSec * 1000;
       if (!same) {
-        const trigger = bullish ? last.h : last.l;
+        const sc = x.setupCandle ?? last;
+        const trigger = bullish ? sc.h : sc.l;
         s.pending = { direction, trigger, strike: selectedStrike, setAt: now, holdFrom: now, holdConf: confidence };
         signal = 'WAIT';
         decisionText = holdMs
@@ -807,11 +821,12 @@ function runFuturesCycle(
   const s = clone(prev);
   const { candles, chain, now } = input;
   resetIfNewDay(s, now);
-  const tech = computeTechnical(candles);
+  const scored = scoringCandles(candles, now, cfg);
+  const tech = computeTechnical(scored);
   if (!tech) throw new Error('No candle data');
   const spot = chain.spot || tech.last.close;
   const cal = calibrationFor(cfg, spot, tech.last.atr);
-  const ev = evaluateFutures(candles, tech, spot, cal);
+  const ev = evaluateFutures(scored, tech, spot, cal);
 
   let positionLtp: number | null = null;
   if (s.position) {
@@ -825,6 +840,7 @@ function runFuturesCycle(
     selectedStrike: 0,
     label: ev.label,
     candles,
+    setupCandle: scored[scored.length - 1],
     now,
     spot,
     buySignal: ev.direction === 'LONG' ? 'BUY' : 'SELL',
@@ -909,12 +925,13 @@ function runOptionsCycle(
   const { candles, chain, now } = input;
   resetIfNewDay(s, now);
 
-  const tech = computeTechnical(candles);
+  const scored = scoringCandles(candles, now, cfg);
+  const tech = computeTechnical(scored);
   const metrics = computeChainMetrics(chain);
   if (!tech || !metrics) throw new Error(!tech ? 'No candle data' : 'Option chain is empty');
 
   const spot = chain.spot || tech.last.close;
-  const pa = livePriceAction(candles, tech, metrics.support, metrics.resistance);
+  const pa = livePriceAction(scored, tech, metrics.support, metrics.resistance);
 
   captureIVSnapshot(s, chain, metrics.atm, now);
 
@@ -970,6 +987,7 @@ function runOptionsCycle(
     selectedStrike,
     label: pa.label,
     candles,
+    setupCandle: scored[scored.length - 1],
     now,
     spot,
     buySignal: direction === 'CE' ? 'BUY CE' : 'BUY PE',
