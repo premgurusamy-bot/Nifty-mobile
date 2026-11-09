@@ -7,6 +7,8 @@ import { NIFTY_ID, niftyLotSize } from '../../lib/instruments';
 import { atmStrike, buildChain, type ChainRow } from '../../lib/optionChain';
 import { change, changePct } from '../../lib/simulator';
 import { upcomingExpiries } from '../../lib/time';
+import { catalogEntry } from '../../lib/engine/catalog';
+import { useEngine } from '../../state/EngineContext';
 import { useMarket } from '../../state/MarketContext';
 import { useSettings } from '../../state/SettingsContext';
 import { colors } from '../../theme';
@@ -26,7 +28,7 @@ const compact = (n: number) =>
   n >= 1e7 ? `${(n / 1e7).toFixed(2)}Cr` : n >= 1e5 ? `${(n / 1e5).toFixed(1)}L` : String(n);
 
 /** Live chain from the server (Dhan) or the local Black-Scholes model in demo mode. */
-function useChain(expiry: string | null) {
+function useChain(expiry: string | null, symbol: string) {
   const { api } = useSettings();
   const { spot, now, seedPrices } = useMarket();
   const focused = useIsFocused();
@@ -34,13 +36,23 @@ function useChain(expiry: string | null) {
   const [live, setLive] = useState<{ spot: number; rows: ChainRow[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Each index has its own expiries (BANK NIFTY / FIN NIFTY are monthly): reload when the index changes.
   useEffect(() => {
     if (!api) return;
+    let alive = true;
     api
-      .expiries()
-      .then((r) => setExpiries(r.expiries.slice(0, 3)))
-      .catch((e) => setError(e.message));
-  }, [api]);
+      .expiries(symbol)
+      .then((r) => {
+        if (!alive) return;
+        setExpiries(r.expiries.slice(0, 3));
+        setLive(null);
+        setError(null);
+      })
+      .catch((e) => alive && setError(e.message));
+    return () => {
+      alive = false;
+    };
+  }, [api, symbol]);
 
   const active = api ? (expiry && expiries.includes(expiry) ? expiry : (expiries[0] ?? null)) : null;
   useEffect(() => {
@@ -48,7 +60,7 @@ function useChain(expiry: string | null) {
     let alive = true;
     const pull = () =>
       api
-        .optionChain(active)
+        .optionChain(active, symbol)
         .then((r) => {
           if (!alive) return;
           setLive(r);
@@ -67,7 +79,7 @@ function useChain(expiry: string | null) {
       alive = false;
       clearInterval(t);
     };
-  }, [api, active, focused, seedPrices]);
+  }, [api, active, focused, seedPrices, symbol]);
 
   if (api) return { expiries, active, spot: live?.spot || spot, rows: live?.rows ?? [], error, live: true };
   const local = upcomingExpiries(now, 3);
@@ -79,11 +91,26 @@ const openTicket = (id: string) => router.push({ pathname: '/order', params: { i
 
 export default function OptionChainScreen() {
   const { quotes, status, source } = useMarket();
+  const { snap } = useEngine();
+  const { api } = useSettings();
   const [expiry, setExpiry] = useState<string | null>(null);
-  const { expiries, active, spot, rows, error, live } = useChain(expiry);
+  // Follows the index shown on the Dashboard; the chips pick another watched index.
+  // (Demo mode's chain is a NIFTY price model: it stays on NIFTY.)
+  const shown = api && snap?.config.instrumentKind === 'INDEX_OPTIONS' ? snap.config.symbol : 'NIFTY';
+  const choices = api && snap?.watch?.length ? snap.watch.map((w) => w.symbol) : [shown];
+  const [picked, setPicked] = useState<string | null>(null);
+  const [pickedFor, setPickedFor] = useState(shown);
+  if (pickedFor !== shown) {
+    // The Dashboard moved to another index: follow it.
+    setPickedFor(shown);
+    setPicked(null);
+  }
+  const symbol = picked && choices.includes(picked) ? picked : shown;
+  const entry = catalogEntry(symbol);
+  const { expiries, active, spot, rows, error, live } = useChain(expiry, symbol);
   const atm = rows.length
     ? rows.reduce((b, r) => (Math.abs(r.strike - spot) < Math.abs(b.strike - spot) ? r : b)).strike
-    : atmStrike(spot);
+    : atmStrike(spot, entry?.strikeInterval);
   const nifty = quotes[NIFTY_ID];
 
   const renderRow = ({ item }: { item: ChainRow }) => {
@@ -117,9 +144,21 @@ export default function OptionChainScreen() {
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <View style={{ padding: 16, gap: 10 }}>
         <StatusPill status={status} live={source === 'DHAN'} />
+        {choices.length > 1 ? (
+          <Segmented
+            options={choices.map((c) => ({ label: catalogEntry(c)?.label ?? c, value: c }))}
+            value={symbol}
+            onChange={(v) => {
+              setPicked(v);
+              setExpiry(null);
+            }}
+          />
+        ) : null}
         <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 10 }}>
-          <Text style={[ui.title, { fontSize: 20 }]}>NIFTY {formatNumber(spot)}</Text>
-          <Change abs={change(nifty)} pct={changePct(nifty)} style={{ fontSize: 13 }} />
+          <Text style={[ui.title, { fontSize: 20 }]}>
+            {entry?.label ?? symbol} {formatNumber(spot)}
+          </Text>
+          {symbol === 'NIFTY' ? <Change abs={change(nifty)} pct={changePct(nifty)} style={{ fontSize: 13 }} /> : null}
         </View>
         {expiries.length ? (
           <Segmented
@@ -129,8 +168,12 @@ export default function OptionChainScreen() {
           />
         ) : null}
         <Text style={ui.muted}>
-          Lot size {niftyLotSize()} · Tap a premium to trade ·{' '}
-          {live ? 'Live Dhan option chain (refreshes every 3 s)' : 'Demo prices are model-derived (Black-Scholes)'}
+          Lot size {symbol === 'NIFTY' ? niftyLotSize() : (entry?.lotSize ?? '—')} · Tap a premium to trade ·{' '}
+          {live
+            ? snap?.feeds?.[symbol]?.feed === 'ANGEL'
+              ? 'Live Angel One chain (the engine’s, refreshed with its quotes)'
+              : 'Live option chain (refreshes every 3 s)'
+            : 'Demo prices are model-derived (Black-Scholes)'}
         </Text>
         {error ? <Text style={{ color: colors.down }}>{error}</Text> : null}
       </View>
@@ -140,7 +183,7 @@ export default function OptionChainScreen() {
         <Text style={[s.headText, { flex: 1 }]}>PUTS</Text>
       </View>
       <FlatList
-        key={`${active}-${rows.length > 0}`}
+        key={`${symbol}-${active}-${rows.length > 0}`}
         data={rows}
         keyExtractor={(r) => String(r.strike)}
         renderItem={renderRow}

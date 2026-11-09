@@ -307,3 +307,28 @@ test('separate live capital per broker; both balances shown (Angel One only when
     api.dispose();
   }
 });
+
+test('Option Chain tab: each index its own chain and expiries — from the engine (Angel One for BANK NIFTY), no extra Dhan call', async () => {
+  const api = await phone({ multiIndex: true, symbol: 'NIFTY', watchSymbols: ['NIFTY', 'BANKNIFTY'] });
+  try {
+    await api.engineRefresh();
+    const bankChain = api.runner.chainFor('BANKNIFTY')!;
+    assert.equal(bankChain.feed, 'ANGEL');
+    const ex = await api.expiries('BANKNIFTY');
+    assert.ok(ex.expiries.includes(bankChain.expiry));
+    const n = fd.requests.filter((r) => r.path === '/optionchain').length;
+    const c = await api.optionChain(bankChain.expiry, 'BANKNIFTY');
+    assert.equal(fd.requests.filter((r) => r.path === '/optionchain').length, n); // served from the engine
+    assert.equal(c.spot, bankChain.spot);
+    assert.ok(c.rows.length > 0 && c.rows.length <= 21); // ATM ± 10 (fewer at the edge of the strike list)
+    const atm = bankChain.strikes.reduce((b, r) => (Math.abs(r.strike - bankChain.spot) < Math.abs(b.strike - bankChain.spot) ? r : b)).strike;
+    assert.ok(c.rows.some((r) => r.strike === atm));
+    assert.match(c.rows[0].ce.id, /^NFO:BANKNIFTY:/);
+    assert.ok(c.rows.some((r) => r.ce.ltp > 0 && r.ce.iv > 0 && r.ce.iv < 1)); // IV as a fraction
+    // NIFTY: its own chain.
+    const nc = await api.optionChain(api.runner.chainFor('NIFTY')!.expiry, 'NIFTY');
+    assert.match(nc.rows[0].ce.id, /^NFO:NIFTY:/);
+  } finally {
+    api.dispose();
+  }
+});

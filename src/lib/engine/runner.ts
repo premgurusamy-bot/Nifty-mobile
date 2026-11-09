@@ -946,6 +946,12 @@ export class EngineRunner {
     return out;
   }
 
+  /** The engine's latest option chain for an index (multi-index: each watched one), if loaded. */
+  chainFor(symbol: string): ChainSnapshot | null {
+    if (this.multiActive()) return this.multiData[symbol]?.chain ?? null;
+    return symbol === this.config.symbol ? this.lastChain : null;
+  }
+
   /** Where each index's latest data came from. */
   feeds(): Record<string, { feed: 'DHAN' | 'ANGEL'; note?: string }> {
     const chains: Record<string, ChainSnapshot | null | undefined> = this.multiActive()

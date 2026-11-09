@@ -49,8 +49,10 @@ export function createApi(baseUrl: string, apiKey: string, timeoutMs = 20000) {
     status: () => req<StatusResponse>('GET', '/api/status'),
     quotes: (ids: string[]) => req<QuotesResponse>('GET', `/api/quotes?ids=${q(ids.join(','))}`),
     intraday: (id: string) => req<IntradayResponse>('GET', `/api/intraday?id=${q(id)}`),
-    expiries: () => req<ExpiriesResponse>('GET', '/api/expiries'),
-    optionChain: (expiry: string) => req<OptionChainResponse>('GET', `/api/optionchain?expiry=${q(expiry)}`),
+    // `symbol` picks the index on the phone; the server serves the selected one.
+    expiries: (symbol?: string) => req<ExpiriesResponse>('GET', `/api/expiries${symbol ? `?symbol=${q(symbol)}` : ''}`),
+    optionChain: (expiry: string, symbol?: string) =>
+      req<OptionChainResponse>('GET', `/api/optionchain?expiry=${q(expiry)}${symbol ? `&symbol=${q(symbol)}` : ''}`),
     portfolio: () => req<PortfolioResponse>('GET', '/api/portfolio'),
     orders: () => req<OrdersResponse>('GET', '/api/orders'),
     placeOrder: (body: PlaceOrderBody) => req<PlaceOrderResponse>('POST', '/api/orders', body),

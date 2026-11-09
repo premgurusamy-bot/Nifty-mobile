@@ -23,6 +23,8 @@ import { AngelGateway } from '../../server/brokers.ts';
 import { LiveTrader } from '../../server/liveTrader.ts';
 import { extractIps, isIPv4, runPreflight, type PreflightResult } from '../../server/preflight.ts';
 import { DhanService, underlyingFor } from '../../server/service.ts';
+import { catalogEntry } from '../lib/engine/catalog.ts';
+import { optionId } from '../lib/instruments.ts';
 import { TokenKeeper } from '../../server/tokenKeeper.ts';
 import type { StatusResponse } from '../lib/apiTypes';
 import { EngineRunner, sanitizeConfig, type EngineSnapshot, type EngineStore } from '../lib/engine/runner.ts';
@@ -184,18 +186,41 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
       return { quotes };
     },
     intraday: async (id) => ({ points: await service.intraday(id) }),
-    // The Option Chain tab follows the selected index; MCX futures have no option chain here.
-    expiries: async () => {
-      if (engine.config.instrumentKind === 'MCX_FUTURES') return { expiries: [] };
-      return { expiries: await service.expiries(underlyingFor(engine.config.symbol)) };
+    // The Option Chain tab: any index (default the one shown); MCX futures have no option chain here.
+    expiries: async (symbol?: string) => {
+      const sym = symbol ?? engine.config.symbol;
+      if (catalogEntry(sym)?.kind !== 'INDEX_OPTIONS') return { expiries: [] };
+      const own = engine.chainFor(sym)?.expiry;
+      const list = await service.expiries(underlyingFor(sym)).catch((e) => {
+        if (!own) throw e;
+        return [] as string[];
+      });
+      return { expiries: [...new Set([...(own ? [own] : []), ...list])].sort() };
     },
-    optionChain: async (expiry) => {
-      if (engine.config.instrumentKind === 'MCX_FUTURES') {
-        throw new Error(
-          `${engine.config.symbol} is traded as a future — no option chain. Pick an index in Settings to view one.`,
-        );
+    optionChain: async (expiry: string, symbol?: string) => {
+      const sym = symbol ?? engine.config.symbol;
+      if (catalogEntry(sym)?.kind !== 'INDEX_OPTIONS') {
+        throw new Error(`${sym} is traded as a future — no option chain. Pick an index to view one.`);
       }
-      return service.optionChain(expiry, underlyingFor(engine.config.symbol));
+      // The engine's own chain (Dhan or Angel One, kept fresh by the 1-second ticks) — no extra Dhan request.
+      const c = engine.chainFor(sym);
+      if (c && c.expiry === expiry && c.strikes.length) {
+        const leg = (l: (typeof c.strikes)[number]['ce'], strike: number, type: 'CE' | 'PE') => ({
+          id: optionId({ underlying: sym, expiry, strike, type }),
+          ltp: l?.ltp ?? 0,
+          delta: l?.delta ?? 0,
+          iv: (l?.iv ?? 0) / 100,
+          ...(l?.oi ? { oi: l.oi } : {}),
+        });
+        // 10 strikes each side of the money, like Dhan's chain view.
+        const atm = c.strikes.reduce((bi, r, i) => (Math.abs(r.strike - c.spot) < Math.abs(c.strikes[bi].strike - c.spot) ? i : bi), 0);
+        const near = c.strikes.slice(Math.max(0, atm - 10), atm + 11);
+        return {
+          spot: c.spot,
+          rows: near.map((r) => ({ strike: r.strike, ce: leg(r.ce, r.strike, 'CE'), pe: leg(r.pe, r.strike, 'PE') })),
+        };
+      }
+      return service.optionChain(expiry, underlyingFor(sym));
     },
     portfolio: () => service.portfolio(),
     orders: () => service.orders(),
