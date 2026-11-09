@@ -21,7 +21,7 @@ import { AngelSettingsCard } from '../components/AngelSettings';
 import { ScanQrButton } from '../components/QrScanner';
 import { otpauthInfo, parseTotpKey } from '../lib/totp';
 import { Button, Card, Segmented, styles as ui } from '../components/ui';
-import type { EngineConfig } from '../lib/engine/types';
+import { holdLabel, type EngineConfig } from '../lib/engine/types';
 import { useEngine } from '../state/EngineContext';
 import { useSettings } from '../state/SettingsContext';
 import { colors } from '../theme';
@@ -29,7 +29,7 @@ import { colors } from '../theme';
 type NumKey =
   | 'confHigh'
   | 'confWatch'
-  | 'confirmHoldMinutes'
+  | 'confirmHoldSeconds'
   | 'rrTarget'
   | 'maxRisk'
   | 'lotSize'
@@ -71,7 +71,7 @@ type NumKey =
 const ENGINE_FIELDS: [NumKey, string][] = [
   ['confHigh', 'High confidence threshold (trade)'],
   ['confWatch', 'Watch threshold (wait for confirmation)'],
-  ['confirmHoldMinutes', 'Hold before entry (minutes at the trade level, 0 = enter at once)'],
+  ['confirmHoldSeconds', 'Hold before entry (seconds at the trade level: 10 or more, 0 = enter at once)'],
   ['rrTarget', 'Risk:Reward target'],
   ['maxRisk', 'Max risk per trade (₹)'],
   ['atrMult', 'ATR multiplier for stop loss'],
@@ -559,7 +559,7 @@ export default function SettingsScreen() {
                 <Text style={[ui.muted, { fontSize: 12 }]}>
                   {isFut
                     ? 'Multi-index works with index options: pick NIFTY 50 or BANK NIFTY above to use it.'
-                    : `Each watched index gets its own setup, ${cfg.confirmHoldMinutes}-minute hold, IV history, calibrated score and its own trade. If several are ready in the same refresh, all enter at once — the higher score first (it is trade 1 of the day plan). ${(cfg.multiSize ?? 'SPLIT') === 'SPLIT' ? 'Split: with 2 trades open each gets half the lots (at least 1).' : 'Full each: every trade gets its normal lots — the risk adds up.'} If one trade loses, the other keeps running; the no-revenge rule then stops new entries. Trades per day, daily max loss, the cutoff and the day plan count across all of them. Indexes on Dhan and on Angel One load at the same time (each broker has its own limits), and the 1-second live quotes keep running during a full refresh. If full refreshes stay over ~12 s, the index least likely to trade (never one in a trade or the one shown) pauses for 10 minutes; tap it to bring it back.`}
+                    : `Each watched index gets its own setup, ${holdLabel(cfg.confirmHoldSeconds ?? 30)} hold, IV history, calibrated score and its own trade. If several are ready in the same refresh, all enter at once — the higher score first (it is trade 1 of the day plan). ${(cfg.multiSize ?? 'SPLIT') === 'SPLIT' ? 'Split: with 2 trades open each gets half the lots (at least 1).' : 'Full each: every trade gets its normal lots — the risk adds up.'} If one trade loses, the other keeps running; the no-revenge rule then stops new entries. Trades per day, daily max loss, the cutoff and the day plan count across all of them. Indexes on Dhan and on Angel One load at the same time (each broker has its own limits), and the 1-second live quotes keep running during a full refresh. If full refreshes stay over ~12 s, the index least likely to trade (never one in a trade or the one shown) pauses for 10 minutes; tap it to bring it back.`}
                 </Text>
               </>
             ) : null}
@@ -937,6 +937,17 @@ export default function SettingsScreen() {
                 onChange={(v) => setDraft((d) => ({ ...d, [k]: v }))}
               />
             ))}
+            <Text style={s.label}>Hold quick pick (then Save)</Text>
+            <View style={s.chips}>
+              {[0, 10, 20, 30, 45, 60, 120].map((n) => (
+                <Chip
+                  key={n}
+                  label={n === 0 ? 'Off' : holdLabel(n)}
+                  active={draft.confirmHoldSeconds === String(n)}
+                  onPress={() => setDraft((d) => ({ ...d, confirmHoldSeconds: String(n) }))}
+                />
+              ))}
+            </View>
             <View style={s.switchRow}>
               <Text style={s.label}>
                 Gap guard: after an opening gap of {cfg.gapGuardPct ?? 0.5}% or more, no new entry in the first 15 minutes

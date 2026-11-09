@@ -1,18 +1,18 @@
 /// <reference types="node" />
-/** Hold before entry: the score must stay at the trade level for N minutes and not fade, then the break must come. */
+/** Hold before entry: the score must stay at the trade level for N seconds and not fade, then the break must come. */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { runCycle } from '../src/lib/engine/decision.ts';
 import { sanitizeConfig } from '../src/lib/engine/runner.ts';
-import { DEFAULT_CONFIG, initialEngineState, type Candle, type ChainSnapshot, type EngineState } from '../src/lib/engine/types.ts';
+import { DEFAULT_CONFIG, holdLabel, initialEngineState, type Candle, type ChainSnapshot, type EngineState } from '../src/lib/engine/types.ts';
 
 const fx = JSON.parse(readFileSync(new URL('./fixtures/workbook-2026-08-27.json', import.meta.url), 'utf8'));
 const candles: Candle[] = fx.candles;
 const chain: ChainSnapshot = fx.chain;
 const t0 = Date.UTC(2026, 7, 27, 6, 10, 0); // 11:40:00 IST
 const min = 60_000;
-const cfg = { ...DEFAULT_CONFIG, lastEntryTime: '' }; // default hold: 3 min, must hold or rise
+const cfg = { ...DEFAULT_CONFIG, lastEntryTime: '', confirmHoldSeconds: 180 }; // a 3-minute hold, must hold or rise
 
 /** Same market with the PE OI scaled so PCR moves (changes only the PCR / OI-bias points). */
 const withPePcr = (f: number): ChainSnapshot => ({
@@ -30,10 +30,25 @@ const start = () => {
   return r;
 };
 
-test('defaults: hold 3 minutes, score must hold or rise; validated', () => {
-  assert.deepEqual([DEFAULT_CONFIG.confirmHoldMinutes, DEFAULT_CONFIG.confirmRising], [3, true]);
-  assert.equal(sanitizeConfig({ confirmHoldMinutes: 0 }, DEFAULT_CONFIG).confirmHoldMinutes, 0);
-  assert.throws(() => sanitizeConfig({ confirmHoldMinutes: 61 }, DEFAULT_CONFIG), /confirmHoldMinutes/);
+test('defaults: hold 30 seconds (10 s minimum, 0 = off), score must hold or rise; validated', () => {
+  assert.deepEqual([DEFAULT_CONFIG.confirmHoldSeconds, DEFAULT_CONFIG.confirmRising], [30, true]);
+  assert.equal(sanitizeConfig({ confirmHoldSeconds: 0 }, DEFAULT_CONFIG).confirmHoldSeconds, 0);
+  assert.equal(sanitizeConfig({ confirmHoldSeconds: 10 }, DEFAULT_CONFIG).confirmHoldSeconds, 10);
+  assert.throws(() => sanitizeConfig({ confirmHoldSeconds: 5 }, DEFAULT_CONFIG), /0 \(off\) or at least 10 seconds/);
+  assert.throws(() => sanitizeConfig({ confirmHoldSeconds: 3601 }, DEFAULT_CONFIG), /confirmHoldSeconds/);
+  assert.equal(sanitizeConfig({ confirmHoldMinutes: 2 }, DEFAULT_CONFIG).confirmHoldSeconds, 120); // older clients
+  assert.deepEqual([holdLabel(30), holdLabel(180), holdLabel(90)], ['30 s', '3 min', '1 min 30 s']);
+});
+
+test('the default 30-second hold: a break 20 s in waits, 30 s in enters', () => {
+  const c30 = { ...cfg, confirmHoldSeconds: 30 };
+  let r = cycle({ ...initialEngineState(), ivHistory: fx.ivHistoryBefore }, t0, { c: c30 });
+  assert.match(r.dashboard.decision.decisionText, /holding 30 s before entry/);
+  trig = r.state.pending!.trigger;
+  r = cycle(r.state, t0 + 20_000, { brk: true, c: c30 });
+  assert.equal(r.state.position, null);
+  r = cycle(r.state, t0 + 30_000, { brk: true, c: c30 });
+  assert.ok(r.state.position, r.dashboard.decision.decisionText);
 });
 
 test('reaching 80 arms a hold; a break during the hold does not enter', () => {
@@ -95,14 +110,14 @@ test('"must hold or rise" off: a weaker but still ≥ 80 score enters after the 
 });
 
 test('hold 0: the workbook rule — the first break after 80 enters', () => {
-  const c0 = { ...cfg, confirmHoldMinutes: 0 };
+  const c0 = { ...cfg, confirmHoldSeconds: 0 };
   let r = cycle({ ...initialEngineState(), ivHistory: fx.ivHistoryBefore }, t0, { c: c0 });
   trig = r.state.pending!.trigger;
   r = cycle(r.state, t0 + 30_000, { brk: true, c: c0 });
   assert.ok(r.state.position);
 });
 
-test('saved settings: the old 5-minute default becomes 3 once; your own values are kept', async () => {
+test('saved settings: the old minute holds become seconds once — default 3 / 5 min → 30 s; your own values are kept', async () => {
   const { EngineRunner } = await import('../src/lib/engine/runner.ts');
   const make = async (saved: Record<string, unknown>) => {
     let stored: any = null;
@@ -112,16 +127,17 @@ test('saved settings: the old 5-minute default becomes 3 once; your own values a
     );
     await r.init();
     await r.updateConfig({}); // saves
-    return { now: r.config.confirmHoldMinutes, stored };
+    return { now: r.config.confirmHoldSeconds, stored };
   };
-  const a = await make({ ...DEFAULT_CONFIG, confirmHoldMinutes: 5, configRev: undefined });
-  assert.equal(a.now, 3);
-  assert.equal(a.stored.configRev, 3);
-  assert.equal((await make({ ...DEFAULT_CONFIG, confirmHoldMinutes: 10, configRev: undefined })).now, 10);
-  assert.equal((await make({ ...DEFAULT_CONFIG, confirmHoldMinutes: 0, configRev: undefined })).now, 0);
-  // after the update, choosing 5 again is respected
-  assert.equal((await make({ ...DEFAULT_CONFIG, confirmHoldMinutes: 5, configRev: 1 })).now, 5);
-  // settings saved before the hold existed get the new default
-  const { confirmHoldMinutes: _x, ...old } = DEFAULT_CONFIG;
-  assert.equal((await make({ ...old, configRev: undefined })).now, 3);
+  const { confirmHoldSeconds: _s, ...base } = DEFAULT_CONFIG;
+  const a = await make({ ...base, confirmHoldMinutes: 3, configRev: 3 });
+  assert.equal(a.now, 30);
+  assert.equal(a.stored.configRev, 4);
+  assert.equal('confirmHoldMinutes' in a.stored, false);
+  assert.equal((await make({ ...base, confirmHoldMinutes: 5, configRev: undefined })).now, 30);
+  assert.equal((await make({ ...base, confirmHoldMinutes: 10, configRev: 3 })).now, 600); // your own choice, in seconds
+  assert.equal((await make({ ...base, confirmHoldMinutes: 0, configRev: 3 })).now, 0);
+  assert.equal((await make({ ...base, configRev: 3 })).now, 30); // saved before the hold existed
+  // after the update, your seconds are kept
+  assert.equal((await make({ ...DEFAULT_CONFIG, confirmHoldSeconds: 45, configRev: 4 })).now, 45);
 });

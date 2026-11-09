@@ -23,6 +23,7 @@ import { blankSymbolState, isBusy, normalizeSymbolState, pickSymbolState, runMul
 import {
   DEFAULT_CONFIG,
   MAX_FIXED_STOP_PCT,
+  MIN_HOLD_SECONDS,
   MIN_REFRESH_SECONDS,
   sideOf,
   type Direction,
@@ -208,7 +209,17 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   };
   num('confHigh', 0, 105);
   num('confWatch', 0, 105);
-  num('confirmHoldMinutes', 0, 60);
+  // Older clients send minutes: turned into seconds.
+  if (patch.confirmHoldMinutes !== undefined && patch.confirmHoldSeconds === undefined) {
+    const m = Number(patch.confirmHoldMinutes);
+    if (!Number.isFinite(m) || m < 0 || m > 60) throw new Error('confirmHoldMinutes must be 0–60');
+    next.confirmHoldSeconds = Math.round(m * 60);
+  }
+  delete next.confirmHoldMinutes;
+  num('confirmHoldSeconds', 0, 3600);
+  next.confirmHoldSeconds = Math.round(next.confirmHoldSeconds);
+  if (next.confirmHoldSeconds > 0 && next.confirmHoldSeconds < MIN_HOLD_SECONDS)
+    throw new Error(`Hold before entry: 0 (off) or at least ${MIN_HOLD_SECONDS} seconds`);
   if (patch.confirmRising !== undefined) next.confirmRising = !!patch.confirmRising;
   num('rrTarget', 0.1, 20);
   num('maxRisk', 1, 10_000_000);
@@ -336,19 +347,26 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
 }
 
 /** Current settings revision: 1 = hold before entry 5 → 3 minutes. */
-export const CONFIG_REV = 3;
+export const CONFIG_REV = 4;
 
 /**
  * One-time updates to saved settings. Rev 1: the hold-before-entry default changed from 5 to 3
  * minutes; a saved 5 (the old default) becomes 3, any other value you chose is kept.
  * Rev 2: FIN NIFTY joins the watch list, on Angel One (data and orders) — Settings can change it.
+ * Rev 4: the hold is in seconds; the default becomes 30 s (a saved default 3 / 5 min becomes 30 s,
+ * 0 stays off, any other number of minutes you chose is kept as seconds).
  * Rev 3: default size Fixed 16 lots (− / + on the Dashboard); the index-option lot cap 10 → 25
  * (under NSE's per-order freeze limit). A cap you set yourself is kept.
  */
 export function migrateConfig(cfg: EngineConfig, saved: Partial<EngineConfig>): EngineConfig {
   const rev = saved.configRev ?? 0;
   const next = { ...cfg, configRev: CONFIG_REV };
-  if (rev < 1 && saved.confirmHoldMinutes === 5) next.confirmHoldMinutes = 3;
+  if (rev < 4) {
+    const m = saved.confirmHoldMinutes;
+    if (saved.confirmHoldSeconds == null)
+      next.confirmHoldSeconds = m == null || m === 3 || m === 5 ? 30 : Math.max(0, Math.round(m * 60));
+    delete next.confirmHoldMinutes;
+  }
   if (rev < 3) {
     next.sizingMode = 'FIXED';
     next.fixedLots = 16;

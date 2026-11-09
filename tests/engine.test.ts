@@ -22,7 +22,7 @@ import {
 } from '../src/lib/engine/types.ts';
 
 /** The workbook's rule: enter on the first break after the trade level (no hold). */
-const WB_CONFIG = { ...DEFAULT_CONFIG, confirmHoldMinutes: 0, dayPlanLock: false };
+const WB_CONFIG = { ...DEFAULT_CONFIG, confirmHoldSeconds: 0, dayPlanLock: false };
 
 /**
  * Golden fixture: inputs AND outputs of the workbook's last refresh

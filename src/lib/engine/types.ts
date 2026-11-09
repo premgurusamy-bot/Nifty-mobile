@@ -92,7 +92,10 @@ export interface EngineConfig {
   confHigh: number;
   confWatch: number;
   /** Minutes the score must stay at or above the trade level before entering (0 = enter at once). */
-  confirmHoldMinutes: number;
+  /** Hold before entry: seconds the score must stay at the trade level (0 = enter on the first break; else ≥ 10). */
+  confirmHoldSeconds: number;
+  /** Older saved settings (minutes); read once and turned into confirmHoldSeconds. */
+  confirmHoldMinutes?: number;
   /** After the hold, only enter if the score is at or above where the hold started (not fading). */
   confirmRising: boolean;
   /** Settings migrations already applied to this saved config. */
@@ -217,6 +220,16 @@ export const EST_MARGIN_PCT = 0.12;
 
 /** Fastest auto-refresh: Dhan's option-chain API takes one request every 3 seconds. */
 export const MIN_REFRESH_SECONDS = 3;
+/** Shortest hold before entry (seconds) when the hold is on. */
+export const MIN_HOLD_SECONDS = 10;
+
+/** "30 s", "3 min", "1 min 30 s". */
+export function holdLabel(sec: number): string {
+  if (sec < 60) return `${sec} s`;
+  const m = Math.floor(sec / 60);
+  const r = sec % 60;
+  return r ? `${m} min ${r} s` : `${m} min`;
+}
 /** IV snapshots for the percentile are kept at most this often, whatever the refresh rate. */
 export const IV_SNAPSHOT_MS = 15_000;
 
@@ -238,7 +251,7 @@ export const DEFAULT_CONFIG: EngineConfig = {
   strikeInterval: 50,
   expiry: '',
   confHigh: 80,
-  confirmHoldMinutes: 3,
+  confirmHoldSeconds: 30,
   confirmRising: true,
   confWatch: 65,
   rrTarget: 2,

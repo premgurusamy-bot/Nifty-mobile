@@ -43,7 +43,7 @@ function setup(over: Partial<EngineConfig> = {}) {
   };
   const ready = (async () => {
     await r.init();
-    await r.updateConfig({ lastEntryTime: '', dayPlanLock: false, lossTrail: false, confirmHoldMinutes: 0, ...over });
+    await r.updateConfig({ lastEntryTime: '', dayPlanLock: false, lossTrail: false, confirmHoldSeconds: 0, ...over });
   })();
   return { r, asked, prices, ready, loads: () => loads, at: (ms: number) => (now = t0 + ms) };
 }

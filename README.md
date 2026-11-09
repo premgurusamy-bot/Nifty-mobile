@@ -11,7 +11,7 @@ The workbook's decision engine was ported rule for rule to TypeScript. A golden 
 **v1.0** (tag `v1.0`, 7 Nov 2026) — the first version marked as working, frozen as-is:
 NIFTY / BANK NIFTY / FIN NIFTY options and MCX mini futures on Dhan (phone only, no server); login with
 client ID + PIN (TOTP made by the app) and logout; PAPER / LIVE with pre-flight check and static IP;
-Manual / Automatic entries; 3-minute hold before entry; entry cutoff 14:35; cheap-premium filters; sizing
+Manual / Automatic entries; 30-second hold before entry (adjustable, 10 s minimum); entry cutoff 14:35; cheap-premium filters; sizing
 by risk, capital % or fixed lots (own stop %); Day plan lock and profit lock; live P&L; Screener for indexes
 and MCX; calibrated scoring (NIFTY unchanged); alerts with sound, background running; journal / decision
 log export; Portfolio strategy results.
@@ -137,11 +137,12 @@ battery use**, and on Xiaomi / Oppo / Vivo / Realme / OnePlus also allow Autosta
 ## Hold before entry
 
 Reaching the trade level (80) no longer enters on the next break by itself. Settings → Engine settings →
-**Hold before entry** (default **3 minutes**, 0 = the workbook's immediate rule): the score must stay at or
+**Hold before entry** in **seconds** (default **30 s**, at least **10 s**, quick picks 10 s – 2 min; 0 = the workbook's
+immediate rule; saved 3 / 5-minute defaults became 30 s once, other values you chose were kept): the score must stay at or
 above the trade level for that long (a dip below restarts the wait), and — with **enter only if the score held
 or rose** on (default) — end at or above where the hold started (0.5-point tolerance; otherwise "SETUP
 FADING" and the hold starts again). Then price must break the setup's trigger. The Dashboard shows
-`SETUP HOLDING - score rising / steady / falling since 82.4, entry check at 11:43:00`. Applies to PAPER
+`SETUP HOLDING - score rising / steady / falling since 82.4, entry check at 11:40:30`. Applies to PAPER
 automatic entries, LIVE automatic entries and the confirmed-signal alerts; a manual ENTER is not held back.
 
 ## Score calibration (BANK NIFTY, FIN NIFTY, MCX)

@@ -29,7 +29,7 @@ import type {
   Signal,
   TradePlan,
 } from './types.ts';
-import { FACTOR_LABELS, IV_SNAPSHOT_MS, sideOf } from './types.ts';
+import { FACTOR_LABELS, IV_SNAPSHOT_MS, holdLabel, sideOf } from './types.ts';
 import { sessionOpen, type Session } from './catalog.ts';
 import { evaluateFutures, buildFuturesPlan } from './futures.ts';
 import { sizeLots, type SizingConfig } from './sizing.ts';
@@ -674,13 +674,14 @@ function stagedDecision(
     } else {
       const last = candles[candles.length - 1];
       const same = s.pending && s.pending.direction === direction && Math.abs(s.pending.strike - selectedStrike) < 0.01;
-      const holdMs = Math.max(0, cfg.confirmHoldMinutes ?? 0) * 60_000;
+      const holdSec = Math.max(0, cfg.confirmHoldSeconds ?? (cfg.confirmHoldMinutes ?? 0) * 60);
+      const holdMs = holdSec * 1000;
       if (!same) {
         const trigger = bullish ? last.h : last.l;
         s.pending = { direction, trigger, strike: selectedStrike, setAt: now, holdFrom: now, holdConf: confidence };
         signal = 'WAIT';
         decisionText = holdMs
-          ? `SETUP ARMED - score ${confidence.toFixed(1)}, holding ${cfg.confirmHoldMinutes} min before entry, then break of ${fmt2(trigger)} (${label})`
+          ? `SETUP ARMED - score ${confidence.toFixed(1)}, holding ${holdLabel(holdSec)} before entry, then break of ${fmt2(trigger)} (${label})`
           : `SETUP ARMED - waiting for break of ${fmt2(trigger)} (${label})`;
       } else {
         const p = s.pending!;

@@ -55,7 +55,7 @@ test('runner keeps a decision log (changes, new candles, errors) for export, not
   };
   const r = new EngineRunner(source as never, { load: async () => null, save: async () => {} });
   await r.init();
-  await r.updateConfig({ confirmHoldMinutes: 0 }); // the workbook's immediate setup → pending sequence
+  await r.updateConfig({ confirmHoldSeconds: 0 }); // the workbook's immediate setup → pending sequence
   await r.refresh(); // SETUP ARMED → row
   t += 15_000;
   await r.refresh(); // SETUP PENDING (decision changed) → row

@@ -42,7 +42,7 @@ test('3-s refreshes: saves are throttled to one per 15 s when nothing changes', 
     { load: async () => null, save: async () => void saves++ },
   );
   await r.init();
-  await r.updateConfig({ autoRefresh: true, refreshSeconds: 3, lastEntryTime: '', confirmHoldMinutes: 0 });
+  await r.updateConfig({ autoRefresh: true, refreshSeconds: 3, lastEntryTime: '', confirmHoldSeconds: 0 });
   r.stop(); // drive the timer by hand
   await r.refresh();
   const s0 = saves;
