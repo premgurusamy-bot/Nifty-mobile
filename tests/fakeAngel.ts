@@ -32,6 +32,9 @@ export function startFakeAngel(
     nextId: 260000000001,
     /** Angel One RMS: net available margin. */
     rmsNet: 123456.5,
+    /** Candle requests received; rateLimitCandles = answer them with Angel's rate-limit error. */
+    candleCalls: 0,
+    rateLimitCandles: false,
   };
   const strikes = Array.from({ length: grid.count }, (_, i) => grid.first + i * grid.step);
   const token = (k: number, t: string) => String((t === 'CE' ? 600000 : 700000) + Math.round((k - grid.first) / grid.step));
@@ -108,6 +111,8 @@ export function startFakeAngel(
         return send({ status: true, message: 'SUCCESS', data: contracts.filter((c) => c.tradingsymbol.startsWith(q)) });
       }
       if (path === '/rest/secure/angelbroking/historical/v1/getCandleData') {
+        state.candleCalls++;
+        if (state.rateLimitCandles) return fail('Access denied because of exceeding access rate', 'AB1004');
         const rows = Array.from({ length: 60 }, (_, i) => {
           const c = state.spot - 30 + i;
           return [`2099-12-29T${String(9 + Math.floor((15 + i * 5) / 60)).padStart(2, '0')}:${String((15 + i * 5) % 60).padStart(2, '0')}:00+05:30`, c - 10, c + 15, c - 20, c, 0];

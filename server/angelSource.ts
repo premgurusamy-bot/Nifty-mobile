@@ -9,7 +9,8 @@
  * the app saw today.
  */
 import type { EngineDataSource } from '../src/lib/engine/runner.ts';
-import type { ChainSnapshot, ChainStrike, EngineConfig, Leg } from '../src/lib/engine/types.ts';
+import type { Candle, ChainSnapshot, ChainStrike, EngineConfig, Leg } from '../src/lib/engine/types.ts';
+import { tickCandles } from '../src/lib/engine/ticks.ts';
 import type { QuoteMap, QuoteSource } from '../src/lib/engine/ticks.ts';
 import { istDateString, toIST } from '../src/lib/time.ts';
 import { AngelError, type AngelClient } from './angel.ts';
@@ -61,6 +62,14 @@ export class AngelEngineSource implements EngineDataSource {
   private angel: AngelClient;
   private contracts = new Map<string, { day: string; list: AngelContract[] }>();
   private greeks = new Map<string, { at: number; rows: any[] }>();
+  /**
+   * Candles per index: Angel's candle API has a tight rate limit, so they're fetched only when a new
+   * 5-min candle has begun or once a minute; in between the forming candle follows the live price.
+   */
+  private candleCache = new Map<string, { at: number; candles: Candle[]; backoffUntil: number }>();
+  /** Re-fetch candles at least this often (ms); a rate-limit reply pauses them for candleBackoffMs. */
+  candleEveryMs = 60_000;
+  candleBackoffMs = 30_000;
   /** First OI seen today per token (Angel's quote has no previous-day OI). */
   private oiBase = new Map<string, { day: string; oi: number }>();
 
@@ -110,16 +119,7 @@ export class AngelEngineSource implements EngineDataSource {
     const expiry = cfg.expiry && expiries.includes(cfg.expiry) ? cfg.expiry : expiries[0];
     if (!expiry) throw new AngelError(`No upcoming ${name} expiry at Angel One`);
 
-    const candles = mapAngelCandles(
-      await this.angel.candles({
-        exchange: 'NSE',
-        symboltoken: indexToken,
-        interval: 'FIVE_MINUTE',
-        fromdate: stamp(now - 4 * 86400_000),
-        todate: stamp(now),
-      }),
-    );
-    if (!candles.length) throw new AngelError(`Angel One returned no ${name} candles`);
+    let candles = await this.candlesOf(name, indexToken, now);
     let spot = candles[candles.length - 1].c;
 
     // The strikes around the money, both sides.
@@ -193,7 +193,45 @@ export class AngelEngineSource implements EngineDataSource {
       quoteSpot: { segment: ANGEL_SEG.index, securityId: indexToken },
       legSegment: ANGEL_SEG.option,
     };
+    // Between candle fetches the forming 5-min candle follows the index's live price.
+    candles = tickCandles(candles, spot, now);
+    const cached = this.candleCache.get(name);
+    if (cached) cached.candles = candles;
     return { candles, chain };
+  }
+
+  /** The index's 5-min candles: cached between fetches (new candle / once a minute), rate limits ridden out. */
+  private async candlesOf(name: string, token: string, now: number): Promise<Candle[]> {
+    const hit = this.candleCache.get(name);
+    const bucket = (t: number) => Math.floor(t / 300_000);
+    const due =
+      !hit ||
+      now - hit.at >= this.candleEveryMs ||
+      now < hit.at ||
+      // a new 5-min candle has begun since the last fetch (a few seconds in, so Angel has it)
+      (bucket(now) > bucket(hit.at) && now - bucket(now) * 300_000 >= 5_000);
+    if (hit && (!due || now < hit.backoffUntil)) return hit.candles;
+    try {
+      const fresh = mapAngelCandles(
+        await this.angel.candles({
+          exchange: 'NSE',
+          symboltoken: token,
+          interval: 'FIVE_MINUTE',
+          fromdate: stamp(now - 4 * 86400_000),
+          todate: stamp(now),
+        }),
+      );
+      if (!fresh.length) throw new AngelError(`Angel One returned no ${name} candles`);
+      this.candleCache.set(name, { at: now, candles: fresh, backoffUntil: 0 });
+      return fresh;
+    } catch (e) {
+      // Rate-limited (or a hiccup) with candles in hand: keep using them, try again a bit later.
+      if (hit) {
+        hit.backoffUntil = now + this.candleBackoffMs;
+        return hit.candles;
+      }
+      throw e;
+    }
   }
 }
 

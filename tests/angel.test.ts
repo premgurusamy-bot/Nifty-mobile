@@ -165,3 +165,35 @@ test('diagnose: each call on its own, IP variants, and a note when the phone is 
   }
   assert.equal(angel.publicIp(), '203.0.113.7'); // restored
 });
+
+test('candles: fetched once per new 5-min candle / minute, the forming candle follows the live price; rate limits ridden out', async () => {
+  const angel = new AngelClient({ baseUrl: fa.url, session: await login() });
+  const src = new AngelEngineSource(angel);
+  const t = Date.UTC(2099, 11, 29, 6, 0, 10); // 11:30:10 IST
+  const n = fa.state.candleCalls;
+  const a = await src.load(bank, t);
+  await src.load(bank, t + 5_000);
+  await src.load(bank, t + 20_000);
+  assert.equal(fa.state.candleCalls - n, 1); // one fetch for three refreshes
+  fa.state.spot += 40;
+  const b = await src.load(bank, t + 30_000);
+  assert.equal(b.candles.at(-1)!.c, fa.state.spot); // forming candle = live index price
+  assert.ok(b.candles.at(-1)!.h >= fa.state.spot);
+  assert.equal(a.candles.length <= b.candles.length, true);
+  // A new 5-min candle (11:35:05): fetched again.
+  await src.load(bank, Date.UTC(2099, 11, 29, 6, 5, 6));
+  assert.equal(fa.state.candleCalls - n, 2);
+  // Rate-limited: keeps the candles it has (no error, stays on Angel), tries again after the pause.
+  fa.state.rateLimitCandles = true;
+  try {
+    const c = await src.load(bank, Date.UTC(2099, 11, 29, 6, 6, 10));
+    assert.equal(c.chain.feed, 'ANGEL');
+    assert.ok(c.candles.length > 0);
+    const calls = fa.state.candleCalls;
+    await src.load(bank, Date.UTC(2099, 11, 29, 6, 6, 20)); // within the 30 s pause: no request
+    assert.equal(fa.state.candleCalls, calls);
+  } finally {
+    fa.state.rateLimitCandles = false;
+    fa.state.spot -= 40;
+  }
+});

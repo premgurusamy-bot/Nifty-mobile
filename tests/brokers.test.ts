@@ -82,7 +82,7 @@ test('BANK NIFTY: market BUY + stop-loss at Angel One (nothing at Dhan); EXIT se
     assert.deepEqual([buy.variety, buy.ordertype, buy.transactiontype, buy.exchange, buy.producttype], ['NORMAL', 'MARKET', 'BUY', 'NFO', 'INTRADAY']);
     assert.equal(buy.quantity, String(p.totalQty));
     assert.deepEqual([stop.variety, stop.ordertype, stop.transactiontype], ['STOPLOSS', 'STOPLOSS_LIMIT', 'SELL']);
-    assert.equal(Number(stop.triggerprice), p.currentSl);
+    assert.ok(Math.abs(Number(stop.triggerprice) - p.currentSl) <= 0.05, `${stop.triggerprice} vs ${p.currentSl}`); // on the 0.05 tick
     assert.equal(fa.requests.find((r) => r.path.endsWith('/placeOrder'))!.headers['x-clientpublicip'], '203.0.113.7'); // the static IP
     assert.equal(dhanOrders().length, nd);
     assert.match(s.state.journal.at(-1)!.entryReason, /Angel One/);
