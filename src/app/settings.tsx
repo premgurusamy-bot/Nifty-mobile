@@ -45,6 +45,7 @@ type NumKey =
   | 'rollDays'
   | 'capitalPaper'
   | 'capitalLive'
+  | 'capitalLiveAngel'
   | 'capitalPct'
   | 'marginPerLot'
   | 'lockStart'
@@ -95,7 +96,8 @@ const FUTURES_FIELDS: [NumKey, string][] = [
 ];
 const SIZING_FIELDS: [NumKey, string][] = [
   ['capitalPaper', 'Paper trading capital (₹)'],
-  ['capitalLive', 'Live trading capital (₹, 0 = available balance at the index’s broker)'],
+  ['capitalLive', 'Live trading capital — Dhan (₹, 0 = Dhan available balance)'],
+  ['capitalLiveAngel', 'Live trading capital — Angel One (₹, 0 = Angel One available balance)'],
   ['capitalPct', 'Use this % of capital per trade (1–100)'],
   ['marginPerLot', 'MCX margin per lot (₹, 0 = estimate 12% of contract value)'],
 ];
@@ -756,6 +758,16 @@ export default function SettingsScreen() {
                 />
               ))}
             </View>
+            {snap?.balances && Object.keys(snap.balances).length ? (
+              <Text style={ui.muted}>
+                Available now:{' '}
+                {(['DHAN', 'ANGEL'] as const)
+                  .filter((b) => snap.balances?.[b])
+                  .map((b) => `${b === 'ANGEL' ? 'Angel One' : 'Dhan'} ${formatINR(snap.balances![b]!.amount, 0)}`)
+                  .join(' · ')}
+                {' '}(read every minute)
+              </Text>
+            ) : null}
             {snap?.capital ? (
               <Text style={ui.muted}>
                 Now ({cfg.tradeMode}): {formatINR(snap.capital.capital, 0)} per trade — {formatINR(snap.capital.base, 0)}{' '}

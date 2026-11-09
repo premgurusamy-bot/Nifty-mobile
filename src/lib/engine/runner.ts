@@ -146,6 +146,8 @@ export interface EngineSnapshot {
   /** Persistent warning banner (Dashboard F4), e.g. expired Dhan token. */
   banner: string;
   lastRefresh: number | null;
+  /** Available balance per broker (₹) and when it was read. */
+  balances?: Partial<Record<BrokerName, { amount: number; at: number | null }>>;
   /** Trend finder per index (direction, start, age, strength, ending signs). */
   trend?: Record<string, TrendReport & { entry?: EntryStrength | null }>;
   /** Where each index's data came from (Dhan / Angel One, and why not the chosen one). */
@@ -306,6 +308,7 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   }
   num('capitalPaper', 0, 1e11);
   num('capitalLive', 0, 1e11);
+  num('capitalLiveAngel', 0, 1e11);
   num('capitalPct', 1, 100);
   num('fixedLots', 1, 1000);
   if (!Number.isInteger(next.fixedLots)) throw new Error('Fixed lots must be a whole number');
@@ -821,21 +824,34 @@ export class EngineRunner {
     return { ...base, sizeFactor: splitFactor(this.config, others + 1) };
   }
 
-  private needsFunds() {
-    const c = this.config;
-    return c.sizingMode === 'CAPITAL' && c.tradeMode === 'LIVE' && !(c.capitalLive > 0) && !!this.fundsSource;
-  }
+  /** When each broker's balance was last read (ms, real time). */
+  fundsAt: Partial<Record<BrokerName, number>> = {};
+  /** Balances are shown in Settings / on the Dashboard: read at least this often (ms). */
+  balanceEveryMs = 60_000;
 
-  /** Refresh the account balance for capital sizing (keeps the last value on failure). */
-  async refreshFunds(): Promise<void> {
-    if (!this.needsFunds()) return;
-    // Every broker the watched indexes' orders go to (multi-index: NIFTY at one, BANK NIFTY at the other).
-    const syms = this.multiActive() ? this.watchList() : [this.config.symbol];
-    const brokers = new Set(syms.map((sym) => this.brokerFor(sym === this.config.symbol ? this.config : sanitizeConfig({ symbol: sym }, this.config))));
-    for (const b of brokers) {
+  /**
+   * Read the account balances (keeps the last value on failure): every refresh for a broker whose
+   * balance sizes trades (LIVE, Capital mode, its live capital 0), otherwise about once a minute for
+   * display — Dhan always, Angel One when logged in.
+   */
+  async refreshFunds(force = false): Promise<void> {
+    if (!this.fundsSource) return;
+    const c = this.config;
+    const syms = this.multiActive() ? this.watchList() : [c.symbol];
+    const inUse = new Set(syms.map((sym) => this.brokerFor(sym === c.symbol ? c : sanitizeConfig({ symbol: sym }, c))));
+    const sizes = (b: BrokerName) =>
+      c.sizingMode === 'CAPITAL' && c.tradeMode === 'LIVE' && inUse.has(b) && !((b === 'ANGEL' ? c.capitalLiveAngel : c.capitalLive) > 0);
+    const all: BrokerName[] = ['DHAN', ...(this.brokerReady?.('ANGEL') ? (['ANGEL'] as const) : [])];
+    const now = Date.now();
+    for (const b of all) {
+      const due = force || sizes(b) || now - (this.fundsAt[b] ?? 0) >= this.balanceEveryMs;
+      if (!due) continue;
       try {
-        const f = await this.fundsSource!(b);
-        if (Number.isFinite(f)) this.fundsBy = { ...this.fundsBy, [b]: f };
+        const f = await this.fundsSource(b);
+        if (Number.isFinite(f)) {
+          this.fundsBy = { ...this.fundsBy, [b]: f };
+          this.fundsAt = { ...this.fundsAt, [b]: now };
+        }
       } catch {
         /* keep the last balance; sizing shows "not fetched yet" if there never was one */
       }
@@ -1432,6 +1448,11 @@ export class EngineRunner {
       lastRefresh: this.lastRefresh,
       lastTick: this.fastTicking() ? this.lastTick : null,
       feeds: this.feeds(),
+      balances: Object.fromEntries(
+        (Object.keys(this.fundsBy) as BrokerName[])
+          .filter((b) => b === 'DHAN' || this.brokerReady?.('ANGEL'))
+          .map((b) => [b, { amount: this.fundsBy[b]!, at: this.fundsAt[b] ?? null }]),
+      ),
       trend: this.trends(),
       closes: this.candles.slice(-150).map((c) => c.c),
       marketOpen: this.marketOpen(),

@@ -303,6 +303,11 @@ One's RMS net margin); multi-index fetches both when the indexes use different b
 broker is Angel One but it isn't logged in (and "never miss an entry" is on), the order — and so the
 balance — is Dhan's.
 
+**Live capital per broker**: Settings → Position size & capital has *Live trading capital — Dhan* and *— Angel
+One* (₹, 0 = that broker's available balance). A trade sizes from the capital of the broker its order goes to.
+Both available balances are read about once a minute (every refresh when they size trades) and shown in
+Settings and on the Dashboard ("Balance: Dhan ₹… · Angel One ₹…"; Angel One only while logged in).
+
 **Never miss an entry** (`config.brokerFailover`, on by default): an entry the index's broker certainly
 didn't take — not logged in, refused (error reply), rejected, or not filled within the fill window and
 cancelled with nothing filled — is placed with the other broker at once. When it's unclear whether the

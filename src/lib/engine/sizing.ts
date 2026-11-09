@@ -39,15 +39,19 @@ function split(lots: number, cfg: SizingConfig): { lots: number; note: string } 
 
 const inr = (n: number) => formatINR(n, 0);
 
+/** The live capital set for the broker this trade's orders go to (0 = use that broker's balance). */
+export const liveCapitalFor = (cfg: SizingConfig) => (cfg.fundsBroker === 'ANGEL' ? (cfg.capitalLiveAngel ?? 0) : (cfg.capitalLive ?? 0));
+
 /** Capital one trade may use, and where it came from. */
 export function sizingCapital(cfg: SizingConfig): { capital: number; base: number; source: string } {
   const pct = Math.min(100, Math.max(0, cfg.capitalPct ?? 100));
   let base: number;
   let source: string;
   if (cfg.tradeMode === 'LIVE') {
-    if ((cfg.capitalLive ?? 0) > 0) {
-      base = cfg.capitalLive;
-      source = 'live capital';
+    const set = liveCapitalFor(cfg);
+    if (set > 0) {
+      base = set;
+      source = cfg.fundsBroker === 'ANGEL' ? 'live capital (Angel One)' : 'live capital';
     } else {
       base = cfg.availableFunds ?? 0;
       const who = brokerLabel(cfg.fundsBroker);
@@ -83,7 +87,7 @@ function sizeLotsFull(
     const capped = lots < want ? ` (max lots ${cfg.maxLots})` : '';
     // Can the capital pay for it? (LIVE with the balance not fetched yet: Dhan itself will refuse if not.)
     const { base: capital, source } = sizingCapital(cfg); // the whole capital: "% per trade" is for Capital mode
-    const known = !(cfg.tradeMode === 'LIVE' && !(cfg.capitalLive > 0) && cfg.availableFunds == null);
+    const known = !(cfg.tradeMode === 'LIVE' && !(liveCapitalFor(cfg) > 0) && cfg.availableFunds == null);
     const sizing = `Fixed ${lots} lot(s)${capped} · max loss ${inr(riskPerLot * lots)}`;
     if (known && costPerLot > 0 && costPerLot * lots > capital) {
       return {

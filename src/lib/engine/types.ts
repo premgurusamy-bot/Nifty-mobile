@@ -166,6 +166,8 @@ export interface EngineConfig {
   capitalPaper: number;
   /** Live capital (₹); 0 = use the Dhan account's available balance. */
   capitalLive: number;
+  /** Live capital for trades placed through Angel One (₹, 0 = Angel One's available balance). */
+  capitalLiveAngel: number;
   /** Share of the capital one trade may use (1–100 %). */
   capitalPct: number;
   /** MCX futures: margin blocked per lot (₹); 0 = estimate at 12 % of the contract value. */
@@ -285,6 +287,7 @@ export const DEFAULT_CONFIG: EngineConfig = {
   sizingMode: 'RISK',
   capitalPaper: 100000,
   capitalLive: 0,
+  capitalLiveAngel: 0,
   capitalPct: 100,
   marginPerLot: 0,
   fixedLots: 1,

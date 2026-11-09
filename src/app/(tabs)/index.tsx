@@ -245,6 +245,15 @@ export default function DashboardScreen() {
             Last refresh: {time(snap.lastRefresh)}
             {snap.lastTick ? ` · live quotes ${time(snap.lastTick)}` : ''}
           </Text>
+          {snap.balances && Object.keys(snap.balances).length ? (
+            <Text style={ui.muted}>
+              Balance:{' '}
+              {(['DHAN', 'ANGEL'] as const)
+                .filter((b) => snap.balances?.[b])
+                .map((b) => `${b === 'ANGEL' ? 'Angel One' : 'Dhan'} ${formatINR(snap.balances![b]!.amount, 0)}`)
+                .join(' · ')}
+            </Text>
+          ) : null}
           <Text style={[ui.muted, { color: snap.status.startsWith('Error') ? colors.down : colors.muted }]}>
             Status: {snap.status}
           </Text>

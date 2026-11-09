@@ -285,3 +285,25 @@ test('a LIVE exit that does not fill in time is cancelled (never left working) b
     api.dispose();
   }
 });
+
+test('separate live capital per broker; both balances shown (Angel One only when logged in)', async () => {
+  const api = await phone({ sizingMode: 'CAPITAL', capitalPct: 100, maxLots: 0, multiIndex: true, symbol: 'NIFTY', angelOrderSymbols: ['BANKNIFTY'] });
+  try {
+    const r = api.runner;
+    await r.updateConfig({ capitalLive: 300000, capitalLiveAngel: 150000 });
+    await r.setActive('NIFTY');
+    assert.deepEqual([r.snapshot().capital!.capital, r.snapshot().capital!.source], [300000, 'live capital']);
+    await r.setActive('BANKNIFTY');
+    assert.deepEqual([r.snapshot().capital!.capital, r.snapshot().capital!.source], [150000, 'live capital (Angel One)']);
+    // Balances for display (read about once a minute): Dhan and Angel One.
+    await r.refreshFunds(true);
+    assert.deepEqual(
+      Object.fromEntries(Object.entries(r.snapshot().balances!).map(([k, v]) => [k, v!.amount])),
+      { DHAN: 250000.5, ANGEL: 123456.5 },
+    );
+    api.angelSetSession(null);
+    assert.deepEqual(Object.keys(r.snapshot().balances!), ['DHAN']);
+  } finally {
+    api.dispose();
+  }
+});
