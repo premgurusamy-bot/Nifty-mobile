@@ -19,6 +19,7 @@ import { buildFuturesPlan } from './futures.ts';
 import { orderBroker, sizingCapital, type BrokerName, type SizingConfig } from './sizing.ts';
 import { applyTick, tickRequests, type QuoteSource } from './ticks.ts';
 import { entryStrength, findTrend, type EntryStrength, type TrendReport } from './trend.ts';
+import { advise, type Advice, type IndexInput } from '../advisor.ts';
 import { blankSymbolState, isBusy, normalizeSymbolState, pickSymbolState, runMultiCycle, splitFactor } from './multi.ts';
 import {
   DEFAULT_CONFIG,
@@ -150,6 +151,8 @@ export interface EngineSnapshot {
   lastRefresh: number | null;
   /** Available balance per broker (₹) and when it was read. */
   balances?: Partial<Record<BrokerName, { amount: number; at: number | null }>>;
+  /** Voice advisor: best index to watch, which to watch / skip, and what happens next. */
+  advice?: Advice;
   /** Trend finder per index (direction, start, age, strength, ending signs). */
   trend?: Record<string, TrendReport & { entry?: EntryStrength | null }>;
   /** Where each index's data came from (Dhan / Angel One, and why not the chosen one). */
@@ -985,6 +988,44 @@ export class EngineRunner {
     return out;
   }
 
+  /** Best / watch / skip for every watched index (or the one selected), from the scores and trends. */
+  advice(): Advice {
+    const trends = this.trends();
+    const inputs: IndexInput[] = this.multiActive()
+      ? this.watchItems().map((w) => ({
+          symbol: w.symbol,
+          label: w.label,
+          confidence: w.confidence,
+          signal: w.signal,
+          direction: w.direction,
+          strike: w.strike,
+          decision: w.decision,
+          inTrade: w.inTrade,
+          tradePnl: w.trade?.pnl ?? null,
+          off: w.off,
+          paused: w.paused,
+          error: w.error,
+          trend: trends[w.symbol] ?? null,
+        }))
+      : this.dashboard
+        ? [
+            {
+              symbol: this.config.symbol,
+              label: catalogEntry(this.config.symbol)?.label ?? this.config.symbol,
+              confidence: this.dashboard.decision.confidence,
+              signal: this.dashboard.decision.signal,
+              direction: this.dashboard.decision.direction,
+              strike: this.dashboard.decision.selectedStrike,
+              decision: this.dashboard.decision.decisionText,
+              inTrade: !!this.state.position,
+              tradePnl: this.livePnl().tradePnl,
+              trend: trends[this.config.symbol] ?? null,
+            },
+          ]
+        : [];
+    return advise(inputs, this.config);
+  }
+
   /** The engine's latest option chain for an index (multi-index: each watched one), if loaded. */
   chainFor(symbol: string): ChainSnapshot | null {
     if (this.multiActive()) return this.multiData[symbol]?.chain ?? null;
@@ -1503,6 +1544,7 @@ export class EngineRunner {
           .map((b) => [b, { amount: this.fundsBy[b]!, at: this.fundsAt[b] ?? null }]),
       ),
       trend: this.trends(),
+      advice: this.advice(),
       closes: this.candles.slice(-150).map((c) => c.c),
       marketOpen: this.marketOpen(),
       demo,

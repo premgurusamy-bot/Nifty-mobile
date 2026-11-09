@@ -86,6 +86,33 @@ export function AlertSettingsCard() {
         </Text>
       )}
 
+      <Text style={[ui.sectionTitle]}>Voice</Text>
+      <Row
+        label="Voice advisor: say the best index, which to watch / skip and what's next"
+        value={prefs.voice}
+        onChange={(v) => void update({ voice: v })}
+      />
+      {prefs.voice ? (
+        <>
+          <Text style={s.label}>Repeat the advice (market hours)</Text>
+          <Segmented
+            options={[
+              { label: 'On change', value: '0' },
+              { label: '2 min', value: '2' },
+              { label: '5 min', value: '5' },
+              { label: '10 min', value: '10' },
+            ]}
+            value={String(prefs.voiceEveryMin)}
+            onChange={(v) => void update({ voiceEveryMin: Number(v) })}
+          />
+          <Row label="Also read out alerts (signal, entry, target, stop…)" value={prefs.voiceEvents} onChange={(v) => void update({ voiceEvents: v })} />
+          <Text style={[ui.muted, { fontSize: 12 }]}>
+            Uses the phone&apos;s text-to-speech (Indian English), at the alert volume. It speaks when the best index
+            changes and has held for 15 s, so a flickering score doesn&apos;t keep talking.
+          </Text>
+        </>
+      ) : null}
+
       <Text style={[ui.sectionTitle]}>Alerts (this phone)</Text>
       <Row label="Alerts on" value={prefs.enabled} onChange={(v) => void update({ enabled: v })} />
       {prefs.enabled ? (

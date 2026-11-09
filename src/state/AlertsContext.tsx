@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from 'expo-audio';
 import * as DocumentPicker from 'expo-document-picker';
 import { File, Paths } from 'expo-file-system';
+import * as Speech from 'expo-speech';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppState, Platform, Pressable, StyleSheet, Text, Vibration, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -38,6 +39,8 @@ interface AlertsValue {
   bg: { supported: boolean; running: boolean; error: string | null; notifications: boolean | null };
   /** Turn background running on (also turns auto-refresh on) or off. */
   setBackground: (on: boolean) => Promise<void>;
+  /** Speak the advisor's current advice now (best index / watch / skip / next). */
+  speakAdvice: () => void;
 }
 
 const Ctx = createContext<AlertsValue | null>(null);
@@ -132,10 +135,27 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  /** Speak (voice advisor / alerts): Indian English, at the alert volume. */
+  const say = useCallback((text: string, interrupt = false) => {
+    if (!text || Platform.OS === 'web') return;
+    try {
+      if (interrupt) void Speech.stop();
+      Speech.speak(text, { language: 'en-IN', rate: 1.0, volume: VOLUME[prefsRef.current.volume] });
+    } catch {
+      /* no voice engine on this phone: alerts still sound */
+    }
+  }, []);
+
   const raise = useCallback(
     (items: AlertItem[]) => {
       if (!items.length) return;
       ring(items[items.length - 1].category);
+      const pv = prefsRef.current;
+      if (pv.voice && pv.voiceEvents) {
+        // After the chime: read the alert out.
+        const text = items.map((a) => `${a.title}. ${a.message}`).join(' ').replace(/Rs /g, 'rupees ');
+        setTimeout(() => say(text, true), 700);
+      }
       const p = prefsRef.current;
       // Away from the app: a system notification that pops up over other apps / the lock screen.
       if (p.popup && AppState.currentState !== 'active') {
@@ -143,8 +163,31 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
       }
       if (p.popup) setShown((s) => [...[...items].reverse(), ...s].slice(0, 3));
     },
-    [ring],
+    [ring, say],
   );
+
+  // Voice advisor: say the best index when the advice changes (once it has held for 15 s, so a score
+  // flicker doesn't talk), and again every few minutes while the market is open.
+  const advice = useRef({ key: '', since: 0, spokenKey: '', spokenAt: 0 });
+  useEffect(() => {
+    const a = snap?.advice;
+    const p = prefsRef.current;
+    if (!a || !p.voice || !snap?.marketOpen) return;
+    const now = Date.now();
+    const st = advice.current;
+    if (a.key !== st.key) {
+      st.key = a.key;
+      st.since = now;
+    }
+    const steady = now - st.since >= 15_000;
+    const changed = steady && a.key !== st.spokenKey;
+    const due = p.voiceEveryMin > 0 && now - st.spokenAt >= p.voiceEveryMin * 60_000;
+    if ((changed || (due && steady)) && a.speech) {
+      st.spokenKey = a.key;
+      st.spokenAt = now;
+      say(a.speech);
+    }
+  }, [snap, say]);
 
   // Watch the engine's event log (and live-order error statuses).
   useEffect(() => {
@@ -237,6 +280,12 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
         return a.name;
       },
       bg,
+      speakAdvice: () => {
+        const a = snapRef.current?.advice;
+        say(a?.speech || 'No advice yet. Refresh first.', true);
+        advice.current.spokenAt = Date.now();
+        if (a) advice.current.spokenKey = a.key;
+      },
       setBackground: async (on) => {
         if (on) {
           const granted = await ensureNotificationPermission().catch(() => false);
@@ -256,7 +305,7 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
           },
         ]),
     }),
-    [prefs, persist, raise, bg, updateConfig],
+    [prefs, persist, raise, bg, updateConfig, say],
   );
 
   return (

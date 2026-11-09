@@ -23,6 +23,12 @@ export interface AlertPrefs {
   categories: Record<AlertCategory, boolean>;
   /** Android: keep running in the background (foreground service + pop-up notifications). */
   background: boolean;
+  /** Voice advisor: speak the best index / watch / skip and what happens next. */
+  voice: boolean;
+  /** Repeat the advice every N minutes while the market is open (0 = only when it changes). */
+  voiceEveryMin: number;
+  /** Also read out alerts (signal, entry, target, stop…). */
+  voiceEvents: boolean;
 }
 
 export const VOLUME: Record<VolumeLevel, number> = { LOW: 0.3, MEDIUM: 0.6, HIGH: 1 };
@@ -55,6 +61,9 @@ export const DEFAULT_ALERT_PREFS: AlertPrefs = {
   vibrate: true,
   categories: { signal: true, entry: true, target: true, lock: true, stop: true, exit: true, error: true },
   background: false,
+  voice: true,
+  voiceEveryMin: 5,
+  voiceEvents: true,
 };
 
 /** Merge stored prefs over the defaults (older saves may lack newer fields). */

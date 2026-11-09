@@ -25,6 +25,8 @@ import { Button, Card, Empty, Segmented, styles as ui } from '../../components/u
 import type { TradeMode } from '../../lib/engine/types';
 import { formatINR, formatNumber, formatSigned } from '../../lib/format';
 import { LivePnlCard } from '../../components/LivePnl';
+import { useAlerts } from '../../state/AlertsContext';
+import type { Advice } from '../../lib/advisor';
 import { useEngine } from '../../state/EngineContext';
 import { colors, pnlColor } from '../../theme';
 
@@ -45,6 +47,46 @@ const time = (ms: number | null) => {
   const d = new Date(ms + 5.5 * 3600_000);
   return `${d.toISOString().slice(0, 10)} ${d.toISOString().slice(11, 19)} IST`;
 };
+
+const VERDICT_COLOR: Record<string, string> = {
+  'IN TRADE': colors.accent,
+  BEST: colors.up,
+  WATCH: colors.warn,
+  SKIP: colors.muted,
+  OFF: colors.muted,
+};
+
+/** Advisor: which index is best to watch, which to watch / skip, what's next — spoken by voice too. */
+function AdvisorCard({ advice }: { advice: Advice }) {
+  const { speakAdvice, prefs } = useAlerts();
+  return (
+    <Card style={{ gap: 8 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <Text style={[ui.sectionTitle, { marginTop: 0, flexShrink: 1 }]}>Advisor</Text>
+        <Pressable onPress={speakAdvice} accessibilityRole="button" accessibilityLabel="Speak the advice" style={s.speakBtn}>
+          <Text style={{ color: colors.text, fontWeight: '700' }}>🔊 Speak</Text>
+        </Pressable>
+      </View>
+      <Text style={[ui.title, { color: advice.best ? colors.up : colors.muted }]}>{advice.headline}</Text>
+      {advice.items
+        .filter((i) => i.verdict !== 'OFF')
+        .map((i) => (
+          <View key={i.symbol} style={{ gap: 2 }}>
+            <Text style={{ color: colors.text, fontWeight: '700' }}>
+              <Text style={{ color: VERDICT_COLOR[i.verdict] }}>{i.verdict}</Text> · {i.label}
+              <Text style={{ color: colors.muted, fontWeight: '400' }}> — {i.reason}</Text>
+            </Text>
+            {i.next ? <Text style={[ui.muted, { fontSize: 12 }]}>Next: {i.next}</Text> : null}
+          </View>
+        ))}
+      <Text style={[ui.muted, { fontSize: 11 }]}>
+        {prefs.voice
+          ? `Spoken when the best index changes${prefs.voiceEveryMin ? ` and every ${prefs.voiceEveryMin} min` : ''} (market hours). Settings → Alerts → Voice.`
+          : 'Voice is off (Settings → Alerts → Voice).'}
+      </Text>
+    </Card>
+  );
+}
 
 /** Lots per trade: − / + (Fixed lots). From another sizing mode the first tap switches to Fixed lots. */
 function LotStepper(p: {
@@ -270,6 +312,7 @@ export default function DashboardScreen() {
           <Switch value={cfg.autoRefresh} disabled={toggling} onValueChange={toggleAuto} />
         </View>
       </View>
+      {snap.advice && snap.advice.items.length ? <AdvisorCard advice={snap.advice} /> : null}
       {snap.watch ? (
         <Card style={{ gap: 8 }}>
           <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Watching {snap.watch.length} indexes</Text>
@@ -766,6 +809,14 @@ const s = StyleSheet.create({
   signal: { fontSize: 34, fontWeight: '800', letterSpacing: 0.5 },
   banner: { color: '#fff', backgroundColor: '#7F1D1D', padding: 10, borderRadius: 10, fontWeight: '600' },
   label: { color: colors.muted, fontSize: 12 },
+  speakBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 10,
+    backgroundColor: colors.cardAlt,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
   stepRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
   stepBtn: {
     width: 44,

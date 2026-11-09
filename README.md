@@ -357,6 +357,16 @@ the first quote of the day. Routes and headers follow Angel's official SmartAPI 
 
 Entry strength (Greeks) is guidance.
 
+## Voice advisor
+
+The Dashboard's **Advisor** card (and a voice, via `expo-speech`, Indian English at the alert volume) ranks the
+watched indexes (`src/lib/advisor.ts`): **IN TRADE** first, then the **BEST** index to watch (highest of score +
+trend strength + entry strength among those worth watching), **WATCH**, and **SKIP** with the reason — no data,
+paused, sideways, a tiring / breaking trend, a setup against the trend, a blocked gate, or a low score — and
+**what happens next** for each (e.g. "Setup armed: CE 24300 enters if price breaks 24,312.50 after the hold").
+It speaks when the advice changes and has held for 15 s (so a flickering score doesn't talk), and every 2 / 5 /
+10 minutes in market hours (Settings → Alerts → Voice; 🔊 Speak on the card any time); alerts can be read out too.
+
 ## Faster multi-index data, FIN NIFTY, auto-pause
 
 - Indexes load in **lanes** (`EngineDataSource.laneOf`): Dhan-fed and Angel-fed indexes load at the same time
