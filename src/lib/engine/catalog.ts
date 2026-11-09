@@ -55,7 +55,7 @@ export const CATALOG: CatalogEntry[] = [
     pointValue: 1,
     tickSize: 0.05,
     session: 'NSE',
-    maxLots: 10,
+    maxLots: 25, // under NSE's per-order freeze limit
     unit: 'Option premium, lot 65',
     demoPrice: 24200,
   },
@@ -71,7 +71,7 @@ export const CATALOG: CatalogEntry[] = [
     pointValue: 1,
     tickSize: 0.05,
     session: 'NSE',
-    maxLots: 10,
+    maxLots: 25, // under NSE's per-order freeze limit
     unit: 'Option premium, lot 30',
     demoPrice: 54000,
   },
@@ -87,7 +87,7 @@ export const CATALOG: CatalogEntry[] = [
     pointValue: 1,
     tickSize: 0.05,
     session: 'NSE',
-    maxLots: 10,
+    maxLots: 25, // under NSE's per-order freeze limit
     unit: 'Option premium, lot 60',
     demoPrice: 25500,
   },

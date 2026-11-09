@@ -116,7 +116,7 @@ test('saved settings: the old 5-minute default becomes 3 once; your own values a
   };
   const a = await make({ ...DEFAULT_CONFIG, confirmHoldMinutes: 5, configRev: undefined });
   assert.equal(a.now, 3);
-  assert.equal(a.stored.configRev, 2);
+  assert.equal(a.stored.configRev, 3);
   assert.equal((await make({ ...DEFAULT_CONFIG, confirmHoldMinutes: 10, configRev: undefined })).now, 10);
   assert.equal((await make({ ...DEFAULT_CONFIG, confirmHoldMinutes: 0, configRev: undefined })).now, 0);
   // after the update, choosing 5 again is respected

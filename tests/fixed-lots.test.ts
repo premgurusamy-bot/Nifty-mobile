@@ -49,8 +49,8 @@ test('40% stop is allowed (the 25% stop filter does not apply); min premium stil
 });
 
 test('max lots still caps; capital that cannot pay for the lots blocks the trade', () => {
-  assert.equal(buildTradePlan(chain, 'PE', 24150, atr, fixed({ fixedLots: 15 }))!.qty, 650); // cap 10
-  assert.match(buildTradePlan(chain, 'PE', 24150, atr, fixed({ fixedLots: 15 }))!.sizing!, /\(max lots 10\)/);
+  assert.equal(buildTradePlan(chain, 'PE', 24150, atr, fixed({ fixedLots: 30, capitalPaper: 1e7 }))!.qty, 25 * 65); // cap 25
+  assert.match(buildTradePlan(chain, 'PE', 24150, atr, fixed({ fixedLots: 30, capitalPaper: 1e7 }))!.sizing!, /\(max lots 25\)/);
   // 10 lots × 65 × 78.35 = ₹50,927 > ₹40,000 paper capital
   const poor = buildTradePlan(chain, 'PE', 24150, atr, fixed({ fixedLots: 10, capitalPaper: 40000 }))!;
   assert.equal(poor.qty, 0);

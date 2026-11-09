@@ -228,7 +228,7 @@ export const DEFAULT_CONFIG: EngineConfig = {
   tickSize: 0.05,
   session: 'NSE',
   // Guards against absurd sizing when a premium is near zero (expiry afternoon): risk/lot → tiny → lots → huge.
-  maxLots: 10,
+  maxLots: 25,
   rollDays: 3,
   futSecurityId: '',
   futExpiry: '',

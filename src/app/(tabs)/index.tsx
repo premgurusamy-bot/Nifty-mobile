@@ -46,6 +46,55 @@ const time = (ms: number | null) => {
   return `${d.toISOString().slice(0, 10)} ${d.toISOString().slice(11, 19)} IST`;
 };
 
+/** Lots per trade: − / + (Fixed lots). From another sizing mode the first tap switches to Fixed lots. */
+function LotStepper(p: {
+  lots: number;
+  fixed: boolean;
+  max: number;
+  unitsPerLot: number;
+  cost: number | null;
+  maxLoss: number | null;
+  onChange: (lots: number) => void;
+}) {
+  const set = (n: number) => p.onChange(Math.min(p.max, Math.max(1, n)));
+  return (
+    <View style={{ gap: 4 }}>
+      <View style={s.stepRow}>
+        <Text style={s.label}>Lots per trade</Text>
+        <View style={s.stepRow}>
+          <Pressable
+            onPress={() => set(p.lots - 1)}
+            disabled={p.fixed && p.lots <= 1}
+            accessibilityRole="button"
+            accessibilityLabel="Fewer lots"
+            style={[s.stepBtn, p.fixed && p.lots <= 1 && { opacity: 0.4 }]}
+          >
+            <Text style={s.stepTxt}>−</Text>
+          </Pressable>
+          <Text style={s.stepVal} accessibilityLabel={`${p.lots} lots`}>
+            {p.lots}
+          </Text>
+          <Pressable
+            onPress={() => set(p.lots + 1)}
+            disabled={p.fixed && p.lots >= p.max}
+            accessibilityRole="button"
+            accessibilityLabel="More lots"
+            style={[s.stepBtn, p.fixed && p.lots >= p.max && { opacity: 0.4 }]}
+          >
+            <Text style={s.stepTxt}>+</Text>
+          </Pressable>
+        </View>
+      </View>
+      <Text style={[ui.muted, { fontSize: 12 }]}>
+        {p.lots * p.unitsPerLot} qty
+        {p.cost ? ` · needs ~${formatINR(p.cost, 0)}` : ''}
+        {p.maxLoss ? ` · max loss ${formatINR(p.maxLoss, 0)}` : ''}
+        {p.fixed ? ` · max ${p.max} lots` : ' · tap − / + to use fixed lots'}
+      </Text>
+    </View>
+  );
+}
+
 export default function DashboardScreen() {
   const { snap, busy, error, refresh, updateConfig, mode, phone, enter, cancelEntry, exit, setTradeMode, setActive } = useEngine();
   // null = follow the market premium; a string = the price you typed.
@@ -389,6 +438,17 @@ export default function DashboardScreen() {
               />
             ) : cand ? (
               <>
+                <LotStepper
+                  lots={cfg.sizingMode === 'FIXED' ? cfg.fixedLots : Math.round(cand.qty / Math.max(1, isFut ? 1 : cfg.lotSize))}
+                  fixed={cfg.sizingMode === 'FIXED'}
+                  max={cfg.maxLots > 0 ? cfg.maxLots : 100}
+                  unitsPerLot={isFut ? 1 : cfg.lotSize}
+                  cost={cand.qty > 0 ? cand.entry * cand.qty * (isFut ? 0 : 1) : null}
+                  maxLoss={cand.qty > 0 ? cand.maxLoss : null}
+                  onChange={(n) =>
+                    void updateConfig({ sizingMode: 'FIXED', fixedLots: n }).catch((e) => setTradeMsg((e as Error).message))
+                  }
+                />
                 <Text style={ui.muted}>
                   {isFut ? 'Price' : 'Premium'} now {formatNumber(cand.entry, dp)} · quantity {qtyLabel(cand.qty)}
                   {isFut ? ` · ₹${formatNumber(cfg.pointValue, 0)} per point per lot` : ''}
@@ -675,6 +735,19 @@ const s = StyleSheet.create({
   signal: { fontSize: 34, fontWeight: '800', letterSpacing: 0.5 },
   banner: { color: '#fff', backgroundColor: '#7F1D1D', padding: 10, borderRadius: 10, fontWeight: '600' },
   label: { color: colors.muted, fontSize: 12 },
+  stepRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  stepBtn: {
+    width: 44,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: colors.cardAlt,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  stepTxt: { color: colors.text, fontSize: 22, fontWeight: '800' },
+  stepVal: { color: colors.text, fontSize: 22, fontWeight: '800', minWidth: 40, textAlign: 'center', fontVariant: ['tabular-nums'] },
   watchRow: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -336,17 +336,24 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
 }
 
 /** Current settings revision: 1 = hold before entry 5 → 3 minutes. */
-export const CONFIG_REV = 2;
+export const CONFIG_REV = 3;
 
 /**
  * One-time updates to saved settings. Rev 1: the hold-before-entry default changed from 5 to 3
  * minutes; a saved 5 (the old default) becomes 3, any other value you chose is kept.
  * Rev 2: FIN NIFTY joins the watch list, on Angel One (data and orders) — Settings can change it.
+ * Rev 3: default size Fixed 16 lots (− / + on the Dashboard); the index-option lot cap 10 → 25
+ * (under NSE's per-order freeze limit). A cap you set yourself is kept.
  */
 export function migrateConfig(cfg: EngineConfig, saved: Partial<EngineConfig>): EngineConfig {
   const rev = saved.configRev ?? 0;
   const next = { ...cfg, configRev: CONFIG_REV };
   if (rev < 1 && saved.confirmHoldMinutes === 5) next.confirmHoldMinutes = 3;
+  if (rev < 3) {
+    next.sizingMode = 'FIXED';
+    next.fixedLots = 16;
+    if (next.instrumentKind === 'INDEX_OPTIONS' && next.maxLots === 10) next.maxLots = 25;
+  }
   if (rev < 2) {
     const add = (list: string[] | undefined) => [...new Set([...(list ?? []), 'FINNIFTY'])];
     next.watchSymbols = add(next.watchSymbols);
