@@ -18,6 +18,7 @@ import { formatINR, formatNumber } from '../lib/format';
 import { lockedProfit } from '../lib/engine/profitLock';
 import { AlertSettingsCard } from '../components/AlertSettings';
 import { AngelSettingsCard } from '../components/AngelSettings';
+import { LicenseMakerCard } from '../components/LicenseMaker';
 import { ScanQrButton } from '../components/QrScanner';
 import { otpauthInfo, parseTotpKey } from '../lib/totp';
 import { Button, Card, Segmented, styles as ui } from '../components/ui';
@@ -901,6 +902,8 @@ export default function SettingsScreen() {
         <AngelSettingsCard />
 
         <AlertSettingsCard />
+
+        <LicenseMakerCard />
 
         {cfg ? (
           <Card style={{ gap: 12 }}>

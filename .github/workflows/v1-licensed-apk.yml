@@ -1,0 +1,91 @@
+# The licensed copy "Nifty Trader v1": the v1.0 release's code with the license lock added
+# (editions/v1-licensed/apply.mjs). Its own app (package ...niftytrader.v1licensed), published as
+# a release "v1-licensed-N" that never replaces "latest". Download (newest licensed build): see the
+# Releases page, asset nifty-trader-v1-licensed.apk.
+name: Licensed v1 APK
+
+on:
+  push:
+    branches: [ccr-f60cf00a-vmzuuf, main]
+    paths:
+      - 'editions/v1-licensed/**'
+      - 'src/lib/license.ts'
+      - 'src/lib/licensePublicKey.ts'
+      - '.github/workflows/v1-licensed-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v1-licensed-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: src
+
+      - uses: actions/checkout@v4
+        with:
+          ref: v1.0
+          path: v1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: v1/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            21
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install dependencies (v1.0) and the license library
+        working-directory: v1
+        run: |
+          npm ci
+          npm install --no-save tweetnacl@1.0.3
+
+      - name: Add the license lock
+        working-directory: v1
+        run: |
+          node ../src/editions/v1-licensed/apply.mjs . ../src
+          npx tsc --noEmit
+
+      - name: Generate the Android project
+        working-directory: v1
+        run: npx expo prebuild --platform android --no-install
+        env:
+          CI: 1
+
+      - name: Build release APK
+        working-directory: v1/android
+        run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp v1/android/app/build/outputs/apk/release/app-release.apk out/nifty-trader-v1-licensed.apk
+          ls -la out
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ format('v1-licensed-{0}', github.run_number) }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ format('Nifty Trader v1 — licensed (build {0})', github.run_number) }}
+          make_latest: 'false'
+          files: out/nifty-trader-v1-licensed.apk
+          body: |
+            The licensed copy of Nifty Trader v1 (the v1.0 release with the license lock),
+            built from ${{ github.sha }}. It opens only with a key made for the phone's App ID.
