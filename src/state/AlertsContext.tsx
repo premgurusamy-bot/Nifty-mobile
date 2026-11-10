@@ -41,6 +41,8 @@ interface AlertsValue {
   setBackground: (on: boolean) => Promise<void>;
   /** Speak the advisor's current advice now (best index / watch / skip / next). */
   speakAdvice: () => void;
+  /** Speak today's pre-market report now. */
+  speakPreMarket: () => void;
 }
 
 const Ctx = createContext<AlertsValue | null>(null);
@@ -189,6 +191,17 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
     }
   }, [snap, say]);
 
+  // Pre-market report (8:30–9:15): spoken when it first comes and when its read changes
+  // (e.g. the pre-open prices at about 9:08 show the gap).
+  const preSpoken = useRef('');
+  useEffect(() => {
+    const pm = snap?.preMarket;
+    const p = prefsRef.current;
+    if (!pm || !p.voice || pm.phase === 'OPEN' || !pm.speech || pm.key === preSpoken.current) return;
+    preSpoken.current = pm.key;
+    say(pm.speech);
+  }, [snap, say]);
+
   // Watch the engine's event log (and live-order error statuses).
   useEffect(() => {
     if (!snap) return;
@@ -285,6 +298,11 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
         say(a?.speech || 'No advice yet. Refresh first.', true);
         advice.current.spokenAt = Date.now();
         if (a) advice.current.spokenKey = a.key;
+      },
+      speakPreMarket: () => {
+        const pm = snapRef.current?.preMarket;
+        say(pm?.speech || 'No pre-market report yet.', true);
+        if (pm) preSpoken.current = pm.key;
       },
       setBackground: async (on) => {
         if (on) {

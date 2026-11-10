@@ -20,6 +20,8 @@ import { orderBroker, sizingCapital, type BrokerName, type SizingConfig } from '
 import { applyTick, tickRequests, type QuoteSource } from './ticks.ts';
 import { entryStrength, findTrend, type EntryStrength, type TrendReport } from './trend.ts';
 import { advise, type Advice, type IndexInput } from '../advisor.ts';
+import { breadthGroup, computeBreadth, type Breadth, type StockQuote } from '../breadth.ts';
+import { preMarketReport, preMarketWindow, type PreMarketReport } from '../premarket.ts';
 import { blankSymbolState, isBusy, normalizeSymbolState, pickSymbolState, runMultiCycle, splitFactor } from './multi.ts';
 import {
   DEFAULT_CONFIG,
@@ -167,6 +169,10 @@ export interface EngineSnapshot {
   live: LivePnl;
   /** Multi-index: every watched index at a glance (absent when off). */
   watch?: WatchItem[];
+  /** Advances / declines of the index stocks (NIFTY 50 and Bank Nifty baskets), when read. */
+  breadth?: Partial<Record<'NIFTY' | 'BANKNIFTY', Breadth>>;
+  /** Pre-market report (8:30–9:15 IST, kept for the day). */
+  preMarket?: PreMarketReport | null;
   /** Capital-based sizing: the capital a trade may use now (CAPITAL mode only). */
   capital?: { capital: number; base: number; source: string; funds: number | null };
 }
@@ -259,6 +265,8 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   if (patch.fastTicks !== undefined) next.fastTicks = !!patch.fastTicks;
   if (patch.gapGuard !== undefined) next.gapGuard = !!patch.gapGuard;
   if (patch.closedCandleScoring !== undefined) next.closedCandleScoring = !!patch.closedCandleScoring;
+  if (patch.breadth !== undefined) next.breadth = !!patch.breadth;
+  if (patch.preMarketReport !== undefined) next.preMarketReport = !!patch.preMarketReport;
   num('chainEverySeconds', 0, 120);
   if (patch.trendFilter !== undefined) next.trendFilter = !!patch.trendFilter;
   if (patch.trendBlockSideways !== undefined) next.trendBlockSideways = !!patch.trendBlockSideways;
@@ -460,6 +468,19 @@ export class EngineRunner {
   shedPauseMs = 10 * 60_000;
   private slowLoads = 0;
   private fastLoads = 0;
+  /** Quotes of an index basket's stocks for market breadth; null in demo. */
+  breadthSource: ((group: 'NIFTY' | 'BANKNIFTY') => Promise<StockQuote[]>) | null = null;
+  breadth: Partial<Record<'NIFTY' | 'BANKNIFTY', Breadth>> = {};
+  breadthError = '';
+  /** Breadth is re-read this often (real ms). */
+  breadthEveryMs = 60_000;
+  private breadthAt = 0;
+  private breadthBusy: Promise<void> | null = null;
+  /** Pre-market report (8:30–9:15), updated once a minute in the window and kept for the day. */
+  preMarket: PreMarketReport | null = null;
+  preMarketEveryMs = 60_000;
+  private preMarketAt = 0;
+  private preMarketBusy: Promise<void> | null = null;
   /** Fetches the live account balance (phone / server with Dhan); null in demo. */
   fundsSource: ((broker: BrokerName) => Promise<number>) | null = null;
   private running: Promise<void> | null = null;
@@ -1058,6 +1079,7 @@ export class EngineRunner {
           paused: w.paused,
           error: w.error,
           trend: trends[w.symbol] ?? null,
+          breadth: this.breadthFor(w.symbol),
           ...market(w.symbol, this.multiDash[w.symbol]),
         }))
       : this.dashboard
@@ -1073,6 +1095,7 @@ export class EngineRunner {
               inTrade: !!this.state.position,
               tradePnl: this.livePnl().tradePnl,
               trend: trends[this.config.symbol] ?? null,
+              breadth: this.breadthFor(this.config.symbol),
               ...market(this.config.symbol, this.dashboard),
             },
           ]
@@ -1550,6 +1573,95 @@ export class EngineRunner {
     return runBacktest(this.candles, this.config);
   }
 
+  /** The watched indexes that are on (or the selected one). */
+  private liveSymbols(): string[] {
+    return this.multiActive() ? this.watchList().filter((s) => !this.isOff(s)) : [this.config.symbol];
+  }
+
+  /** The breadth baskets the indexes on need (index options only). */
+  private breadthGroups(): ('NIFTY' | 'BANKNIFTY')[] {
+    const syms = this.liveSymbols().filter((s) => catalogEntry(s)?.kind !== 'MCX_FUTURES');
+    return [...new Set(syms.map(breadthGroup))];
+  }
+
+  /** Breadth for an index, if read in the last 5 minutes. */
+  breadthFor(symbol: string): Breadth | null {
+    if (!this.config.breadth || catalogEntry(symbol)?.kind === 'MCX_FUTURES') return null;
+    const b = this.breadth[breadthGroup(symbol)];
+    return b && Math.abs(Date.now() - b.at) < 5 * 60_000 ? b : null;
+  }
+
+  /** Re-read market breadth (one quote call per basket), at most once a minute unless forced. */
+  refreshBreadth(force = false): Promise<void> {
+    if (!this.breadthSource || !this.config.breadth) return Promise.resolve();
+    if (this.breadthBusy) return this.breadthBusy;
+    if (!force && Date.now() - this.breadthAt < this.breadthEveryMs) return Promise.resolve();
+    this.breadthAt = Date.now();
+    this.breadthBusy = (async () => {
+      const errs: string[] = [];
+      for (const g of this.breadthGroups()) {
+        try {
+          const b = computeBreadth(g, await this.breadthSource!(g), Date.now());
+          if (b) this.breadth[g] = b;
+          else errs.push(`${g}: too few stock prices`);
+        } catch (e) {
+          errs.push(`${g}: ${(e as Error).message}`);
+        }
+      }
+      this.breadthError = errs.join('; ');
+    })().finally(() => {
+      this.breadthBusy = null;
+    });
+    return this.breadthBusy;
+  }
+
+  /**
+   * Pre-market report: loads yesterday's candles (and the pre-open index price) of the indexes on,
+   * reads breadth from the stocks' pre-open prices, and builds the report. No engine cycle runs and
+   * no order is placed before 9:15.
+   */
+  refreshPreMarket(force = false): Promise<void> {
+    if (!this.config.preMarketReport) return Promise.resolve();
+    if (this.preMarketBusy) return this.preMarketBusy;
+    if (!force && Date.now() - this.preMarketAt < this.preMarketEveryMs) return Promise.resolve();
+    this.preMarketAt = Date.now();
+    this.preMarketBusy = (async () => {
+      const now = this.clock();
+      await this.refreshBreadth(true).catch(() => {});
+      const syms = this.liveSymbols().filter((s) => catalogEntry(s)?.kind !== 'MCX_FUTURES');
+      const inputs = [];
+      for (const sym of syms) {
+        try {
+          const d = await this.source.load(this.cfgFor(sym), now);
+          inputs.push({
+            symbol: sym,
+            label: catalogEntry(sym)?.label ?? sym,
+            candles: d.candles,
+            spot: d.chain.spot || null,
+            breadth: this.config.breadth ? (this.breadth[breadthGroup(sym)] ?? null) : null,
+          });
+        } catch (e) {
+          this.status = `Pre-market: ${sym} not loaded (${(e as Error).message})`;
+        }
+      }
+      if (inputs.length) {
+        this.preMarket = preMarketReport(inputs, now, { gapGuard: this.config.gapGuard, gapGuardPct: this.config.gapGuardPct });
+        this.status = 'Pre-market report updated (no orders before 9:15)';
+      }
+    })().finally(() => {
+      this.preMarketBusy = null;
+    });
+    return this.preMarketBusy;
+  }
+
+  /** Today's pre-market report (null on another day). */
+  preMarketToday(): PreMarketReport | null {
+    const p = this.preMarket;
+    if (!p) return null;
+    const day = (t: number) => new Date(t + 5.5 * 3600_000).toISOString().slice(0, 10);
+    return day(p.at) === day(this.clock()) ? p : null;
+  }
+
   marketOpen() {
     return this.source.alwaysOpen || isWithinMarketHours(this.clock(), this.config.session);
   }
@@ -1565,11 +1677,16 @@ export class EngineRunner {
       const secs = Math.max(MIN_REFRESH_SECONDS, this.config.refreshSeconds);
       if (this.running) return;
       const due = !this.lastRefresh || this.clock() - this.lastRefresh >= secs * 1000 || !!this.source.alwaysOpen;
+      if (!this.source.alwaysOpen && preMarketWindow(this.clock())) {
+        void this.refreshPreMarket().catch(() => {});
+        return;
+      }
       if (!due && !this.canTick()) return;
       if (!this.marketOpen()) {
         this.status = 'Market Closed (auto-refresh paused)';
         return;
       }
+      void this.refreshBreadth().catch(() => {});
       // A full refresh when due; in between, a fast tick on Dhan quotes (about one a second).
       void (due ? this.refresh() : this.tick());
     }, tickMs);
@@ -1599,6 +1716,8 @@ export class EngineRunner {
       ),
       trend: this.trends(),
       advice: this.advice(),
+      ...(this.config.breadth && Object.keys(this.breadth).length ? { breadth: this.breadth } : {}),
+      preMarket: this.preMarketToday(),
       closes: this.candles.slice(-150).map((c) => c.c),
       marketOpen: this.marketOpen(),
       demo,

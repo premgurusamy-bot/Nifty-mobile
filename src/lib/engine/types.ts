@@ -166,6 +166,10 @@ export interface EngineConfig {
   /** Gap guard: after an opening gap of at least gapGuardPct %, no new entry in the first 15 minutes. */
   gapGuard: boolean;
   gapGuardPct: number;
+  /** Market breadth: advances / declines of the index's stocks (one quote call a minute) in the advisor. */
+  breadth: boolean;
+  /** Pre-market report 8:30–9:15 IST (yesterday's levels, the pre-open gap, the day's lean), spoken. */
+  preMarketReport: boolean;
   /** Index options whose market data comes from Angel One instead of Dhan. */
   angelSymbols: string[];
   /** Index options whose LIVE orders go to Angel One (the rest: Dhan). */
@@ -305,6 +309,8 @@ export const DEFAULT_CONFIG: EngineConfig = {
   trendMinStrength: 0,
   gapGuard: true,
   gapGuardPct: 0.5,
+  breadth: true,
+  preMarketReport: true,
   angelSymbols: ['FINNIFTY'],
   angelOrderSymbols: ['FINNIFTY'],
   brokerFailover: true,

@@ -39,6 +39,8 @@ interface EngineValue {
   setActive: (symbol: string) => Promise<void>;
   /** Multi-index: switch a watched index on / off (Dashboard). */
   setIndexOn: (symbol: string, on: boolean) => Promise<void>;
+  /** Read breadth and build the pre-market report now. */
+  marketRead: () => Promise<void>;
   /** Screen the indexes or the MCX minis now (live in phone mode, simulated in demo). */
   screener: (group?: ScreenGroup) => Promise<ScreenReport>;
 }
@@ -269,6 +271,18 @@ export function EngineProvider({ children }: { children: ReactNode }) {
     [api, phoneApi, run],
   );
 
+  const marketRead = useCallback(
+    () =>
+      run(async () => {
+        if (phoneApi) return phoneApi.engineMarketRead();
+        if (api) throw new Error('The market read runs on the phone (not through a server).');
+        const r = demo.current!;
+        await r.refreshPreMarket(true);
+        return r.snapshot(true);
+      }),
+    [api, phoneApi, run],
+  );
+
   // Demo screener: one simulated market per index, kept between scans so it moves on.
   const demoSims = useRef<Record<string, SimEngineSource>>({});
   const screener = useCallback(async (group: ScreenGroup = 'INDEX'): Promise<ScreenReport> => {
@@ -315,6 +329,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
       screener,
       setActive,
       setIndexOn,
+      marketRead,
     }),
     [
       mode,
@@ -335,6 +350,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
       screener,
       setActive,
       setIndexOn,
+      marketRead,
     ],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

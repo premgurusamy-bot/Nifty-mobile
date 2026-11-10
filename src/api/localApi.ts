@@ -19,6 +19,7 @@ import { DhanEngineSource, dhanQuoteSource } from '../../server/engineSource.ts'
 import { AngelClient, angelFunds, type AngelSession } from '../../server/angel.ts';
 import { AngelEngineSource } from '../../server/angelSource.ts';
 import { RoutedEngineSource, routedQuoteSource } from '../../server/routedSource.ts';
+import { breadthFeed } from '../../server/breadthSource.ts';
 import { AngelGateway } from '../../server/brokers.ts';
 import { LiveTrader } from '../../server/liveTrader.ts';
 import { extractIps, isIPv4, runPreflight, type PreflightResult } from '../../server/preflight.ts';
@@ -88,6 +89,8 @@ export interface PhoneTrading {
   engineSetActive: (symbol: string) => Promise<EngineSnapshot>;
   /** Multi-index: switch a watched index on / off (Dashboard). */
   engineSetIndexOn: (symbol: string, on: boolean) => Promise<EngineSnapshot>;
+  /** Read market breadth and build the pre-market report now (any time of day). */
+  engineMarketRead: () => Promise<EngineSnapshot>;
   /** Screen the indexes (~10 s: one option chain per 3 s) or the MCX minis on live data. */
   screener: (group?: ScreenGroup) => Promise<ScreenReport>;
   /** Use (or drop) an Angel One session for the Angel-fed indexes. */
@@ -119,6 +122,7 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
   const trader = new LiveTrader(dhan, service, { sleep: o.sleep, angel: new AngelGateway(angel, routed.angelSource) });
   engine.afterCycle = (before, after) => trader.afterCycle(engine, before, after);
   engine.quoteSource = routedQuoteSource(dhanQuoteSource(dhan), angel);
+  engine.breadthSource = breadthFeed(dhan, angel);
   const angelStatus = (): AngelStatus => ({
     connected: angel.connected,
     clientCode: angel.session?.clientCode ?? '',
@@ -307,6 +311,11 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
     },
     engineSetIndexOn: async (symbol: string, on: boolean) => {
       await engine.exclusive(() => engine.setIndexOn(symbol, on));
+      return engine.snapshot();
+    },
+    engineMarketRead: async () => {
+      await engine.refreshBreadth(true);
+      await engine.refreshPreMarket(true);
       return engine.snapshot();
     },
     screener: (group?: ScreenGroup) =>

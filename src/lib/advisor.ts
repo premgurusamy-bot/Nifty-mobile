@@ -3,6 +3,7 @@
  * the gap, a trade) and says which is BEST to watch now, which to WATCH, which to SKIP — and what
  * happens next for each. Pure: the app speaks `speech` (expo-speech) when it changes.
  */
+import { breadthFit, type Breadth } from './breadth.ts';
 import type { EntryStrength, TrendReport } from './engine/trend.ts';
 
 export type AdviceVerdict = 'IN TRADE' | 'BEST' | 'WATCH' | 'SKIP' | 'OFF';
@@ -26,6 +27,8 @@ export interface IndexInput {
   ivPercentile?: number | null;
   /** The selected option's traded volume, and the median of the strikes around the money (same units). */
   volume?: { leg: number; median: number } | null;
+  /** Advances / declines of the index's stocks. */
+  breadth?: Breadth | null;
 }
 
 export type IvLevel = 'LOW' | 'NORMAL' | 'HIGH' | 'UNKNOWN';
@@ -56,6 +59,8 @@ export interface IndexAdvice {
   /** "IV 13.2 · low (22 pct)" and "volume heavy (1.8× nearby strikes)" for the screen. */
   ivText: string;
   volText: string;
+  /** "Nifty 50 stocks: 38 up, 12 down · weighted +0.42%" (empty when not known). */
+  breadthText: string;
   iv: IvLevel;
   vol: VolumeLevel;
 }
@@ -86,12 +91,12 @@ export function advise(inputs: IndexInput[], cfg: { confHigh: number; confWatch:
         : 'IV —';
     const volText =
       vl.level === 'UNKNOWN' ? 'volume —' : `volume ${vl.level.toLowerCase()} (${vl.ratio!.toFixed(1)}× nearby strikes)`;
-    const extra = { ivText, volText, iv: ivl, vol: vl.level };
+    const extra = { ivText, volText, breadthText: x.breadth?.text ?? '', iv: ivl, vol: vl.level };
     const r = adviseOne(x);
     return { ...r, ...extra };
   });
 
-  function adviseOne(x: IndexInput): Omit<IndexAdvice, 'ivText' | 'volText' | 'iv' | 'vol'> {
+  function adviseOne(x: IndexInput): Omit<IndexAdvice, 'ivText' | 'volText' | 'breadthText' | 'iv' | 'vol'> {
     const t = x.trend ?? null;
     const conf = x.confidence ?? 0;
     const side = x.direction === 'CE' || x.direction === 'LONG' ? 'up' : 'down';
@@ -138,6 +143,16 @@ export function advise(inputs: IndexInput[], cfg: { confHigh: number; confWatch:
     const vl = volumeLevel(x.volume);
     if (vl.level === 'THIN' && vl.ratio != null && vl.ratio < 0.25)
       return { ...base, verdict: 'SKIP', reason: `volume very thin on ${x.direction} ${x.strike}`, next: 'Poor fills: wait for volume.', rank: conf * 0.3 };
+    // Breadth: most of the index's stocks going the other way — the move has little behind it.
+    const bf = x.direction ? breadthFit(x.breadth, side) : breadthFit(null, side);
+    if (bf.fit === 'STRONG AGAINST')
+      return {
+        ...base,
+        verdict: 'SKIP',
+        reason: `${bf.words}, against the ${x.direction} setup`,
+        next: 'Wait until breadth turns.',
+        rank: conf * 0.3,
+      };
     // Worth watching: what comes next.
     const entry = t?.entry?.score ?? null;
     const ivl = ivLevel(x.ivPercentile);
@@ -147,7 +162,8 @@ export function advise(inputs: IndexInput[], cfg: { confHigh: number; confWatch:
       (t ? t.strength * 0.3 : 0) +
       (entry != null ? entry * 0.2 : 0) +
       (ivl === 'LOW' ? 5 : ivl === 'HIGH' ? -10 : 0) +
-      (vl.level === 'HEAVY' ? 5 : vl.level === 'THIN' ? -10 : 0);
+      (vl.level === 'HEAVY' ? 5 : vl.level === 'THIN' ? -10 : 0) +
+      (bf.fit === 'WITH' ? 5 : bf.fit === 'AGAINST' ? -10 : 0);
     let next: string;
     const trig = /break of ([\d,.]+)/.exec(x.decision)?.[1];
     if (/^SETUP (ARMED|HOLDING)/.test(x.decision))
@@ -160,7 +176,8 @@ export function advise(inputs: IndexInput[], cfg: { confHigh: number; confWatch:
     const strength = entry != null ? `, entry strength ${entry.toFixed(0)}` : '';
     const ivWord = ivl === 'LOW' ? ', IV low' : ivl === 'HIGH' ? ', IV high, premiums dear' : '';
     const volWord = vl.level === 'HEAVY' ? ', volume heavy' : vl.level === 'THIN' ? ', volume thin' : '';
-    return { ...base, verdict: 'WATCH', reason: `score ${conf.toFixed(0)}, ${trendWord}${strength}${ivWord}${volWord}`, next, rank };
+    const brWord = bf.words ? `, ${bf.words}${bf.fit === 'AGAINST' ? ', not with the setup' : ''}` : '';
+    return { ...base, verdict: 'WATCH', reason: `score ${conf.toFixed(0)}, ${trendWord}${strength}${ivWord}${volWord}${brWord}`, next, rank };
   }
 
   // The best: a trade first, else the highest-ranked index worth watching.

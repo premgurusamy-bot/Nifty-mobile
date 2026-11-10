@@ -21,6 +21,7 @@ import { DhanService, HttpError } from './service.ts';
 import { EngineRunner } from '../src/lib/engine/runner.ts';
 import { DhanEngineSource, FileStore, telegramNotifier } from './engine.ts';
 import { dhanQuoteSource } from './engineSource.ts';
+import { breadthFeed } from './breadthSource.ts';
 import { TokenKeeper } from './tokenKeeper.ts';
 import { writeEnvValue } from './envFile.ts';
 
@@ -234,6 +235,7 @@ export async function start(cfg: ServerConfig) {
   );
   await engine.init();
   engine.quoteSource = dhanQuoteSource(dhan);
+  engine.breadthSource = breadthFeed(dhan);
   engine.syncTimer();
   engine.fundsSource = async () => mapFunds(await dhan.fundLimit());
 

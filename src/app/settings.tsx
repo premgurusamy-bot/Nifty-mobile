@@ -1033,6 +1033,26 @@ export default function SettingsScreen() {
               />
             </View>
             <View style={s.switchRow}>
+              <Text style={s.label}>
+                Market breadth: advances / declines of the Nifty 50 and Bank Nifty stocks (one quote call a minute); the advisor skips a setup when breadth is strongly against it
+              </Text>
+              <Switch
+                value={cfg.breadth !== false}
+                onValueChange={(v) => void save({ breadth: v })}
+                accessibilityLabel="Market breadth"
+              />
+            </View>
+            <View style={s.switchRow}>
+              <Text style={s.label}>
+                Pre-market report 8:30–9:15 IST: yesterday&apos;s levels, the pre-open gap and the day&apos;s lean, spoken (no orders before 9:15)
+              </Text>
+              <Switch
+                value={cfg.preMarketReport !== false}
+                onValueChange={(v) => void save({ preMarketReport: v })}
+                accessibilityLabel="Pre-market report"
+              />
+            </View>
+            <View style={s.switchRow}>
               <Text style={s.label}>Live quotes every second between refreshes (Dhan)</Text>
               <Switch
                 value={cfg.fastTicks !== false}

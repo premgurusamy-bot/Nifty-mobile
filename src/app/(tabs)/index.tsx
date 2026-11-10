@@ -25,6 +25,7 @@ import { Button, Card, Empty, Segmented, styles as ui } from '../../components/u
 import type { TradeMode } from '../../lib/engine/types';
 import { formatINR, formatNumber, formatSigned } from '../../lib/format';
 import { LivePnlCard } from '../../components/LivePnl';
+import { BreadthCard, PreMarketCard } from '../../components/MarketRead';
 import { useAlerts } from '../../state/AlertsContext';
 import type { Advice } from '../../lib/advisor';
 import { useEngine } from '../../state/EngineContext';
@@ -152,7 +153,7 @@ function LotStepper(p: {
 }
 
 export default function DashboardScreen() {
-  const { snap, busy, error, refresh, updateConfig, mode, phone, enter, cancelEntry, exit, setTradeMode, setActive, setIndexOn } = useEngine();
+  const { snap, busy, error, refresh, updateConfig, mode, phone, enter, cancelEntry, exit, setTradeMode, setActive, setIndexOn, marketRead } = useEngine();
   // null = follow the market premium; a string = the price you typed.
   const [priceEdit, setPriceText] = useState<string | null>(null);
   const [toggling, setToggling] = useState(false);
@@ -319,7 +320,11 @@ export default function DashboardScreen() {
           <Switch value={cfg.autoRefresh} disabled={toggling} onValueChange={toggleAuto} />
         </View>
       </View>
+      {cfg.preMarketReport && !snap.demo && (snap.preMarket || !snap.marketOpen) ? (
+        <PreMarketCard report={snap.preMarket ?? null} onUpdate={marketRead} busy={busy} />
+      ) : null}
       {snap.advice && snap.advice.items.length ? <AdvisorCard advice={snap.advice} /> : null}
+      {cfg.breadth && snap.breadth ? <BreadthCard breadth={snap.breadth} /> : null}
       {snap.watch ? (
         <Card style={{ gap: 8 }}>
           <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Watching {snap.watch.length} indexes</Text>
