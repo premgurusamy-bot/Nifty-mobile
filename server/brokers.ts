@@ -9,6 +9,7 @@ import type { EngineConfig, TradePlan } from '../src/lib/engine/types.ts';
 import { AngelError, type AngelClient } from './angel.ts';
 import type { AngelEngineSource } from './angelSource.ts';
 import { DhanError, type DhanClient } from './dhan.ts';
+import type { PositionRow } from './orderSafety.ts';
 import { underlyingFor, type DhanService } from './service.ts';
 
 export type BrokerName = 'DHAN' | 'ANGEL';
@@ -44,6 +45,11 @@ export interface OrderGateway {
    * Returns its id, null when certainly not, undefined when it couldn't be checked.
    */
   findRecent(o: PlaceArgs, sinceMs: number): Promise<string | null | undefined>;
+  /**
+   * The account's open positions (net quantity per instrument and product). Throws when they
+   * can't be read — a failure must never look like "no position".
+   */
+  positions?(): Promise<PositionRow[]>;
 }
 
 /** The request never got a reply: it may or may not have been placed. */
@@ -98,6 +104,23 @@ export class DhanGateway implements OrderGateway {
   }
   async cancel(id: string) {
     await this.dhan.cancelOrder(id);
+  }
+  async positions(): Promise<PositionRow[]> {
+    let list: any;
+    try {
+      list = await this.dhan.positions();
+    } catch (e) {
+      // Dhan answers "no positions" with an error; anything else (no reply, token, server) is unknown.
+      if (e instanceof DhanError && e.status !== 401 && e.code !== 'DH-901' && e.status < 500) return [];
+      throw e;
+    }
+    return (Array.isArray(list) ? list : []).map((p: any) => ({
+      securityId: String(p.securityId ?? ''),
+      netQty: Number(p.netQty ?? 0) || 0,
+      product: upper(p.productType) === 'MARGIN' ? 'MARGIN' : upper(p.productType) === 'INTRADAY' ? 'INTRADAY' : '',
+      sellAvg: Number(p.sellAvg ?? 0) || 0,
+      buyAvg: Number(p.buyAvg ?? 0) || 0,
+    }));
   }
   async findRecent(o: PlaceArgs, sinceMs: number) {
     try {
@@ -196,6 +219,15 @@ export class AngelGateway implements OrderGateway {
     const o = await this.raw(id).catch(() => null);
     this.book = null;
     await this.angel.cancelOrder(id, o?.variety || 'NORMAL');
+  }
+  async positions(): Promise<PositionRow[]> {
+    return (await this.angel.positions()).map((p: any) => ({
+      securityId: String(p.symboltoken ?? ''),
+      netQty: Number(p.netqty ?? 0) || 0,
+      product: upper(p.producttype) === 'CARRYFORWARD' ? 'MARGIN' : upper(p.producttype) === 'INTRADAY' ? 'INTRADAY' : '',
+      sellAvg: Number(p.sellavgprice ?? 0) || 0,
+      buyAvg: Number(p.buyavgprice ?? 0) || 0,
+    }));
   }
   async findRecent(o: PlaceArgs, sinceMs: number) {
     try {

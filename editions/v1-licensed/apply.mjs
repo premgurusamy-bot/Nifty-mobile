@@ -14,6 +14,27 @@ copyFileSync(join(src, 'src/lib/license.ts'), join(v1, 'src/lib/license.ts'));
 copyFileSync(join(src, 'src/lib/licensePublicKey.ts'), join(v1, 'src/lib/licensePublicKey.ts'));
 copyFileSync(join(src, 'editions/v1-licensed/LicenseGate.tsx'), join(v1, 'src/components/LicenseGate.tsx'));
 
+// ---- Audit fixes J-1, J-2, J-4 (live order safety) and J-3 (settings revision), as in v2 ----
+copyFileSync(join(src, 'server/orderSafety.ts'), join(v1, 'server/orderSafety.ts'));
+copyFileSync(join(src, 'editions/v1-licensed/liveTrader.ts'), join(v1, 'server/liveTrader.ts'));
+/** Replace `from` (must occur exactly once, unless `to` is already there) in a v1 file. */
+function patch(file, from, to) {
+  const path = join(v1, file);
+  const text = readFileSync(path, 'utf8');
+  if (text.includes(to)) return;
+  if (text.split(from).length !== 2) throw new Error(`${file}: expected text not found once: ${from.slice(0, 60)}`);
+  writeFileSync(path, text.replace(from, to));
+}
+// The stop order's trigger and quantity as placed (optional: older saved positions have none).
+patch(
+  'src/lib/engine/types.ts',
+  '  /** Exchange-side stop-loss order protecting the remaining quantity. */\n  slOrderId: string | null;\n}',
+  '  /** Exchange-side stop-loss order protecting the remaining quantity. */\n  slOrderId: string | null;\n  /** Trigger and quantity of that stop order as placed. */\n  slTrigger?: number;\n  slQty?: number;\n}',
+);
+// J-3: every config this licensed app ever saved was written at the current revision (it never
+// had older builds), so a missing revision means "current" — never re-run the migration.
+patch('src/lib/engine/runner.ts', '  const rev = saved.configRev ?? 0;', '  const rev = saved.configRev ?? CONFIG_REV;');
+
 const layoutPath = join(v1, 'src/app/_layout.tsx');
 let layout = readFileSync(layoutPath, 'utf8');
 if (!layout.includes('LicenseGate')) {

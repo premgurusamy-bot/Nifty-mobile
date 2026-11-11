@@ -145,6 +145,31 @@ const istStamp = () => {
   return d.toISOString().replace('T', ' ').slice(0, 19);
 };
 
+/**
+ * Test helper: make the fake broker hold exactly `qty` (net, + long) of an F&O instrument, as a real
+ * account would after the entry filled — adds one TRADED order for the difference.
+ */
+export function setHolding(state: any, securityId: string, qty: number, productType = 'INTRADAY') {
+  let net = 0;
+  for (const o of state.orders)
+    if (String(o.securityId) === securityId && o.productType === productType && o.exchangeSegment !== 'NSE_EQ')
+      net += (o.transactionType === 'BUY' ? 1 : -1) * (Number(o.filledQty) || 0);
+  const diff = qty - net;
+  if (!diff) return;
+  state.orders.push({
+    orderId: String(state.nextId++),
+    orderStatus: 'TRADED',
+    transactionType: diff > 0 ? 'BUY' : 'SELL',
+    exchangeSegment: 'NSE_FNO',
+    productType,
+    orderType: 'MARKET',
+    securityId,
+    quantity: Math.abs(diff),
+    filledQty: Math.abs(diff),
+    averageTradedPrice: 100,
+  });
+}
+
 export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; requests: Recorded[]; state: any }> {
   const requests: Recorded[] = [];
   let spot = 25850.5;
@@ -157,6 +182,10 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
     marketFill: null as number | null,
     /** Reject every MARKET order of this side (e.g. 'SELL': exits fail). */
     rejectMarket: null as 'BUY' | 'SELL' | null,
+    /** Positions endpoint fails like a dropped connection (HTTP 503). */
+    positionsDown: false,
+    /** Cancels fail like a dropped connection (HTTP 503) and the order stays as it is. */
+    cancelDown: false,
     cash: 250000.5,
     /** Tokens the fake accepts; RenewToken adds a new one. */
     tokens: new Set<string>([FAKE_TOKEN, FAKE_LONG_TOKEN]),
@@ -315,7 +344,34 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
         });
       }
       if (req.method === 'GET' && path === '/positions') {
+        if (state.positionsDown) return send(503, { errorCode: 'DH-908', errorMessage: 'Service unavailable' });
+        // F&O / MCX positions come from the traded quantities of the orders (like Dhan's own book).
+        const net = new Map<string, { securityId: string; productType: string; exchangeSegment: string; buy: number; sell: number; sellValue: number }>();
+        for (const o of state.orders) {
+          const q = Number(o.filledQty) || 0;
+          if (!q || o.exchangeSegment === 'NSE_EQ') continue;
+          const k = `${o.securityId}|${o.productType}`;
+          const r = net.get(k) ?? { securityId: String(o.securityId), productType: o.productType, exchangeSegment: o.exchangeSegment, buy: 0, sell: 0, sellValue: 0 };
+          if (o.transactionType === 'BUY') r.buy += q;
+          else {
+            r.sell += q;
+            r.sellValue += q * (Number(o.averageTradedPrice) || 0);
+          }
+          net.set(k, r);
+        }
+        const fno = [...net.values()].map((r) => ({
+          dhanClientId: FAKE_CLIENT,
+          securityId: r.securityId,
+          exchangeSegment: r.exchangeSegment,
+          productType: r.productType,
+          positionType: r.buy > r.sell ? 'LONG' : r.buy < r.sell ? 'SHORT' : 'CLOSED',
+          buyQty: r.buy,
+          sellQty: r.sell,
+          sellAvg: r.sell ? r.sellValue / r.sell : 0,
+          netQty: r.buy - r.sell,
+        }));
         return send(200, [
+          ...fno,
           {
             dhanClientId: FAKE_CLIENT,
             tradingSymbol: 'RELIANCE',
@@ -423,6 +479,10 @@ export function startFakeDhan(port = 0): Promise<{ server: Server; url: string; 
       if (req.method === 'DELETE' && one) {
         const o = state.orders.find((x) => x.orderId === one[1]);
         if (!o) return send(404, { errorCode: 'DH-905', errorMessage: 'Order not found' });
+        if (state.cancelDown) return send(503, { errorCode: 'DH-908', errorMessage: 'Service unavailable' });
+        // Like Dhan: a traded or already-closed order can't be cancelled.
+        if (o.orderStatus === 'TRADED' || o.orderStatus === 'CANCELLED' || o.orderStatus === 'REJECTED')
+          return send(400, { errorCode: 'DH-906', errorMessage: `Order is ${o.orderStatus}` });
         o.orderStatus = 'CANCELLED';
         return send(200, { orderId: o.orderId, orderStatus: 'CANCELLED' });
       }

@@ -14,7 +14,7 @@ import { DhanService } from '../server/service.ts';
 import { createLocalApi, DIRECT_ORDERS_MESSAGE, type LocalApi } from '../src/api/localApi.ts';
 import { EngineRunner } from '../src/lib/engine/runner.ts';
 import type { EngineState } from '../src/lib/engine/types.ts';
-import { FAKE_CLIENT, FAKE_TOKEN, GOLDEN_EXPIRY, startFakeDhan } from './fakeDhan.ts';
+import { FAKE_CLIENT, FAKE_TOKEN, GOLDEN_EXPIRY, setHolding, startFakeDhan } from './fakeDhan.ts';
 
 const STATIC_IP = '203.0.113.7';
 let fake: Awaited<ReturnType<typeof startFakeDhan>>;
@@ -217,13 +217,15 @@ test('LIVE: T1 partial books half at market and re-protects the rest at breakeve
     position: { ...pos, partialBooked: true, partialQty: 65, remainingQty: 65, currentSl: 82.65 },
   };
   runner.state = afterState;
+  setHolding(fake.state, '70483', 130); // the account holds the 130 bought at entry
   const n = ordersSent().length;
   await trader.afterCycle(runner, beforeState, afterState);
   assert.equal(order(slRes.orderId).orderStatus, 'CANCELLED');
   const [sell, newStop] = ordersSent().slice(n);
   assert.deepEqual([sell.transactionType, sell.orderType, sell.quantity], ['SELL', 'MARKET', 65]);
   assert.deepEqual([newStop.orderType, newStop.quantity, newStop.triggerPrice], ['STOP_LOSS', 65, 82.65]);
-  assert.equal(runner.state.position!.live!.slOrderId, String(Number(slRes.orderId) + 2));
+  // The position now carries the new stop (the last order placed).
+  assert.equal(runner.state.position!.live!.slOrderId, fake.state.orders.at(-1).orderId);
 
   // Engine then closes the rest at T2 (booked at the T2 level) → stop cancelled, remainder sold,
   // journal corrected to the real fill.

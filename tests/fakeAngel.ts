@@ -35,6 +35,8 @@ export function startFakeAngel(
     /** Candle requests received; rateLimitCandles = answer them with Angel's rate-limit error. */
     candleCalls: 0,
     rateLimitCandles: false,
+    /** getPosition fails (like a dropped connection). */
+    positionsDown: false,
   };
   const strikes = Array.from({ length: grid.count }, (_, i) => grid.first + i * grid.step);
   const token = (k: number, t: string) => String((t === 'CE' ? 600000 : 700000) + Math.round((k - grid.first) / grid.step));
@@ -100,9 +102,24 @@ export function startFakeAngel(
         return send({ status: true, message: 'SUCCESS', errorcode: '', data: { script: body.tradingsymbol, orderid, uniqueorderid: `u-${orderid}` } });
       }
       if (path === '/rest/secure/angelbroking/order/v1/getOrderBook') return send({ status: true, message: 'SUCCESS', data: state.orders });
+      if (path === '/rest/secure/angelbroking/order/v1/getPosition') {
+        if (state.positionsDown) return fail('Something went wrong, please try again later', 'AB1004');
+        // Net positions from the filled quantities of the orders.
+        const net = new Map<string, { symboltoken: string; tradingsymbol: string; producttype: string; q: number }>();
+        for (const o of state.orders) {
+          const q = Number(o.filledshares) || 0;
+          if (!q) continue;
+          const k = `${o.symboltoken}|${o.producttype}`;
+          const r = net.get(k) ?? { symboltoken: String(o.symboltoken), tradingsymbol: o.tradingsymbol, producttype: o.producttype, q: 0 };
+          r.q += o.transactiontype === 'BUY' ? q : -q;
+          net.set(k, r);
+        }
+        return send({ status: true, message: 'SUCCESS', data: [...net.values()].map((r) => ({ ...r, exchange: 'NFO', netqty: String(r.q) })) });
+      }
       if (path === '/rest/secure/angelbroking/order/v1/cancelOrder') {
         const o = state.orders.find((x: any) => x.orderid === String(body.orderid));
         if (!o) return fail('Order not found', 'AB2001');
+        if (o.status === 'complete' || o.status === 'cancelled' || o.status === 'rejected') return fail(`Order is ${o.status}`, 'AB2002');
         o.status = o.orderstatus = 'cancelled';
         return send({ status: true, message: 'SUCCESS', data: { orderid: o.orderid } });
       }

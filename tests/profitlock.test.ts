@@ -10,7 +10,7 @@ import { checkAndCloseIfHit } from '../src/lib/engine/decision.ts';
 import { lockedProfit } from '../src/lib/engine/profitLock.ts';
 import { EngineRunner, sanitizeConfig } from '../src/lib/engine/runner.ts';
 import { DEFAULT_CONFIG, initialEngineState, type EngineState, type OpenPosition } from '../src/lib/engine/types.ts';
-import { FAKE_CLIENT, FAKE_TOKEN, startFakeDhan } from './fakeDhan.ts';
+import { FAKE_CLIENT, FAKE_TOKEN, setHolding, startFakeDhan } from './fakeDhan.ts';
 
 const L = { lockStart: 10000, lockStep: 5000, lockRideFrom: 20000, lockRideAmount: 10000 };
 
@@ -114,6 +114,7 @@ test('LIVE: a raised lock replaces the exchange stop at the new level', async ()
   const beforeS = { ...stateWith(half) };
   const afterS = { ...stateWith({ ...half, currentSl: 115, lockedPnl: 10000, peakPnl: 15000, lockPrice: 115 }) };
   runner.state = afterS;
+  setHolding(fake.state, '70483', 500); // the account holds the 500 still open
   const sent = () => fake.requests.filter((r) => r.method === 'POST' && r.path === '/orders').map((r) => r.body);
   const n = sent().length;
   await trader.afterCycle(runner, beforeS, afterS);

@@ -11,6 +11,7 @@ on:
       - 'editions/v1-licensed/**'
       - 'src/lib/license.ts'
       - 'src/lib/licensePublicKey.ts'
+      - 'server/orderSafety.ts'
       - '.github/workflows/v1-licensed-apk.yml'
   workflow_dispatch:
 
@@ -56,11 +57,21 @@ jobs:
           npm ci
           npm install --no-save tweetnacl@1.0.3
 
-      - name: Add the license lock
+      - name: Add the license lock and the order-safety fixes
         working-directory: v1
         run: |
           node ../src/editions/v1-licensed/apply.mjs . ../src
           npx tsc --noEmit
+
+      # The APK is built only when v1's whole test suite passes with the fixes (test-only patches:
+      # realistic fake positions + the J-1..J-4 regression tests; nothing of it goes into the APK).
+      - name: Tests (v1 with the fixes)
+        working-directory: v1
+        run: |
+          node ../src/editions/v1-licensed/test-patches.mjs . ../src
+          npm test
+          git checkout -- tests
+          rm -f tests/order-safety.v1.test.ts
 
       - name: Generate the Android project
         working-directory: v1

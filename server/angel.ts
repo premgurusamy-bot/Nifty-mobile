@@ -233,6 +233,12 @@ export class AngelClient {
     return Array.isArray(json?.data) ? json.data : [];
   }
 
+  /** Open positions (net quantity per instrument). Throws when they can't be read. */
+  async positions(): Promise<any[]> {
+    const json = await this.slowThrottle.run(() => this.get<any>('/rest/secure/angelbroking/order/v1/getPosition', 'positions'));
+    return Array.isArray(json?.data) ? json.data : [];
+  }
+
   /** Funds (RMS): available cash etc. */
   async rms(): Promise<any> {
     const json = await this.slowThrottle.run(() => this.get<any>('/rest/secure/angelbroking/user/v1/getRMS', 'funds'));

@@ -24,6 +24,7 @@ import { breadthGroup, computeBreadth, type Breadth, type StockQuote } from '../
 import { preMarketReport, preMarketWindow, type PreMarketReport } from '../premarket.ts';
 import { blankSymbolState, isBusy, normalizeSymbolState, pickSymbolState, runMultiCycle, splitFactor } from './multi.ts';
 import {
+  CONFIG_REV,
   DEFAULT_CONFIG,
   MAX_FIXED_STOP_PCT,
   MIN_HOLD_SECONDS,
@@ -369,8 +370,23 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   return next;
 }
 
-/** Current settings revision: 1 = hold before entry 5 → 3 minutes. */
-export const CONFIG_REV = 5;
+/** Current settings revision (defined in types.ts so the defaults carry it). */
+export { CONFIG_REV };
+
+/**
+ * The revision a saved config was written at (audit fix J-3). Configs saved by a fresh install
+ * before this fix carry no configRev even though they are current; the settings fields each
+ * revision introduced tell them apart from genuinely old configs, so only real upgrades migrate:
+ * closedCandleScoring → rev 5, confirmHoldSeconds → rev 4, autoShed → rev 3 (rev 3 added no field;
+ * taking it as 3 keeps the sizing you set), none of them → rev 1 (the first v2 build already had rev 1).
+ */
+export function savedConfigRev(saved: Partial<EngineConfig>): number {
+  if (saved.configRev != null) return saved.configRev;
+  if ('closedCandleScoring' in saved) return 5;
+  if ('confirmHoldSeconds' in saved) return 4;
+  if ('autoShed' in saved) return 3;
+  return 1;
+}
 
 /**
  * One-time updates to saved settings. Rev 1: the hold-before-entry default changed from 5 to 3
@@ -385,7 +401,7 @@ export const CONFIG_REV = 5;
  * (under NSE's per-order freeze limit). A cap you set yourself is kept.
  */
 export function migrateConfig(cfg: EngineConfig, saved: Partial<EngineConfig>): EngineConfig {
-  const rev = saved.configRev ?? 0;
+  const rev = savedConfigRev(saved);
   const next = { ...cfg, configRev: CONFIG_REV };
   if (rev < 5) {
     next.closedCandleScoring = true;

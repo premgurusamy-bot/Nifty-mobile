@@ -257,7 +257,14 @@ export function holdLabel(sec: number): string {
 /** IV snapshots for the percentile are kept at most this often, whatever the refresh rate. */
 export const IV_SNAPSHOT_MS = 15_000;
 
+/**
+ * Current settings revision (see migrateConfig in runner.ts). A config made from these defaults is
+ * already current, so nothing is migrated when it is loaded again (audit fix J-3).
+ */
+export const CONFIG_REV = 5;
+
 export const DEFAULT_CONFIG: EngineConfig = {
+  configRev: CONFIG_REV,
   symbol: 'NIFTY',
   instrumentKind: 'INDEX_OPTIONS',
   tradeSegment: 'NSE_FNO',
@@ -374,6 +381,9 @@ export interface LiveLegs {
   entryOrderId: string;
   /** Exchange-side stop-loss order protecting the remaining quantity. */
   slOrderId: string | null;
+  /** Trigger and quantity of that stop order as placed (absent on positions opened by older versions). */
+  slTrigger?: number;
+  slQty?: number;
 }
 
 export interface OpenPosition {
