@@ -5,7 +5,8 @@
 //   traded order, and can simulate a dropped connection — like v2's tests/fakeDhan.ts;
 // - two live fixtures get the holding a real account has (the entry was bought);
 // - the hold-migration test expects J-3 (a licensed-v1 config without a revision is current);
-// - order-safety.v1.test.ts: the J-1..J-4 regression tests for v1 (mock Dhan, no network).
+// - order-safety.v1.test.ts: the J-1..J-4 regression tests for v1 (mock Dhan, no network);
+// - loss-block.v1.test.ts: the "Clear block" tests.
 // Nothing here goes into the APK.
 import { copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -109,4 +110,5 @@ patch(
 );
 
 copyFileSync(join(src, 'editions/v1-licensed/order-safety.v1.test.ts'), join(v1, 'tests/order-safety.v1.test.ts'));
+copyFileSync(join(src, 'editions/v1-licensed/loss-block.v1.test.ts'), join(v1, 'tests/loss-block.v1.test.ts'));
 console.log('v1 test patches applied');

@@ -9,6 +9,8 @@ import {
   canTakeNewTrade,
   closeOpenPosition,
   isWithinMarketHours,
+  lossesToday,
+  todayHasLoggedLoss,
   openTrade,
   positionLabel,
   runCycle,
@@ -174,6 +176,8 @@ export interface EngineSnapshot {
   breadth?: Partial<Record<'NIFTY' | 'BANKNIFTY', Breadth>>;
   /** Pre-market report (8:30–9:15 IST, kept for the day). */
   preMarket?: PreMarketReport | null;
+  /** The no-revenge-trade rule is blocking entries now (Dashboard shows "Clear block"). */
+  lossBlock?: { losses: number };
   /** Capital-based sizing: the capital a trade may use now (CAPITAL mode only). */
   capital?: { capital: number; base: number; source: string; funds: number | null };
 }
@@ -1579,6 +1583,30 @@ export class EngineRunner {
     await this.persist();
   }
 
+  /** The no-revenge-trade rule is blocking new entries now (a loss today, not cleared). */
+  lossBlocked(): boolean {
+    return todayHasLoggedLoss(this.state);
+  }
+
+  /**
+   * Clear the no-revenge-trade block for today (e.g. a loss from a wrongly set limit): the losses
+   * logged so far stop blocking entries. A loss after this blocks again. The daily max loss, trade
+   * limit and every other rule stay as they are.
+   */
+  async clearLossBlock() {
+    const losses = lossesToday(this.state);
+    if (!this.lossBlocked()) throw new Error(losses ? 'The block is already cleared for today.' : 'No loss logged today — nothing to clear.');
+    const at = this.clock();
+    const ev = { kind: 'INFO' as const, message: `No-revenge-trade block cleared by you (${losses} loss${losses > 1 ? 'es' : ''} today) — a new loss today blocks again`, at };
+    this.state = {
+      ...this.state,
+      lossBlockCleared: { day: this.state.day, losses },
+      blockedReason: /No-revenge/.test(this.state.blockedReason) ? '' : this.state.blockedReason,
+      events: [ev, ...this.state.events].slice(0, 100),
+    };
+    await this.persist();
+  }
+
   async resetJournal() {
     // Clears trades and counters; the decision log is kept (export it any time).
     this.state = { ...initialEngineState(), ivHistory: this.state.ivHistory, cycleLog: this.state.cycleLog };
@@ -1736,6 +1764,7 @@ export class EngineRunner {
       preMarket: this.preMarketToday(),
       closes: this.candles.slice(-150).map((c) => c.c),
       marketOpen: this.marketOpen(),
+      ...(this.lossBlocked() ? { lossBlock: { losses: lossesToday(this.state) } } : {}),
       demo,
       live: this.livePnl(),
       ...(this.multiActive() ? { watch: this.watchItems() } : {}),

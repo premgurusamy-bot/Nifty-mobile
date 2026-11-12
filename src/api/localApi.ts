@@ -91,6 +91,8 @@ export interface PhoneTrading {
   engineSetIndexOn: (symbol: string, on: boolean) => Promise<EngineSnapshot>;
   /** Read market breadth and build the pre-market report now (any time of day). */
   engineMarketRead: () => Promise<EngineSnapshot>;
+  /** Clear today's no-revenge-trade block (the losses so far stop blocking entries). */
+  engineClearLossBlock: () => Promise<EngineSnapshot>;
   /** Screen the indexes (~10 s: one option chain per 3 s) or the MCX minis on live data. */
   screener: (group?: ScreenGroup) => Promise<ScreenReport>;
   /** Use (or drop) an Angel One session for the Angel-fed indexes. */
@@ -311,6 +313,10 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
     },
     engineSetIndexOn: async (symbol: string, on: boolean) => {
       await engine.exclusive(() => engine.setIndexOn(symbol, on));
+      return engine.snapshot();
+    },
+    engineClearLossBlock: async () => {
+      await engine.exclusive(() => engine.clearLossBlock());
       return engine.snapshot();
     },
     engineMarketRead: async () => {

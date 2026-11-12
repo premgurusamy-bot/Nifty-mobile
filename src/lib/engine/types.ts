@@ -494,6 +494,11 @@ export interface EngineState {
   watch?: Record<string, SymbolState>;
   /** Decision log for export: a row whenever the decision changes, each new candle, and every error. */
   cycleLog?: CycleLogRow[];
+  /**
+   * No-revenge-trade block cleared by you for `day`: the first `losses` losing trades of that day
+   * no longer block new entries (a further loss blocks again). Absent = never cleared.
+   */
+  lossBlockCleared?: { day: string; losses: number };
 }
 
 /** One engine refresh, as exported in the logs (for reviewing / improving the strategy). */

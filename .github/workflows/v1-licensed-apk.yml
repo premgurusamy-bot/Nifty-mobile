@@ -71,7 +71,7 @@ jobs:
           node ../src/editions/v1-licensed/test-patches.mjs . ../src
           npm test
           git checkout -- tests
-          rm -f tests/order-safety.v1.test.ts
+          rm -f tests/order-safety.v1.test.ts tests/loss-block.v1.test.ts
 
       - name: Generate the Android project
         working-directory: v1

@@ -153,7 +153,7 @@ function LotStepper(p: {
 }
 
 export default function DashboardScreen() {
-  const { snap, busy, error, refresh, updateConfig, mode, phone, enter, cancelEntry, exit, setTradeMode, setActive, setIndexOn, marketRead } = useEngine();
+  const { snap, busy, error, refresh, updateConfig, mode, phone, enter, cancelEntry, exit, setTradeMode, setActive, setIndexOn, marketRead, clearLossBlock } = useEngine();
   // null = follow the market premium; a string = the price you typed.
   const [priceEdit, setPriceText] = useState<string | null>(null);
   const [toggling, setToggling] = useState(false);
@@ -322,6 +322,29 @@ export default function DashboardScreen() {
       </View>
       {cfg.preMarketReport && !snap.demo && (snap.preMarket || !snap.marketOpen) ? (
         <PreMarketCard report={snap.preMarket ?? null} onUpdate={marketRead} busy={busy} />
+      ) : null}
+      {snap.lossBlock ? (
+        <Card style={{ gap: 8, borderWidth: 1, borderColor: colors.down }}>
+          <Text style={[ui.sectionTitle, { marginTop: 0, color: colors.down }]}>New trades blocked</Text>
+          <Text style={ui.muted}>
+            No-revenge-trade rule: {snap.lossBlock.losses} losing trade{snap.lossBlock.losses > 1 ? 's' : ''} today. If the loss came
+            from a mistake (e.g. a wrongly set limit), clear the block to trade again today. A new loss today blocks again; the
+            daily max loss and trade limit still apply.
+          </Text>
+          <Button
+            label="Clear block"
+            color={colors.down}
+            disabled={busy}
+            onPress={() =>
+              confirmDialog(
+                'Clear the no-revenge block?',
+                'New entries (manual and automatic) are allowed again today. Another loss today blocks them again. The daily max loss and trade limit still apply.',
+                'Clear block',
+                () => void clearLossBlock().catch((e) => setTradeMsg((e as Error).message)),
+              )
+            }
+          />
+        </Card>
       ) : null}
       {snap.advice && snap.advice.items.length ? <AdvisorCard advice={snap.advice} /> : null}
       {cfg.breadth && snap.breadth ? <BreadthCard breadth={snap.breadth} /> : null}

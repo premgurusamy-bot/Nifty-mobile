@@ -77,8 +77,18 @@ export function resetIfNewDay(s: EngineState, now: number) {
   }
 }
 
-function todayHasLoggedLoss(s: EngineState): boolean {
-  return s.journal.some((j) => j.date === s.day && j.pnl != null && j.pnl < 0);
+/** Losing trades logged today. */
+export function lossesToday(s: Pick<EngineState, 'journal' | 'day'>): number {
+  return s.journal.filter((j) => j.date === s.day && j.pnl != null && j.pnl < 0).length;
+}
+
+/**
+ * No-revenge-trade rule: a loss logged today blocks new entries — unless you cleared the block
+ * (Dashboard → Clear block) after those losses; a loss after the clear blocks again.
+ */
+export function todayHasLoggedLoss(s: Pick<EngineState, 'journal' | 'day' | 'lossBlockCleared'>): boolean {
+  const cleared = s.lossBlockCleared && s.lossBlockCleared.day === s.day ? s.lossBlockCleared.losses : 0;
+  return lossesToday(s) > cleared;
 }
 
 /** Minutes since midnight IST. */

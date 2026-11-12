@@ -41,6 +41,8 @@ interface EngineValue {
   setIndexOn: (symbol: string, on: boolean) => Promise<void>;
   /** Read breadth and build the pre-market report now. */
   marketRead: () => Promise<void>;
+  /** Clear today's no-revenge-trade block. */
+  clearLossBlock: () => Promise<void>;
   /** Screen the indexes or the MCX minis now (live in phone mode, simulated in demo). */
   screener: (group?: ScreenGroup) => Promise<ScreenReport>;
 }
@@ -283,6 +285,18 @@ export function EngineProvider({ children }: { children: ReactNode }) {
     [api, phoneApi, run],
   );
 
+  const clearLossBlock = useCallback(
+    () =>
+      run(async () => {
+        if (phoneApi) return phoneApi.engineClearLossBlock();
+        if (api) throw new Error('Clearing the block runs on the phone (not through a server).');
+        const r = demo.current!;
+        await r.clearLossBlock();
+        return r.snapshot(true);
+      }),
+    [api, phoneApi, run],
+  );
+
   // Demo screener: one simulated market per index, kept between scans so it moves on.
   const demoSims = useRef<Record<string, SimEngineSource>>({});
   const screener = useCallback(async (group: ScreenGroup = 'INDEX'): Promise<ScreenReport> => {
@@ -330,6 +344,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
       setActive,
       setIndexOn,
       marketRead,
+      clearLossBlock,
     }),
     [
       mode,
@@ -351,6 +366,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
       setActive,
       setIndexOn,
       marketRead,
+      clearLossBlock,
     ],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
