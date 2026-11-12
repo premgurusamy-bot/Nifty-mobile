@@ -29,6 +29,7 @@ import { BreadthCard, PreMarketCard } from '../../components/MarketRead';
 import { useAlerts } from '../../state/AlertsContext';
 import type { Advice } from '../../lib/advisor';
 import { useEngine } from '../../state/EngineContext';
+import { router } from 'expo-router';
 import { colors, pnlColor } from '../../theme';
 
 /** Yes/No confirmation that works on Android and in the web build. */
@@ -416,6 +417,7 @@ export default function DashboardScreen() {
           label={p ? (p.direction === 'LONG' || p.direction === 'SHORT' ? `${p.direction} ${contract}` : `${p.direction} ${p.strike}`) : ''}
         />
       ) : null}
+      <Button label="📈 Chart & Pine Script" onPress={() => router.push('/chart')} color={colors.cardAlt} />
       {/* Trade mode: PAPER (engine paper-trades) / LIVE (real Dhan orders via ENTER/EXIT) */}
       <Card
         style={{

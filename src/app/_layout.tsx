@@ -42,6 +42,7 @@ export default function RootLayout() {
                 <Stack.Screen name="order" options={{ presentation: 'modal', title: 'Place order' }} />
                 <Stack.Screen name="settings" options={{ title: 'Settings' }} />
                 <Stack.Screen name="orders" options={{ title: 'Orders' }} />
+                <Stack.Screen name="chart" options={{ title: 'Chart & Pine Script' }} />
               </Stack>
             </PortfolioProvider>
           </MarketProvider>

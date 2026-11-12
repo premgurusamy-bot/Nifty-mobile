@@ -158,6 +158,8 @@ patch(
 
 // ---- Market Memory: the same module, screen and engine hooks as v2 ----
 execFileSync(process.execPath, [join(src, 'editions/market-memory/apply.mjs'), v1, src], { stdio: 'inherit' });
+// ---- Chart + Pine Script (uses Market Memory) ----
+execFileSync(process.execPath, [join(src, 'editions/chart/apply.mjs'), v1, src], { stdio: 'inherit' });
 
 const layoutPath = join(v1, 'src/app/_layout.tsx');
 let layout = readFileSync(layoutPath, 'utf8');

@@ -167,6 +167,8 @@ export interface EngineSnapshot {
   lastTick?: number | null;
   /** Latest 5-min closes for the chart. */
   closes: number[];
+  /** The selected index's latest 5-minute candles (Chart screen). */
+  candles?: Candle[];
   marketOpen: boolean;
   demo: boolean;
   /** Running P&L: today's realized, the open trade at the latest price, and their total. */
@@ -1781,6 +1783,7 @@ export class EngineRunner {
       ...(this.config.breadth && Object.keys(this.breadth).length ? { breadth: this.breadth } : {}),
       preMarket: this.preMarketToday(),
       closes: this.candles.slice(-150).map((c) => c.c),
+      candles: this.candles.slice(-150),
       marketOpen: this.marketOpen(),
       ...(this.lossBlocked() ? { lossBlock: { losses: lossesToday(this.state) } } : {}),
       demo,
