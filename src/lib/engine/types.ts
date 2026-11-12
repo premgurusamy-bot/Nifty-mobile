@@ -669,6 +669,8 @@ export interface Dashboard {
     scorePE: number;
   };
   breakdown: ScoreBreakdown;
+  /** Both sides' factor points (Market Memory records them; no effect on scoring). */
+  breakdowns?: { CE: ScoreBreakdown; PE: ScoreBreakdown };
   /** Score factors in display order (options: the workbook's 10; futures: the futures model). */
   factors: Factor[];
   /** Futures-only market details. */

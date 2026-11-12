@@ -12,6 +12,9 @@ on:
       - 'src/lib/license.ts'
       - 'src/lib/licensePublicKey.ts'
       - 'server/orderSafety.ts'
+      - 'editions/market-memory/**'
+      - 'src/lib/memory/**'
+      - 'src/app/(tabs)/memory.tsx'
       - '.github/workflows/v1-licensed-apk.yml'
   workflow_dispatch:
 
@@ -71,7 +74,7 @@ jobs:
           node ../src/editions/v1-licensed/test-patches.mjs . ../src
           npm test
           git checkout -- tests
-          rm -f tests/order-safety.v1.test.ts tests/loss-block.v1.test.ts
+          rm -f tests/order-safety.v1.test.ts tests/loss-block.v1.test.ts tests/market-memory.v1.test.ts
 
       - name: Generate the Android project
         working-directory: v1

@@ -5,6 +5,7 @@
 // - its own name / package id, so it installs next to the other apps
 // tweetnacl is installed by the workflow (npm install --no-save tweetnacl@1.0.3).
 import { copyFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 
 const [v1, src] = process.argv.slice(2);
@@ -154,6 +155,9 @@ patch(
       ) : null}
       {/* Trade mode: PAPER`,
 );
+
+// ---- Market Memory: the same module, screen and engine hooks as v2 ----
+execFileSync(process.execPath, [join(src, 'editions/market-memory/apply.mjs'), v1, src], { stdio: 'inherit' });
 
 const layoutPath = join(v1, 'src/app/_layout.tsx');
 let layout = readFileSync(layoutPath, 'utf8');

@@ -13,6 +13,7 @@
  *  - The engine runs only while the app is open (Android pauses background JS).
  */
 import { DhanClient } from '../../server/dhan.ts';
+import type { MarketMemory } from '../lib/memory/recorder.ts';
 import { mapFunds } from '../../server/mapping.ts';
 import { screenAll, type ScreenGroup, type ScreenReport } from '../lib/screener.ts';
 import { DhanEngineSource, dhanQuoteSource } from '../../server/engineSource.ts';
@@ -37,6 +38,8 @@ export interface LocalApiOptions {
   accessToken: string;
   /** Where the engine's journal / IV history / position are kept on the device. */
   store: EngineStore;
+  /** Market Memory to record the live candles into (the phone's). */
+  memory?: MarketMemory | null;
   /** Called with a renewed token so it can be saved on the device. */
   persistToken?: (token: string) => void | Promise<void>;
   /** The static IP saved in Settings (read at check time). */
@@ -121,6 +124,7 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
   routed.onAngelSessionLost = () => o.onAngelSessionLost?.();
   const engine = new EngineRunner(routed, o.store);
   await engine.init();
+  engine.memory = o.memory ?? null;
   const trader = new LiveTrader(dhan, service, { sleep: o.sleep, angel: new AngelGateway(angel, routed.angelSource) });
   engine.afterCycle = (before, after) => trader.afterCycle(engine, before, after);
   engine.quoteSource = routedQuoteSource(dhanQuoteSource(dhan), angel);

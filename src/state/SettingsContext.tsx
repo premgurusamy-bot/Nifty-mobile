@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Platform } from 'react-native';
+import { marketMemory } from '../lib/memory/fileStore';
 import { createApi, type Api } from '../api/client';
 import { fetchPublicIp } from '../../server/preflight.ts';
 import { dhanPinLogin } from '../../server/dhan.ts';
@@ -136,6 +137,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       staticIp: () => staticIpRef.current,
       publicIp: () => fetchPublicIp(PUBLIC_IP_URL),
       store: directEngineStore,
+      memory: marketMemory,
       // A renewed token replaces the saved one (without restarting the connection).
       persistToken: (t) => secret.set(DHAN_TOKEN_KEY, t),
     }).then((a) => {

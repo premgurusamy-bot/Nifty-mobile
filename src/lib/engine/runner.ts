@@ -4,6 +4,7 @@
  * are injected so this file stays platform-neutral.
  */
 import { runBacktest, type BacktestResult } from './backtest.ts';
+import type { MarketMemory } from '../memory/recorder.ts';
 import {
   buildTradePlan,
   canTakeNewTrade,
@@ -442,6 +443,8 @@ export class EngineRunner {
   state: EngineState = initialEngineState();
   config: EngineConfig = { ...DEFAULT_CONFIG };
   dashboard: Dashboard | null = null;
+  /** Market Memory: records every closed 5-minute candle (live data on the phone only). */
+  memory: MarketMemory | null = null;
   status = 'Not refreshed yet';
   banner = '';
   lastRefresh: number | null = null;
@@ -788,6 +791,14 @@ export class EngineRunner {
       const res = runMultiCycle(this.state, this.state.watch!, symbols, (s) => this.cfgFor(s), data, now);
       this.multiDash = res.dashboards;
       this.multiData = data;
+      // Market Memory: recording never disturbs trading.
+      if (this.memory)
+        for (const [sym, d] of Object.entries(data))
+          try {
+            this.memory.observe(sym, d.candles, d.chain, res.dashboards[sym] ?? null, this.cfgFor(sym).lotSize);
+          } catch {
+            /* recording only */
+          }
       this.multiErrors = { ...loadErr, ...res.errors };
       this.state = { ...res.shared, ...res.watch[prevActive], watch: res.watch };
       // Paper limit fills and live orders, one index at a time (trades first, then highest score:
@@ -1252,6 +1263,13 @@ export class EngineRunner {
       this.dashboard = dashboard;
       this.candles = data.candles;
       this.lastChain = data.chain;
+      // Market Memory: recording never disturbs trading.
+      if (this.memory && this.config.instrumentKind === 'INDEX_OPTIONS')
+        try {
+          this.memory.observe(this.config.symbol, data.candles, data.chain, dashboard, this.config.lotSize);
+        } catch {
+          /* recording only */
+        }
       await this.fillPaperEntry();
       this.status = 'Ready'; // live trading may replace this with a notice below
       if (this.afterCycle) {

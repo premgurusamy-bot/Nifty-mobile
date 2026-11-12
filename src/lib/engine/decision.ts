@@ -1059,6 +1059,7 @@ function runOptionsCycle(
       scorePE: pe.total,
     },
     breakdown,
+    breakdowns: { CE: ce.breakdown, PE: pe.breakdown },
     factors: (Object.keys(FACTOR_LABELS) as (keyof ScoreBreakdown)[]).map((k) => ({
       key: k,
       label: FACTOR_LABELS[k][0],

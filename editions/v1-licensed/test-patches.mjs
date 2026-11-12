@@ -111,4 +111,5 @@ patch(
 
 copyFileSync(join(src, 'editions/v1-licensed/order-safety.v1.test.ts'), join(v1, 'tests/order-safety.v1.test.ts'));
 copyFileSync(join(src, 'editions/v1-licensed/loss-block.v1.test.ts'), join(v1, 'tests/loss-block.v1.test.ts'));
+copyFileSync(join(src, 'tests/market-memory.test.ts'), join(v1, 'tests/market-memory.v1.test.ts'));
 console.log('v1 test patches applied');

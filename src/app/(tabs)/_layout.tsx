@@ -40,6 +40,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="screener" options={{ title: 'Screener', tabBarIcon: icon('pulse-outline') }} />
       <Tabs.Screen name="trend" options={{ title: 'Trend', tabBarIcon: icon('trending-up') }} />
       <Tabs.Screen name="options" options={{ title: 'Option Chain', tabBarIcon: icon('grid-outline') }} />
+      <Tabs.Screen name="memory" options={{ title: 'Memory', tabBarIcon: icon('analytics-outline') }} />
       <Tabs.Screen name="journal" options={{ title: 'Journal', tabBarIcon: icon('book-outline') }} />
       <Tabs.Screen name="markets" options={{ title: 'Markets', tabBarIcon: icon('stats-chart-outline') }} />
       <Tabs.Screen name="portfolio" options={{ title: 'Portfolio', tabBarIcon: icon('briefcase-outline') }} />
