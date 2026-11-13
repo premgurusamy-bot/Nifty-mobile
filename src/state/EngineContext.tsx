@@ -31,6 +31,8 @@ interface EngineValue {
   /** `limit` = buy price per unit (blank = market). */
   enter: (limit?: number) => Promise<void>;
   cancelEntry: () => Promise<void>;
+  /** Option Chain BUY as an engine trade (stop-loss, Target 1, profit lock; your quantity). */
+  enterStrike: (p: { symbol: string; direction: 'CE' | 'PE'; strike: number; qty?: number; limit?: number; expiry?: string }) => Promise<void>;
   exit: () => Promise<void>;
   /** Returns the pre-flight result when switching to LIVE (null otherwise); LIVE only applies if it passed. */
   setTradeMode: (mode: TradeMode) => Promise<PreflightResult | null>;
@@ -205,6 +207,19 @@ export function EngineProvider({ children }: { children: ReactNode }) {
     [api, phoneApi, run],
   );
 
+  const enterStrike = useCallback(
+    (p: { symbol: string; direction: 'CE' | 'PE'; strike: number; qty?: number; limit?: number; expiry?: string }) =>
+      run(async () => {
+        if (phoneApi) return phoneApi.engineEnterStrike(p);
+        if (api) throw new Error('Engine entries from the Option Chain need the phone connection.');
+        const r = demo.current!;
+        if (r.config.symbol !== p.symbol) throw new Error(`The demo engine trades ${r.config.symbol}.`);
+        await r.placeEntry(p.limit, { direction: p.direction, strike: p.strike, qty: p.qty });
+        return r.snapshot(true);
+      }),
+    [api, phoneApi, run],
+  );
+
   const cancelEntry = useCallback(
     () =>
       run(async () => {
@@ -337,6 +352,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
       phone: !!phoneApi,
       enter,
       cancelEntry,
+      enterStrike,
       exit,
       setTradeMode,
       preflight,
@@ -359,6 +375,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
       phoneApi,
       enter,
       cancelEntry,
+      enterStrike,
       exit,
       setTradeMode,
       preflight,

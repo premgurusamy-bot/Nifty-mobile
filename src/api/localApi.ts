@@ -80,6 +80,8 @@ export interface PhoneTrading {
   engineEnter: (limit?: number) => Promise<EngineSnapshot>;
   /** Cancel a pending limit entry. */
   engineCancelEntry: () => Promise<EngineSnapshot>;
+  /** Option Chain BUY as an engine trade (the engine's stop / targets / profit lock; your quantity). */
+  engineEnterStrike: (p: { symbol: string; direction: 'CE' | 'PE'; strike: number; qty?: number; limit?: number; expiry?: string }) => Promise<EngineSnapshot>;
   /** Manual EXIT of the open position (real sell in LIVE mode). */
   engineExit: () => Promise<EngineSnapshot>;
   /** Switching to LIVE runs the pre-flight check and refuses if anything fails. */
@@ -274,6 +276,29 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
     engineEnter: async (limit?: number) => {
       if (!engine.dashboard) await engine.refresh();
       await engine.exclusive(() => (live() ? trader.enter(engine, limit) : engine.placeEntry(limit)));
+      return engine.snapshot();
+    },
+    engineEnterStrike: async (p) => {
+      // Manual actions run between engine cycles where the engine supports it.
+      const ex = <T,>(fn: () => Promise<T>) => {
+        const e = engine as unknown as { exclusive?: (f: () => Promise<T>) => Promise<T> };
+        return e.exclusive ? e.exclusive(fn) : fn();
+      };
+      if (engine.config.symbol !== p.symbol) {
+        const m = engine as unknown as { multiActive?: () => boolean; setActive?: (s: string) => Promise<void> };
+        if (!m.multiActive?.() || !m.setActive)
+          throw new Error(`The engine trades ${engine.config.symbol}: choose ${p.symbol} as the instrument in Settings to trade it with the engine.`);
+        await ex(() => m.setActive!(p.symbol));
+      }
+      if (!engine.dashboard) await engine.refresh();
+      const exp = engine.dashboard?.expiry;
+      if (p.expiry && exp && p.expiry !== exp)
+        throw new Error(`The engine trades the ${exp} expiry — pick the strike from that expiry (this one is ${p.expiry}).`);
+      const pick = { direction: p.direction, strike: p.strike, qty: p.qty };
+      await ex(async () => {
+        if (live()) await trader.enter(engine, p.limit, { pick });
+        else await engine.placeEntry(p.limit, pick);
+      });
       return engine.snapshot();
     },
     engineCancelEntry: async () => {

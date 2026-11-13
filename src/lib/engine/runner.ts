@@ -441,6 +441,9 @@ export function migrateConfig(cfg: EngineConfig, saved: Partial<EngineConfig>): 
   return next;
 }
 
+/** A strike picked in the Option Chain (BUY), traded by the engine: quantity in units (whole lots). */
+export type EntryPick = { direction: 'CE' | 'PE'; strike: number; qty?: number };
+
 export class EngineRunner {
   state: EngineState = initialEngineState();
   config: EngineConfig = { ...DEFAULT_CONFIG };
@@ -1403,12 +1406,13 @@ export class EngineRunner {
   }
 
   /** Plan a manual ENTER would use now (the dashboard's leading direction + best strike). */
-  entryPlan(): TradePlan {
+  entryPlan(pick?: EntryPick): TradePlan {
     if (this.state.position) throw new Error('A position is already open — exit it first.');
     const d = this.dashboard;
     if (!d || !this.lastChain) throw new Error('No market data yet — tap Refresh now first.');
     const gate = canTakeNewTrade(this.state, this.config, this.clock());
     if (!gate.ok) throw new Error(gate.reason);
+    if (pick) return this.pickedPlan(pick, d.market.atr);
     const plan = d.candidatePlan ?? this.planFor(d.decision.direction, d.decision.selectedStrike, d.market.atr);
     if (!plan || plan.entry <= 0)
       throw new Error(`No price for ${d.decision.direction} ${d.decision.selectedStrike || this.config.symbol}`);
@@ -1417,13 +1421,51 @@ export class EngineRunner {
   }
 
   /**
+   * The engine's plan for a strike picked in the Option Chain: its stop and targets from the engine
+   * (same rules as ENTER), your quantity in whole lots (never above Max lots). The daily rules were
+   * already checked by entryPlan; the premium filters and lot sizing don't override your choice.
+   */
+  private pickedPlan(pick: EntryPick, atr: number): TradePlan {
+    const chain = this.lastChain!;
+    const row = chain.strikes.find((s) => s.strike === pick.strike);
+    const leg = row?.[pick.direction === 'CE' ? 'ce' : 'pe'];
+    if (!leg || !(leg.ltp > 0))
+      throw new Error(`${pick.strike} ${pick.direction} isn't in the engine's option chain (${chain.expiry}) — refresh, or pick a strike nearer the money.`);
+    const plan = this.planFor(pick.direction, pick.strike, atr);
+    if (!plan || plan.entry <= 0) throw new Error(`No price for ${pick.direction} ${pick.strike}`);
+    const lot = this.config.lotSize || 1;
+    let lots: number;
+    let note = '';
+    if (pick.qty != null) {
+      lots = Math.floor(pick.qty / lot);
+      if (lots < 1) throw new Error(`Quantity must be at least 1 lot (${lot})`);
+      if (this.config.maxLots > 0 && lots > this.config.maxLots) {
+        note = ` (capped at max lots ${this.config.maxLots})`;
+        lots = this.config.maxLots;
+      }
+    } else {
+      if (plan.blocked || plan.qty <= 0) throw new Error(plan.blocked ?? 'Position size is 0 lots');
+      lots = Math.round(plan.qty / lot);
+    }
+    const qty = lots * lot;
+    const { blocked: _blocked, ...rest } = plan;
+    return {
+      ...rest,
+      qty,
+      maxLoss: plan.riskPts * qty,
+      potentialProfit: (plan.target1 - plan.entry) * qty,
+      sizing: `Option Chain: ${lots} lot(s) you chose${note}`,
+    };
+  }
+
+  /**
    * Manual ENTER in paper mode. Without a limit, or with a limit the market has
    * already reached (buy: at/above the price; futures short: at/below), it
    * fills now; otherwise it waits as a pending limit entry for a later refresh.
    */
-  async placeEntry(limit?: number) {
+  async placeEntry(limit?: number, pick?: EntryPick) {
     if (this.state.pendingEntry) throw new Error('An entry order is already pending — cancel it first.');
-    const plan = this.entryPlan();
+    const plan = this.entryPlan(pick);
     const premium = this.premium(plan.direction, plan.strike) ?? plan.entry;
     const side = sideOf(plan.direction);
     if (limit == null || side * (limit - premium) >= 0) return this.manualEnter({ plan, entry: premium });

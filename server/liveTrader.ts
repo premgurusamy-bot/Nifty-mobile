@@ -26,7 +26,7 @@
  *
  * No Node-only imports: runs inside the app (phone talks to the brokers directly).
  */
-import { validateLimit, type EngineRunner } from '../src/lib/engine/runner.ts';
+import { validateLimit, type EngineRunner, type EntryPick } from '../src/lib/engine/runner.ts';
 import { catalogEntry } from '../src/lib/engine/catalog.ts';
 import { sideOf, type EngineConfig, type EngineState, type LiveLegs, type OpenPosition, type TradePlan } from '../src/lib/engine/types.ts';
 import { brokerLabel, orderBroker } from '../src/lib/engine/sizing.ts';
@@ -379,7 +379,7 @@ export class LiveTrader {
    * With a limit: a LIMIT order at that price with the index's broker, pending until it fills
    * (checked on every refresh) or you cancel it. Either way the protective stop goes in on fill.
    */
-  async enter(runner: EngineRunner, limit?: number, opts: { auto?: boolean } = {}): Promise<OpenPosition | null> {
+  async enter(runner: EngineRunner, limit?: number, opts: { auto?: boolean; pick?: EntryPick } = {}): Promise<OpenPosition | null> {
     if (this.busy) throw new Error('Another live order is in progress');
     if (runner.state.pendingEntry) throw new Error('An entry order is already pending — cancel it first.');
     this.busy = true;
@@ -387,7 +387,8 @@ export class LiveTrader {
       const cfg = runner.config;
       if (!catalogEntry(cfg.symbol)) throw new Error(`Live trading isn't set up for ${cfg.symbol}`);
       const c = ctxOf(cfg);
-      const plan = runner.entryPlan();
+      // The engine's best strike, or the one picked in the Option Chain (same stop / targets / lock).
+      const plan = runner.entryPlan(opts.pick);
       const expiry = runner.dashboard?.expiry || cfg.futExpiry;
       if (!expiry && !c.futures) throw new Error('No expiry — tap Refresh now first');
       const side = sideOf(plan.direction);

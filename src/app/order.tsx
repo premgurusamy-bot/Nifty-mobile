@@ -1,12 +1,13 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import type { Product } from '../lib/apiTypes';
 import { Button, Segmented, Stat, styles as ui } from '../components/ui';
 import { formatINR, formatNumber } from '../lib/format';
-import { displayName, kindOf, lotSize } from '../lib/instruments';
+import { displayName, kindOf, lotSize, parseOptionId } from '../lib/instruments';
 import { BROKERAGE_PER_ORDER, validateRequest, type OrderType, type Side } from '../lib/portfolio';
 import { useMarket, useWatch } from '../state/MarketContext';
+import { useEngine } from '../state/EngineContext';
 import { usePortfolio } from '../state/PortfolioContext';
 import { colors } from '../theme';
 
@@ -31,11 +32,44 @@ export default function OrderScreen() {
   const limitText = limitEdit ?? ltp.toFixed(2);
   const [error, setError] = useState<string | null>(null);
 
+  // Option Chain BUY on an index the engine trades → an engine trade (shown on the Dashboard, with the
+  // engine's stop-loss, Target 1, profit lock, day plan and daily rules), in the engine's PAPER / LIVE mode.
+  const { snap, phone, enterStrike } = useEngine();
+  const opt = parseOptionId(id);
+  const cfg = snap?.config;
+  const watched = (cfg as { watchSymbols?: string[] } | undefined)?.watchSymbols ?? [];
+  const engineExpiry = snap?.dashboard?.expiry ?? '';
+  const engineIndex = !!opt && !!cfg && (opt.underlying === cfg.symbol || watched.includes(opt.underlying));
+  const expiryOk = !!opt && (!engineExpiry || opt.expiry === engineExpiry);
+  const canEngine = engineIndex && expiryOk && (phone || !!snap?.demo);
+  const [withEngine, setWithEngine] = useState(true);
+  const viaEngine = canEngine && withEngine && side === 'BUY';
+  const engineLive = cfg?.tradeMode === 'LIVE';
+
   const qty = (parseInt(qtyText, 10) || 0) * lot;
   const limitPrice = parseFloat(limitText);
   const price = type === 'LIMIT' && limitPrice > 0 ? limitPrice : ltp;
   const value = qty * price;
   const held = positionFor(id)?.qty ?? 0;
+
+  const sendEngine = async () => {
+    setSubmitting(true);
+    try {
+      await enterStrike({
+        symbol: opt!.underlying,
+        direction: opt!.type,
+        strike: opt!.strike,
+        qty,
+        limit: type === 'LIMIT' ? limitPrice : undefined,
+        expiry: opt!.expiry,
+      });
+      router.replace('/');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const send = async () => {
     const req = { instrumentId: id, side, qty, type, limitPrice: type === 'LIMIT' ? limitPrice : undefined, product };
@@ -60,6 +94,18 @@ export default function OrderScreen() {
       limitPrice: type === 'LIMIT' ? limitPrice : undefined,
     });
     if (err) return setError(err);
+    if (viaEngine) {
+      if (!engineLive) return void sendEngine();
+      const m = `LIVE engine trade: BUY ${qty} ${displayName(id)} @ ${type === 'LIMIT' ? formatNumber(limitPrice) : 'MARKET'} on your broker account, with the exchange stop-loss and the engine's Target 1 / profit lock?`;
+      if (Platform.OS === 'web') {
+        if (globalThis.confirm?.(m)) void sendEngine();
+        return;
+      }
+      return Alert.alert('Place LIVE engine trade', m, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Place trade', style: 'destructive', onPress: () => void sendEngine() },
+      ]);
+    }
     if (!live) return void send();
     // Real money: always confirm.
     const msg = `${side} ${qty} ${displayName(id)} @ ${type === 'LIMIT' ? formatNumber(limitPrice) : 'MARKET'} (${product}) on your Dhan account?`;
@@ -105,7 +151,24 @@ export default function OrderScreen() {
           value={type}
           onChange={setType}
         />
-        {live ? (
+        {canEngine && side === 'BUY' ? (
+          <View style={s.engineBox}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <Text style={{ color: colors.text, fontWeight: '700', flexShrink: 1 }}>Trade with the engine</Text>
+              <Switch value={withEngine} onValueChange={setWithEngine} accessibilityLabel="Trade with the engine" />
+            </View>
+            <Text style={ui.muted}>
+              {withEngine
+                ? `Shown on the Dashboard and managed like an engine trade: stop-loss, Target 1 (50%), profit lock, day plan and the daily rules. ${engineLive ? 'LIVE: a real order with the exchange stop-loss.' : 'PAPER: no real order.'}`
+                : 'Off: a separate manual position in Portfolio — no stop-loss, Target 1 or profit lock; you exit it yourself.'}
+            </Text>
+          </View>
+        ) : opt && engineIndex && !expiryOk && side === 'BUY' ? (
+          <Text style={[ui.muted, { color: colors.warn }]}>
+            The engine trades the {engineExpiry} expiry, so this {opt.expiry} option is a manual position (no engine stop-loss / profit lock).
+          </Text>
+        ) : null}
+        {live && !viaEngine ? (
           <Segmented
             options={[
               { label: 'Intraday', value: 'INTRADAY' as Product },
@@ -152,9 +215,10 @@ export default function OrderScreen() {
           <Stat label={live ? 'Available balance' : 'Available cash'} value={formatINR(cash)} />
           <Stat label="Held" value={String(held)} />
         </View>
-        {live ? (
+        {viaEngine ? null : live ? (
           <Text style={[ui.muted, { color: colors.warn }]}>
             LIVE — this order goes to your Dhan account. Dhan&apos;s charges and margin rules apply.
+            {isOption && side === 'BUY' ? ' No stop-loss is placed for a manual order.' : ''}
           </Text>
         ) : (
           <Text style={ui.muted}>
@@ -164,7 +228,13 @@ export default function OrderScreen() {
 
         {error ? <Text style={{ color: colors.down, fontWeight: '600' }}>{error}</Text> : null}
         <Button
-          label={submitting ? 'Placing…' : `${side === 'BUY' ? 'Buy' : 'Sell'} ${qty || ''}${live ? ' (LIVE)' : ''}`}
+          label={
+            submitting
+              ? 'Placing…'
+              : viaEngine
+                ? `Buy ${qty || ''} with the engine${engineLive ? ' (LIVE)' : ' (paper)'}`
+                : `${side === 'BUY' ? 'Buy' : 'Sell'} ${qty || ''}${live ? ' (LIVE)' : ''}`
+          }
           color={sideColor}
           onPress={submit}
           disabled={qty <= 0 || submitting}
@@ -175,6 +245,7 @@ export default function OrderScreen() {
 }
 
 const s = StyleSheet.create({
+  engineBox: { gap: 6, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: colors.accent, backgroundColor: colors.card },
   label: { color: colors.muted, fontSize: 12, marginBottom: 6 },
   input: {
     backgroundColor: colors.card,
