@@ -77,6 +77,11 @@ export interface EngineDataSource {
   laneOf?(cfg: EngineConfig): string;
   /** Demo sources ignore market hours. */
   alwaysOpen?: boolean;
+  /**
+   * Only the index's 5-minute candles (no option chain): a light request for watching the trend of
+   * indexes that are switched off (auto-focus). Absent = the engine uses load().
+   */
+  loadCandles?(cfg: EngineConfig, now: number): Promise<Candle[]>;
 }
 
 export interface EngineStore {
@@ -181,6 +186,8 @@ export interface EngineSnapshot {
   preMarket?: PreMarketReport | null;
   /** The no-revenge-trade rule is blocking entries now (Dashboard shows "Clear block"). */
   lossBlock?: { losses: number };
+  /** Auto-focus: the index being traded, every watched index's trend, and a switch waiting for your answer. */
+  focus?: FocusView;
   /** Capital-based sizing: the capital a trade may use now (CAPITAL mode only). */
   capital?: { capital: number; base: number; source: string; funds: number | null };
 }
@@ -274,6 +281,7 @@ export function sanitizeConfig(patch: Partial<EngineConfig>, base: EngineConfig)
   if (patch.gapGuard !== undefined) next.gapGuard = !!patch.gapGuard;
   if (patch.closedCandleScoring !== undefined) next.closedCandleScoring = !!patch.closedCandleScoring;
   if (patch.breadth !== undefined) next.breadth = !!patch.breadth;
+  if (patch.autoFocus !== undefined) next.autoFocus = !!patch.autoFocus;
   if (patch.preMarketReport !== undefined) next.preMarketReport = !!patch.preMarketReport;
   num('chainEverySeconds', 0, 120);
   if (patch.trendFilter !== undefined) next.trendFilter = !!patch.trendFilter;
@@ -442,6 +450,15 @@ export function migrateConfig(cfg: EngineConfig, saved: Partial<EngineConfig>): 
 }
 
 /** A strike picked in the Option Chain (BUY), traded by the engine: quantity in units (whole lots). */
+/** Auto-focus as the Dashboard shows it. */
+export interface FocusView {
+  symbol: string;
+  checkedAt: number | null;
+  trends: Record<string, { direction: string; phase: string; strength: number; score: number } | null>;
+  /** A trade is open on `from`; `to` now trends more strongly — both run until you answer. */
+  proposal: { from: string; to: string; at: number; reason: string; answered?: boolean } | null;
+}
+
 export type EntryPick = { direction: 'CE' | 'PE'; strike: number; qty?: number };
 
 export class EngineRunner {
@@ -509,6 +526,19 @@ export class EngineRunner {
   preMarketEveryMs = 60_000;
   private preMarketAt = 0;
   private preMarketBusy: Promise<void> | null = null;
+  /** Auto-focus: how often the trends are checked (real ms), the lead a new index needs, and how long "stay" holds. */
+  focusEveryMs = 60_000;
+  focusLead = 10;
+  focusSnoozeMs = 15 * 60_000;
+  /** Trend of a candle series (replaceable in tests). */
+  focusTrend: (candles: Candle[]) => TrendReport | null = findTrend;
+  private focusAt = 0;
+  private focusBusy: Promise<void> | null = null;
+  private focusSeen: { sym: string; count: number } | null = null;
+  private focusSnooze: Record<string, number> = {};
+  focusProposal: FocusView['proposal'] = null;
+  private focusTrends: FocusView['trends'] = {};
+  private focusCheckedAt: number | null = null;
   /** Fetches the live account balance (phone / server with Dhan); null in demo. */
   fundsSource: ((broker: BrokerName) => Promise<number>) | null = null;
   private running: Promise<void> | null = null;
@@ -1760,6 +1790,127 @@ export class EngineRunner {
     return this.preMarketBusy;
   }
 
+  // ---------------------------------------------------------------- auto-focus
+
+  /** How tradeable a trend is: its strength, or −1 when sideways / tiring / breaking. */
+  private static focusScore(t: TrendReport | null): number {
+    if (!t || t.direction === 'SIDEWAYS' || t.phase === 'EXHAUSTING' || t.phase === 'REVERSING') return -1;
+    return t.strength;
+  }
+
+  /**
+   * Auto-focus check (about once a minute, during market hours): the trend of every watched index —
+   * from the loaded data for the one(s) running, from candles only for the ones switched off. The
+   * strongest trend becomes the only index that runs (fast data). A new leader needs a clear lead
+   * (focusLead points, or the current one stopped trending) seen on two checks in a row. With a trade
+   * open on the current index, the leader is switched on as well (both run) and you are asked.
+   */
+  autoFocusTick(force = false): Promise<void> {
+    if (!this.config.autoFocus || !this.multiActive()) return Promise.resolve();
+    if (this.focusBusy) return this.focusBusy;
+    if (!force && Date.now() - this.focusAt < this.focusEveryMs) return Promise.resolve();
+    this.focusAt = Date.now();
+    this.focusBusy = (async () => {
+      const now = this.clock();
+      const syms = this.watchList();
+      const trends: FocusView['trends'] = {};
+      const reports: Record<string, TrendReport | null> = {};
+      for (const sym of syms) {
+        try {
+          const loaded = this.multiData[sym]?.candles;
+          const candles = loaded?.length
+            ? loaded
+            : this.source.loadCandles
+              ? await this.source.loadCandles(this.cfgFor(sym), now)
+              : (await this.source.load(this.cfgFor(sym), now)).candles;
+          const t = this.focusTrend(candles);
+          reports[sym] = t;
+          trends[sym] = t ? { direction: t.direction, phase: t.phase, strength: t.strength, score: EngineRunner.focusScore(t) } : null;
+        } catch {
+          reports[sym] = null;
+          trends[sym] = null;
+        }
+      }
+      const first = this.focusCheckedAt == null;
+      this.focusTrends = trends;
+      this.focusCheckedAt = now;
+      await this.serial(() => this.applyFocus(syms, reports, first));
+    })().finally(() => {
+      this.focusBusy = null;
+    });
+    return this.focusBusy;
+  }
+
+  private async applyFocus(syms: string[], reports: Record<string, TrendReport | null>, first = false) {
+    const focus = this.config.symbol;
+    const score = (s: string) => EngineRunner.focusScore(reports[s] ?? null);
+    const ranked = syms.filter((s) => score(s) >= 0).sort((a, b) => score(b) - score(a));
+    const leader = ranked[0];
+    const busy = (s: string) => isBusy(this.watchStates()[s]);
+    const event = (message: string, kind: 'INFO' | 'SIGNAL' = 'INFO') => {
+      const ev = { kind, message, at: this.clock() };
+      this.state = { ...this.state, events: [ev, ...this.state.events].slice(0, 100) };
+      this.onEvents([ev], this.config);
+    };
+    // A clear new leader (not snoozed by "stay"): at once when the current index isn't trending (or on the
+    // first check after auto-focus was switched on); otherwise seen on two checks in a row.
+    let next = focus;
+    if (leader && leader !== focus && (this.focusSnooze[leader] ?? 0) <= Date.now()) {
+      const clear = score(focus) < 0 || score(leader) >= score(focus) + this.focusLead;
+      this.focusSeen = clear ? { sym: leader, count: this.focusSeen?.sym === leader ? this.focusSeen.count + 1 : 1 } : null;
+      const need = first || score(focus) < 0 ? 1 : 2;
+      if (clear && this.focusSeen!.count >= need) next = leader;
+    } else this.focusSeen = null;
+    const t = (s: string) => reports[s];
+    const why = (s: string) => (t(s) ? `${t(s)!.direction.toLowerCase()} trend, strength ${t(s)!.strength.toFixed(0)}` : 'no trend');
+    if (next !== focus) {
+      if (busy(focus)) {
+        // A trade is open: keep it, run the new leader as well, and ask.
+        if (this.focusProposal?.to !== next) {
+          if (this.isOff(next)) await this.setIndexOn(next, true);
+          this.focusProposal = { from: focus, to: next, at: this.clock(), reason: `${next}: ${why(next)} · ${focus}: ${why(focus)}` };
+          event(`Auto-focus: the trend moved to ${next} (${why(next)}). ${focus} has an open trade, so both run — switch focus to ${next}, or stay on ${focus}?`, 'SIGNAL');
+        }
+        await this.persist();
+        return;
+      }
+      if (this.isOff(next)) await this.setIndexOn(next, true);
+      await this.setActive(next);
+      this.focusSeen = null;
+      this.focusProposal = null;
+      event(`Auto-focus: now watching ${next} only (${why(next)}; ${focus}: ${why(focus)}).`);
+    }
+    // The question ends when its trade closed (after you chose to switch).
+    if (this.focusProposal && !busy(this.focusProposal.from) && this.config.symbol !== this.focusProposal.from) this.focusProposal = null;
+    // Only the focus runs (an index with a trade or an order, or a pending question, stays on).
+    const keep = new Set([this.config.symbol, ...(this.focusProposal ? [this.focusProposal.from, this.focusProposal.to] : [])]);
+    for (const s of syms) if (!keep.has(s) && !this.isOff(s) && !busy(s)) await this.setIndexOn(s, false).catch(() => {});
+    await this.persist();
+  }
+
+  /** Your answer to the auto-focus question: switch focus to the new leader, or stay. */
+  async answerFocus(switchTo: boolean) {
+    const p = this.focusProposal;
+    if (!p) throw new Error('No auto-focus question is open.');
+    if (switchTo) {
+      if (this.isOff(p.to)) await this.setIndexOn(p.to, true);
+      await this.setActive(p.to);
+      // The old index keeps its trade until it closes; then the next check switches it off.
+      this.focusProposal = isBusy(this.watchStates()[p.from]) ? { ...p, answered: true } : null;
+    } else {
+      this.focusSnooze[p.to] = Date.now() + this.focusSnoozeMs;
+      this.focusProposal = null;
+      if (!isBusy(this.watchStates()[p.to]) && !this.isOff(p.to) && this.config.symbol !== p.to) await this.setIndexOn(p.to, false).catch(() => {});
+    }
+    this.focusSeen = null;
+    await this.persist();
+  }
+
+  focusView(): FocusView | undefined {
+    if (!this.config.autoFocus || !this.multiActive()) return undefined;
+    return { symbol: this.config.symbol, checkedAt: this.focusCheckedAt, trends: this.focusTrends, proposal: this.focusProposal };
+  }
+
   /** Today's pre-market report (null on another day). */
   preMarketToday(): PreMarketReport | null {
     const p = this.preMarket;
@@ -1793,6 +1944,7 @@ export class EngineRunner {
         return;
       }
       void this.refreshBreadth().catch(() => {});
+      void this.autoFocusTick().catch(() => {});
       // A full refresh when due; in between, a fast tick on Dhan quotes (about one a second).
       void (due ? this.refresh() : this.tick());
     }, tickMs);
@@ -1828,6 +1980,7 @@ export class EngineRunner {
       candles: this.candles.slice(-150),
       marketOpen: this.marketOpen(),
       ...(this.lossBlocked() ? { lossBlock: { losses: lossesToday(this.state) } } : {}),
+      ...(this.focusView() ? { focus: this.focusView() } : {}),
       demo,
       live: this.livePnl(),
       ...(this.multiActive() ? { watch: this.watchItems() } : {}),

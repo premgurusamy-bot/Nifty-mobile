@@ -154,7 +154,7 @@ function LotStepper(p: {
 }
 
 export default function DashboardScreen() {
-  const { snap, busy, error, refresh, updateConfig, mode, phone, enter, cancelEntry, exit, setTradeMode, setActive, setIndexOn, marketRead, clearLossBlock } = useEngine();
+  const { snap, busy, error, refresh, updateConfig, mode, phone, enter, cancelEntry, exit, setTradeMode, setActive, setIndexOn, marketRead, clearLossBlock, answerFocus } = useEngine();
   // null = follow the market premium; a string = the price you typed.
   const [priceEdit, setPriceText] = useState<string | null>(null);
   const [toggling, setToggling] = useState(false);
@@ -345,6 +345,50 @@ export default function DashboardScreen() {
               )
             }
           />
+        </Card>
+      ) : null}
+      {snap.focus ? (
+        <Card style={{ gap: 6, borderWidth: snap.focus.proposal && !snap.focus.proposal.answered ? 1 : 0, borderColor: colors.warn }}>
+          <Text style={[ui.sectionTitle, { marginTop: 0 }]}>Auto-focus · {snap.focus.symbol}</Text>
+          <Text style={ui.muted}>
+            Only the strongest trend runs (fast data); the others are checked every minute
+            {snap.focus.checkedAt ? ` (last ${new Date(snap.focus.checkedAt + 5.5 * 3600_000).toISOString().slice(11, 16)})` : ''}.
+          </Text>
+          {Object.entries(snap.focus.trends).map(([sym, t]) => (
+            <Text key={sym} style={{ color: sym === snap.focus!.symbol ? colors.text : colors.muted, fontWeight: sym === snap.focus!.symbol ? '700' : '400' }}>
+              {sym === snap.focus!.symbol ? '● ' : '○ '}
+              {sym}:{' '}
+              {t
+                ? t.score < 0
+                  ? `${t.direction.toLowerCase()}${t.phase === 'EXHAUSTING' || t.phase === 'REVERSING' ? ` (${t.phase.toLowerCase()})` : ''} — not tradeable`
+                  : `${t.direction.toLowerCase()} trend, strength ${t.strength.toFixed(0)}`
+                : 'no data yet'}
+            </Text>
+          ))}
+          {snap.focus.proposal && !snap.focus.proposal.answered ? (
+            <View style={{ gap: 8, marginTop: 4 }}>
+              <Text style={{ color: colors.warn, fontWeight: '700' }}>
+                The trend moved to {snap.focus.proposal.to}. {snap.focus.proposal.from} has an open trade, so both run now.
+              </Text>
+              <Button
+                label={`Switch focus to ${snap.focus.proposal.to}`}
+                disabled={busy}
+                onPress={() => void answerFocus(true).catch((e) => setTradeMsg((e as Error).message))}
+              />
+              <Button
+                label={`Stay on ${snap.focus.proposal.from}`}
+                color={colors.cardAlt}
+                disabled={busy}
+                onPress={() => void answerFocus(false).catch((e) => setTradeMsg((e as Error).message))}
+              />
+              <Text style={ui.muted}>
+                Switch: {snap.focus.proposal.to} becomes the focus; {snap.focus.proposal.from} keeps its trade (stop-loss, profit lock) and turns off when it closes.
+                Stay: {snap.focus.proposal.to} is switched off again for 15 minutes.
+              </Text>
+            </View>
+          ) : snap.focus.proposal?.answered ? (
+            <Text style={ui.muted}>{snap.focus.proposal.from} stays on until its trade closes.</Text>
+          ) : null}
         </Card>
       ) : null}
       {snap.advice && snap.advice.items.length ? <AdvisorCard advice={snap.advice} /> : null}

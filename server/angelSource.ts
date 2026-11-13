@@ -109,6 +109,13 @@ export class AngelEngineSource implements EngineDataSource {
     return c;
   }
 
+  /** Only the index's 5-minute candles (auto-focus). */
+  async loadCandles(cfg: EngineConfig, now: number): Promise<Candle[]> {
+    const token = ANGEL_INDEX_TOKENS[cfg.symbol];
+    if (!token) throw new AngelError(`Angel One data isn't set up for ${cfg.symbol}`);
+    return this.candlesOf(cfg.symbol, token, now);
+  }
+
   async load(cfg: EngineConfig, now: number) {
     const name = cfg.symbol;
     const indexToken = ANGEL_INDEX_TOKENS[name];

@@ -168,6 +168,12 @@ export interface EngineConfig {
   gapGuardPct: number;
   /** Market breadth: advances / declines of the index's stocks (one quote call a minute) in the advisor. */
   breadth: boolean;
+  /**
+   * Auto-focus (multi-index): only the index with the strongest trend runs (fast data); the others are
+   * switched off and their trend is checked from candles every minute. When another index clearly
+   * takes over, the app switches to it — or, with a trade open, runs both and asks.
+   */
+  autoFocus: boolean;
   /** Pre-market report 8:30–9:15 IST (yesterday's levels, the pre-open gap, the day's lean), spoken. */
   preMarketReport: boolean;
   /** Index options whose market data comes from Angel One instead of Dhan. */
@@ -317,6 +323,7 @@ export const DEFAULT_CONFIG: EngineConfig = {
   gapGuard: true,
   gapGuardPct: 0.5,
   breadth: true,
+  autoFocus: false,
   preMarketReport: true,
   angelSymbols: ['FINNIFTY'],
   angelOrderSymbols: ['FINNIFTY'],

@@ -4,7 +4,7 @@
  * fails, they fall back to Dhan for that refresh and the chain says why (chain.feedNote).
  */
 import type { EngineDataSource } from '../src/lib/engine/runner.ts';
-import type { EngineConfig } from '../src/lib/engine/types.ts';
+import type { Candle, EngineConfig } from '../src/lib/engine/types.ts';
 import type { QuoteMap, QuoteSource } from '../src/lib/engine/ticks.ts';
 import { AngelError, type AngelClient } from './angel.ts';
 import { ANGEL_INDEX_TOKENS, AngelEngineSource, angelQuoteSource } from './angelSource.ts';
@@ -43,6 +43,19 @@ export class RoutedEngineSource implements EngineDataSource {
   private angelPaused(symbol: string) {
     const p = this.angelPausedUntil.get(symbol);
     return p && Date.now() < p.until ? p : null;
+  }
+
+  /** Only the index's candles, from its feed (Angel One when set, logged in and not paused; else Dhan). */
+  async loadCandles(cfg: EngineConfig, now: number): Promise<Candle[]> {
+    const wantsAngel = cfg.instrumentKind === 'INDEX_OPTIONS' && (cfg.angelSymbols ?? []).includes(cfg.symbol);
+    if (wantsAngel && this.angel.connected && !this.angelPaused(cfg.symbol)) {
+      try {
+        return await this.angelSource.loadCandles(cfg, now);
+      } catch {
+        /* Dhan below */
+      }
+    }
+    return this.dhan.loadCandles ? this.dhan.loadCandles(cfg, now) : (await this.dhan.load(cfg, now)).candles;
   }
 
   async load(cfg: EngineConfig, now: number) {

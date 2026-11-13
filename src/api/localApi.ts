@@ -98,6 +98,8 @@ export interface PhoneTrading {
   engineMarketRead: () => Promise<EngineSnapshot>;
   /** Clear today's no-revenge-trade block (the losses so far stop blocking entries). */
   engineClearLossBlock: () => Promise<EngineSnapshot>;
+  /** Auto-focus question (a trade is open, another index trends more): switch focus to it, or stay. */
+  engineAnswerFocus: (switchTo: boolean) => Promise<EngineSnapshot>;
   /** Screen the indexes (~10 s: one option chain per 3 s) or the MCX minis on live data. */
   screener: (group?: ScreenGroup) => Promise<ScreenReport>;
   /** Use (or drop) an Angel One session for the Angel-fed indexes. */
@@ -256,6 +258,8 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
       // Trade mode changes go through setTradeMode (pre-flight gate).
       const { tradeMode: _ignored, ...rest } = patch;
       await engine.exclusive(() => engine.updateConfig(rest));
+      // Auto-focus just switched on: pick the trending index now (not at the next minute's check).
+      if (rest.autoFocus) await engine.autoFocusTick(true).catch(() => {});
       return engine.snapshot();
     },
     engineBacktest: async () => {
@@ -342,6 +346,10 @@ export async function createLocalApi(o: LocalApiOptions): Promise<LocalApi> {
     },
     engineSetIndexOn: async (symbol: string, on: boolean) => {
       await engine.exclusive(() => engine.setIndexOn(symbol, on));
+      return engine.snapshot();
+    },
+    engineAnswerFocus: async (switchTo: boolean) => {
+      await engine.exclusive(() => engine.answerFocus(switchTo));
       return engine.snapshot();
     },
     engineClearLossBlock: async () => {

@@ -7,7 +7,7 @@
  */
 import type { EngineDataSource, FuturesContract } from '../src/lib/engine/runner.ts';
 import { ContractResolver, COMPACT_MASTER_URL } from './contracts.ts';
-import type { EngineConfig } from '../src/lib/engine/types.ts';
+import type { Candle, EngineConfig } from '../src/lib/engine/types.ts';
 import type { QuoteMap, QuoteSource } from '../src/lib/engine/ticks.ts';
 import { istDateString, toIST } from '../src/lib/time.ts';
 import type { DhanClient } from './dhan.ts';
@@ -103,6 +103,23 @@ export class DhanEngineSource implements EngineDataSource {
     if (!list.length) throw new Error('Dhan returned no upcoming expiries');
     this.expiryCache.set(key, { at: now, value: list[0] });
     return list[0];
+  }
+
+  /** Only the index's 5-minute candles (auto-focus watches switched-off indexes with these). */
+  async loadCandles(cfg: EngineConfig, now: number): Promise<Candle[]> {
+    if (cfg.instrumentKind === 'MCX_FUTURES') return (await this.loadFutures(cfg, now)).candles;
+    const candles = mapCandles(
+      await this.dhan.intraday({
+        securityId: String(cfg.underlyingSecurityId),
+        exchangeSegment: cfg.underlyingSegment,
+        instrument: cfg.underlyingSegment === 'IDX_I' ? 'INDEX' : 'EQUITY',
+        interval: 5,
+        fromDate: istStamp(now - 3 * 86400_000),
+        toDate: istStamp(now),
+      }),
+    );
+    if (!candles.length) throw new Error('Dhan returned no intraday candles');
+    return candles;
   }
 
   async load(cfg: EngineConfig, now: number) {

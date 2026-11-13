@@ -45,6 +45,8 @@ interface EngineValue {
   marketRead: () => Promise<void>;
   /** Clear today's no-revenge-trade block. */
   clearLossBlock: () => Promise<void>;
+  /** Answer the auto-focus question: switch focus to the new leader, or stay. */
+  answerFocus: (switchTo: boolean) => Promise<void>;
   /** Screen the indexes or the MCX minis now (live in phone mode, simulated in demo). */
   screener: (group?: ScreenGroup) => Promise<ScreenReport>;
 }
@@ -300,6 +302,18 @@ export function EngineProvider({ children }: { children: ReactNode }) {
     [api, phoneApi, run],
   );
 
+  const answerFocus = useCallback(
+    (switchTo: boolean) =>
+      run(async () => {
+        if (phoneApi) return phoneApi.engineAnswerFocus(switchTo);
+        if (api) throw new Error('Auto-focus runs on the phone (not through a server).');
+        const r = demo.current!;
+        await r.answerFocus(switchTo);
+        return r.snapshot(true);
+      }),
+    [api, phoneApi, run],
+  );
+
   const clearLossBlock = useCallback(
     () =>
       run(async () => {
@@ -361,6 +375,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
       setIndexOn,
       marketRead,
       clearLossBlock,
+      answerFocus,
     }),
     [
       mode,
@@ -384,6 +399,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
       setIndexOn,
       marketRead,
       clearLossBlock,
+      answerFocus,
     ],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

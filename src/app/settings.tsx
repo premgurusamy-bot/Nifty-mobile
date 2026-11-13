@@ -550,6 +550,17 @@ export default function SettingsScreen() {
                     accessibilityLabel="Auto-pause slow indexes"
                   />
                 </View>
+                <View style={s.switchRow}>
+                  <Text style={s.label}>
+                    Auto-focus: run only the index with the strongest trend (fastest data); the others are switched off and their
+                    trend is checked every minute. A clear new leader takes over — with a trade open, both run and you are asked.
+                  </Text>
+                  <Switch
+                    value={cfg.autoFocus === true}
+                    onValueChange={(v) => void updateConfig({ autoFocus: v }).catch((e) => setInstMsg((e as Error).message))}
+                    accessibilityLabel="Auto-focus on the trending index"
+                  />
+                </View>
                 <Text style={s.label}>Size while several index trades are open</Text>
                 <Segmented
                   options={[
